@@ -1,0 +1,65 @@
+package virt
+
+import (
+	"regexp"
+	"strings"
+	"testing"
+)
+
+func TestDomainXMLRoundTrip(t *testing.T) {
+	in := Spec{
+		Name: "p8s-web1", UUID: "4b1c2d3e-0000-4000-8000-000000000001", VCPUs: 2, MemoryMiB: 2048,
+		DiskGB: 20, DiskPath: "/dev/zvol/tank/vms/p8s-web1-disk0", SeedISO: "/var/lib/p8s/seeds/p8s-web1-seed.iso",
+		Bridge: "vmbr0", MAC: "52:54:00:aa:bb:cc", Template: "debian-13", CreatedAt: "2026-10-10T12:00:00Z",
+	}
+	b, err := DomainXML(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	x := string(b)
+	for _, want := range []string{
+		`<domain type="kvm">`, `machine="q35"`, `<cpu mode="host-passthrough">`,
+		`<source dev="/dev/zvol/tank/vms/p8s-web1-disk0">`, `<target dev="vda" bus="virtio">`,
+		`<source bridge="vmbr0">`, `listen="127.0.0.1"`, `xmlns="https://p8s.dev/xmlns/vm/1"`,
+		`org.qemu.guest_agent.0`,
+	} {
+		if !strings.Contains(x, want) {
+			t.Errorf("xml missing %s\n%s", want, x)
+		}
+	}
+	out, err := ParseDomainXML(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != in {
+		t.Fatalf("round trip mismatch\n in=%+v\nout=%+v", in, out)
+	}
+}
+
+// libvirt rewrites our metadata with a prefix; parsing must still work.
+func TestParseLibvirtStyleMetadata(t *testing.T) {
+	x := `<domain type='kvm'><name>p8s-a1</name><metadata>
+<p8s:vm xmlns:p8s="https://p8s.dev/xmlns/vm/1"><p8s:template>debian-13</p8s:template><p8s:disk_gb>32</p8s:disk_gb></p8s:vm>
+</metadata><memory unit='KiB'>1048576</memory><vcpu placement='static'>1</vcpu></domain>`
+	s, err := ParseDomainXML([]byte(x))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Template != "debian-13" || s.DiskGB != 32 || s.MemoryMiB != 1024 || s.VCPUs != 1 {
+		t.Fatalf("got %+v", s)
+	}
+}
+
+func TestRandomMAC(t *testing.T) {
+	if m := RandomMAC(); !regexp.MustCompile(`^52:54:00(:[0-9a-f]{2}){3}$`).MatchString(m) {
+		t.Fatal(m)
+	}
+}
+
+func TestParseState(t *testing.T) {
+	for in, want := range map[string]State{"running\n": Running, "shut off": Stopped, "in shutdown": Stopping, "x": Unknown} {
+		if got := ParseState(in); got != want {
+			t.Errorf("%q: %s != %s", in, got, want)
+		}
+	}
+}

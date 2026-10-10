@@ -1,0 +1,21 @@
+{
+  "listen": "127.0.0.1:8006",
+  "data_dir": "/var/lib/p8s",
+  "libvirt_uri": "qemu:///system",
+  "vm_dataset": "tank/p8s/vms",
+  "bridge": "vmbr0",
+  "max_vcpus": 8,
+  "max_memory_mib": 16384,
+  "max_disk_gb": 500,
+  "tokens": [
+    { "name": "admin", "sha256": "REPLACE_WITH_OUTPUT_OF_p8sd_token" }
+  ],
+  "templates": [
+    {
+      "name": "debian-13",
+      "snapshot": "tank/p8s/templates/debian-13@base",
+      "min_disk_gb": 3,
+      "os_variant": "debian13"
+    }
+  ]
+}
