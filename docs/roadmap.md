@@ -16,7 +16,8 @@ Each phase ships something usable on its own.
 - [ ] **First run on real hardware** (FX505GT, plain Debian 13) — see [host-setup.md](host-setup.md)
 - [ ] VM IP lookup via guest agent
 - [ ] Reboot, resize CPU/RAM, ZFS snapshots + rollback
-- [ ] Integration test script that runs the full lifecycle against a real host
+- [x] End-to-end smoke test script (`scripts/smoke-test.sh`) + [USER.md](../USER.md) test guide
+- [ ] Smoke test passing on real hardware
 - [ ] `p8sctl` CLI client
 
 ## Phase 2 — Tenants and networking (months 2–4)

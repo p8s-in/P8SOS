@@ -28,6 +28,7 @@ make test                 # no root/KVM needed
 make build                # bin/p8sd, static binary
 ```
 
-To run it for real, follow [docs/host-setup.md](docs/host-setup.md).
+**Testing and deploying: start with [USER.md](USER.md)** — step-by-step from a fresh
+Debian 13 VM to a passing end-to-end smoke test (`scripts/smoke-test.sh`).
 API reference: [docs/api.md](docs/api.md).
 Design decisions: [docs/architecture.md](docs/architecture.md).
