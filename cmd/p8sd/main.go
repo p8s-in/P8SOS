@@ -123,6 +123,7 @@ func serve(args []string) error {
 func token(args []string) error {
 	fs := flag.NewFlagSet("token", flag.ExitOnError)
 	name := fs.String("name", "admin", "token name")
+	asJSON := fs.Bool("json", false, "print {\"name\",\"token\",\"sha256\"} as JSON (for scripts)")
 	_ = fs.Parse(args)
 
 	b := make([]byte, 32)
@@ -131,7 +132,11 @@ func token(args []string) error {
 	}
 	secret := "p8s_" + hex.EncodeToString(b)
 	sum := sha256.Sum256([]byte(secret))
-	entry, _ := json.Marshal(config.Token{Name: *name, SHA256: hex.EncodeToString(sum[:])})
+	hash := hex.EncodeToString(sum[:])
+	if *asJSON {
+		return json.NewEncoder(os.Stdout).Encode(map[string]string{"name": *name, "token": secret, "sha256": hash})
+	}
+	entry, _ := json.Marshal(config.Token{Name: *name, SHA256: hash})
 	fmt.Printf("token (shown once, store it safely):\n  %s\n\nadd to \"tokens\" in p8sd.json:\n  %s\n", secret, entry)
 	return nil
 }

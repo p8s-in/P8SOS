@@ -24,7 +24,8 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y linux-headers-amd64 zfs-dkms zfsutils-linux \
   qemu-system-x86 qemu-utils libvirt-daemon-system libvirt-clients \
-  cloud-image-utils ovmf bridge-utils curl jq
+  libvirt-daemon-config-network dnsmasq-base \
+  cloud-image-utils ovmf bridge-utils curl jq make git
 modprobe zfs
 systemctl enable --now libvirtd
 
@@ -42,9 +43,10 @@ if ! zpool list -H "$POOL" >/dev/null 2>&1; then
 fi
 zfs create -p "$POOL/p8s/vms"
 zfs create -p "$POOL/p8s/templates"
-install -d -m 0750 /etc/p8s /var/lib/p8s/seeds
+install -d -m 0750 /etc/p8s
+install -d -m 0755 /var/lib/p8s /var/lib/p8s/seeds   # QEMU must be able to read seed ISOs
 
-if ! ip link show vmbr0 >/dev/null 2>&1; then
+if [[ ${P8S_BRIDGE:-vmbr0} != virbr0 ]] && ! ip link show vmbr0 >/dev/null 2>&1; then
   cat <<MSG
 
 ==> NOTE: bridge vmbr0 does not exist yet. Not creating it automatically
@@ -53,4 +55,4 @@ if ! ip link show vmbr0 >/dev/null 2>&1; then
     (libvirt's default network: virsh net-start default && virsh net-autostart default).
 MSG
 fi
-echo "==> done. Next: scripts/make-template.sh"
+echo "==> host prepared."

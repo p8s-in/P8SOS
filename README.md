@@ -17,7 +17,8 @@ internal/cloudinit/ NoCloud seed ISOs
 internal/config/    JSON config
 internal/execx/     command runner (faked in tests)
 deploy/             systemd unit, example config
-scripts/            host bootstrap, template import
+install.sh          one-command host install
+scripts/            p8 CLI, smoke test, host bootstrap, template import
 docs/               api.md, architecture.md, host-setup.md, roadmap.md
 ```
 
@@ -28,7 +29,7 @@ make test                 # no root/KVM needed
 make build                # bin/p8sd, static binary
 ```
 
-**Testing and deploying: start with [USER.md](USER.md)** — step-by-step from a fresh
-Debian 13 VM to a passing end-to-end smoke test (`scripts/smoke-test.sh`).
+**Try it: [USER.md](USER.md)** — Debian 13 VM in VMware/VirtualBox → `sudo bash install.sh /dev/sdb` → `p8 test`.
+Step-by-step manual version: [docs/testing-in-depth.md](docs/testing-in-depth.md).
 API reference: [docs/api.md](docs/api.md).
 Design decisions: [docs/architecture.md](docs/architecture.md).

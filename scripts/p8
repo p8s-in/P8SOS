@@ -1,0 +1,150 @@
+#!/usr/bin/env bash
+# p8 — friendly command line for the p8sd API (Phase 1).
+# Reads the API token from $P8S_TOKEN or ~/.p8s-token (written by install.sh).
+set -uo pipefail
+
+URL=${P8S_URL:-http://127.0.0.1:8006/api/v1}
+TOKEN=${P8S_TOKEN:-$(cat "$HOME/.p8s-token" 2>/dev/null || true)}
+PUBKEY=${PUBKEY:-$HOME/.ssh/id_ed25519.pub}
+SSH_OPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR)
+
+red()   { printf '\033[31m%s\033[0m\n' "$*" >&2; }
+green() { printf '\033[32m%s\033[0m\n' "$*"; }
+need()  { [[ -n ${1:-} ]] || { red "missing VM name.  Try: p8 help"; exit 1; }; }
+
+usage() {
+  cat <<'EOF'
+p8 — manage P8S OS virtual machines
+
+  p8 list                          show all VMs
+  p8 create NAME [CPUS] [RAM_MB] [DISK_GB]
+                                   make a VM (default 1 CPU, 1024 MB, template size)
+  p8 show NAME                     details of one VM
+  p8 start NAME                    power on
+  p8 stop NAME                     shut down politely (like pressing the power button)
+  p8 kill NAME                     power off immediately
+  p8 delete NAME                   remove VM and its disk (asks first; -y to skip)
+  p8 ip NAME                       the VM's IP address
+  p8 ssh NAME                      log into the VM as user 'debian'
+  p8 console NAME                  serial console (exit with Ctrl+])
+  p8 templates                     available templates
+  p8 status                        is p8sd healthy?
+  p8 logs                          follow p8sd logs
+  p8 test                          run the full automatic test
+  p8 report                        save a problem report to ./p8s-report.txt
+
+Examples:
+  p8 create web1 2 2048 20
+  p8 ssh web1
+EOF
+}
+
+# call METHOD PATH [JSON] -> prints body, returns 1 on HTTP error (message to stderr)
+call() {
+  [[ -n $TOKEN ]] || { red "No API token. Run install.sh, or: export P8S_TOKEN=p8s_..."; exit 1; }
+  local args=(-s -X "$1" -H "Authorization: Bearer $TOKEN" -w '\n%{http_code}')
+  [[ -n ${3:-} ]] && args+=(-H 'Content-Type: application/json' -d "$3")
+  local out code body
+  out=$(curl "${args[@]}" "$URL$2") || { red "Can't reach p8sd at $URL — is it running? (p8 status)"; exit 1; }
+  code=${out##*$'\n'}; body=${out%$'\n'*}
+  if (( code >= 400 )); then
+    red "error ($code): $(jq -r '.error.message // .' <<<"$body" 2>/dev/null || echo "$body")"
+    return 1
+  fi
+  printf '%s' "$body"
+}
+
+vm_ip() {
+  { sudo virsh -q domifaddr "p8s-$1" 2>/dev/null; sudo virsh -q domifaddr "p8s-$1" --source arp 2>/dev/null; } |
+    awk '$3 == "ipv4" {sub(/\/.*/, "", $4); print $4; exit}'
+}
+
+table() {
+  jq -r '(["NAME","STATE","CPUS","RAM_MB","DISK_GB","TEMPLATE","CREATED"]),
+         (.vms[] | [.name, .state, .vcpus, .memory_mib, .disk_gb, .template, .created_at]) | @tsv' |
+    awk -F'\t' '{printf "%-20s %-9s %-5s %-7s %-8s %-11s %s\n", $1,$2,$3,$4,$5,$6,$7}'
+}
+
+cmd=${1:-help}; shift || true
+case $cmd in
+  list|ls)
+    body=$(call GET /vms) || exit 1
+    [[ $(jq '.vms | length' <<<"$body") == 0 ]] && { echo "No VMs yet. Make one: p8 create web1"; exit 0; }
+    table <<<"$body" ;;
+
+  create|new)
+    need "${1:-}"
+    keys='[]'
+    [[ -f $PUBKEY ]] && keys=$(jq -Rc '[.]' <"$PUBKEY") || red "note: $PUBKEY not found, you won't be able to SSH in"
+    req=$(jq -nc --arg n "$1" --argjson k "$keys" --arg c "${2:-0}" --arg m "${3:-0}" --arg d "${4:-0}" \
+      '{name:$n, template:"debian-13", vcpus:($c|tonumber), memory_mib:($m|tonumber), disk_gb:($d|tonumber), ssh_keys:$k}')
+    echo "Creating $1 ..."
+    body=$(call POST /vms "$req") || exit 1
+    green "✔ $1 is $(jq -r .state <<<"$body") ($(jq -r '"\(.vcpus) CPU, \(.memory_mib) MB, \(.disk_gb) GB"' <<<"$body"))"
+    echo "  It needs ~30-60 s to boot. Then:  p8 ssh $1" ;;
+
+  show|get)
+    need "${1:-}"; body=$(call GET "/vms/$1") || exit 1
+    jq . <<<"$body"
+    ip=$(vm_ip "$1"); [[ -n $ip ]] && echo "ip: $ip" ;;
+
+  start)  need "${1:-}"; body=$(call POST "/vms/$1/start") || exit 1; green "✔ $1 $(jq -r .state <<<"$body")" ;;
+  stop)   need "${1:-}"; body=$(call POST "/vms/$1/stop") || exit 1
+          green "✔ $1 is shutting down ($(jq -r .state <<<"$body")). Check: p8 list" ;;
+  kill)   need "${1:-}"; body=$(call POST "/vms/$1/stop" '{"force":true}') || exit 1; green "✔ $1 $(jq -r .state <<<"$body")" ;;
+
+  delete|rm)
+    need "${1:-}"
+    if [[ ${2:-} != -y ]]; then
+      read -r -p "Delete VM '$1' and its disk forever? [y/N] " a
+      [[ $a == [yY]* ]] || { echo "cancelled"; exit 0; }
+    fi
+    call DELETE "/vms/$1" >/dev/null || exit 1
+    green "✔ $1 deleted" ;;
+
+  ip)
+    need "${1:-}"; ip=$(vm_ip "$1")
+    [[ -n $ip ]] && echo "$ip" || { red "no IP yet — still booting? Try again in 30 s, or: p8 console $1"; exit 1; } ;;
+
+  ssh)
+    need "${1:-}"; ip=""
+    for _ in $(seq 24); do ip=$(vm_ip "$1"); [[ -n $ip ]] && break; echo "waiting for $1 to get an IP ..."; sleep 5; done
+    [[ -n $ip ]] || { red "no IP after 2 min. Look at the boot: p8 console $1"; exit 1; }
+    exec ssh "${SSH_OPTS[@]}" "debian@$ip" ;;
+
+  console) need "${1:-}"; exec sudo virsh console "p8s-$1" ;;
+
+  templates)
+    body=$(call GET /templates) || exit 1
+    jq -r '.templates[] | "\(.name)  (min \(.min_disk_gb) GB)"' <<<"$body" ;;
+
+  status)
+    if h=$(curl -fs "$URL/health"); then green "✔ p8sd is running ($(jq -r .version <<<"$h"))"
+    else red "✘ p8sd is not answering at $URL"; systemctl --no-pager -n 5 status p8sd; exit 1; fi
+    [[ -n $TOKEN ]] && call GET /vms >/dev/null && green "✔ token works" ;;
+
+  logs) exec journalctl -u p8sd -f ;;
+
+  test)
+    T=/usr/local/share/p8s/smoke-test.sh
+    [[ -f $T ]] || T=$(dirname "$(readlink -f "$0")")/smoke-test.sh
+    P8S_TOKEN=$TOKEN P8S_URL=$URL exec bash "$T" "$@" ;;
+
+  report)
+    {
+      echo "== versions";  p8sd version; uname -r; virsh --version; zfs version 2>&1 | head -1
+      echo "== health";    curl -s "$URL/health"; echo
+      echo "== config";    sudo sed -E 's/("sha256": *")[0-9a-f]+/\1<hidden>/' /etc/p8s/p8sd.json
+      echo "== service";   systemctl --no-pager status p8sd | head -5
+      echo "== logs";      sudo journalctl -u p8sd -n 80 --no-pager
+      echo "== libvirt";   sudo virsh list --all; sudo virsh net-list --all
+      echo "== zfs";       sudo zpool status -x; sudo zfs list -t all -r tank/p8s
+      echo "== seeds";     ls -la /var/lib/p8s/seeds
+      echo "== kvm";       ls -l /dev/kvm; grep -cE 'vmx|svm' /proc/cpuinfo
+      echo "== install log (tail)"; sudo tail -40 /var/log/p8s-install.log 2>/dev/null
+    } > p8s-report.txt 2>&1
+    green "✔ saved $(pwd)/p8s-report.txt — send this file (no secrets in it)" ;;
+
+  help|-h|--help) usage ;;
+  *) red "unknown command '$cmd'"; usage; exit 1 ;;
+esac

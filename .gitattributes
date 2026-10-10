@@ -1,0 +1,4 @@
+*.sh text eol=lf
+scripts/p8 text eol=lf
+*.go text eol=lf
+Makefile text eol=lf

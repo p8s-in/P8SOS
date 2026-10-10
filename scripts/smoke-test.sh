@@ -2,15 +2,16 @@
 # End-to-end lifecycle test against a running p8sd.
 # Run it ON the p8sd host: it also checks libvirt and ZFS directly (via sudo).
 #
-#   export P8S_TOKEN=p8s_...           # the token, not the hash
-#   scripts/smoke-test.sh
+#   p8 test                            # after install.sh (token read from ~/.p8s-token)
+#   P8S_TOKEN=p8s_... scripts/smoke-test.sh
 #
 # Optional env: P8S_URL, TEMPLATE, PUBKEY, DATASET, SEED_DIR, KEEP=1 (don't delete the VM),
 #               SLOW=1 (3x timeouts, for nested VirtualBox/VMware), IP_TIMEOUT, SSH_TIMEOUT, STOP_TIMEOUT
 set -uo pipefail
 
 URL=${P8S_URL:-http://127.0.0.1:8006/api/v1}
-TOK=${P8S_TOKEN:?set P8S_TOKEN to your API token}
+TOK=${P8S_TOKEN:-$(cat "$HOME/.p8s-token" 2>/dev/null || true)}
+[[ -n $TOK ]] || { echo "No API token: run install.sh, or export P8S_TOKEN=p8s_..." >&2; exit 2; }
 TEMPLATE=${TEMPLATE:-debian-13}
 PUBKEY=${PUBKEY:-$HOME/.ssh/id_ed25519.pub}
 DATASET=${DATASET:-tank/p8s/vms}

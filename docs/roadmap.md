@@ -17,8 +17,9 @@ Each phase ships something usable on its own.
 - [ ] VM IP lookup via guest agent
 - [ ] Reboot, resize CPU/RAM, ZFS snapshots + rollback
 - [x] End-to-end smoke test script (`scripts/smoke-test.sh`) + [USER.md](../USER.md) test guide
+- [x] One-command `install.sh` and `p8` CLI helper
 - [ ] Smoke test passing on real hardware
-- [ ] `p8sctl` CLI client
+- [ ] `p8sctl` CLI client in Go (replaces the `p8` shell helper)
 
 ## Phase 2 — Tenants and networking (months 2–4)
 

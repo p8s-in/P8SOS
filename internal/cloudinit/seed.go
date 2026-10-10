@@ -27,7 +27,12 @@ func (b *Builder) Path(vm string) string { return filepath.Join(b.Dir, vm+"-seed
 
 // Build writes user-data/meta-data and packs them with cloud-localds.
 func (b *Builder) Build(ctx context.Context, vm string, s Spec) (string, error) {
-	if err := os.MkdirAll(b.Dir, 0o750); err != nil {
+	// QEMU runs as libvirt-qemu and must be able to traverse this directory
+	// (Chmod also repairs dirs created 0750 by older bootstrap scripts).
+	if err := os.MkdirAll(b.Dir, 0o755); err != nil {
+		return "", err
+	}
+	if err := os.Chmod(b.Dir, 0o755); err != nil {
 		return "", err
 	}
 	tmp, err := os.MkdirTemp(b.Dir, vm+"-")
