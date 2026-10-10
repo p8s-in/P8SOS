@@ -14,7 +14,7 @@ and then through every check worth doing. Work top to bottom; each part ends wit
 
 1. [Pick your test setup](#1-pick-your-test-setup)
 2. [Level 0 — unit tests (any computer, 2 minutes)](#2-level-0--unit-tests-any-computer)
-3. [Create the test VM (nested virtualization)](#3-create-the-test-vm)
+3. [Create the test VM — Proxmox, VMware, VirtualBox](#3-create-the-test-vm)
 4. [Install Debian 13 in the test VM](#4-install-debian-13-in-the-test-vm)
 5. [Copy the code and install Go](#5-copy-the-code-and-install-go)
 6. [Prepare the host: KVM, libvirt, ZFS](#6-prepare-the-host-kvm-libvirt-zfs)
@@ -38,8 +38,13 @@ If that machine is itself a VM, you need **nested virtualization**.
 | Option | Where p8sd runs | Good for | Notes |
 |---|---|---|---|
 | **A. VM on Proxmox** (recommended) | Debian 13 VM on the FX505GT's Proxmox | Safe testing, snapshots, easy reset | Needs nested virt — section 3A |
-| B. VM on Windows | Debian 13 VM in VMware Workstation or Hyper-V | Testing without the laptop | Section 3B; VirtualBox nested is slow/unreliable |
-| C. Bare metal | Debian 13 directly on a machine | Final real-world test | Wipes the machine; skip section 3 |
+| B. VMware Workstation (Windows) | Debian 13 VM in VMware Workstation Pro 17 | Testing on your Windows PC; fastest nested option on Windows | Windows prep 3.0 + section 3B |
+| C. Oracle VirtualBox (Windows) | Debian 13 VM in VirtualBox 7 | Testing on your Windows PC | Windows prep 3.0 + section 3C; works, but nested guests are slower |
+| D. Bare metal | Debian 13 directly on a machine | Final real-world test | Wipes the machine; skip section 3 |
+
+> Testing in both VMware and VirtualBox is a good idea: it shows p8sd works on two
+> different virtual CPUs and disk controllers. Run **one at a time** — both need exclusive
+> use of VT-x while their VMs are running.
 
 **Minimum for the test VM:** 4 vCPU, 8 GB RAM, 32 GB OS disk, plus a **second empty disk
 (64 GB+)** for the ZFS pool. Each test guest uses 1 GB RAM by default.
@@ -95,15 +100,137 @@ cat /sys/module/kvm_intel/parameters/nested      # should now be Y
 Before first boot, take a Proxmox **snapshot** later (after section 4) so you can roll back
 to a clean Debian install any time.
 
-### 3B. On Windows
+### 3.0 Windows prep (required for VMware AND VirtualBox)
 
-- **VMware Workstation:** VM Settings → Processors → tick **Virtualize Intel VT-x/EPT**. Add a second disk.
-- **Hyper-V** (PowerShell as admin, VM powered off):
-  ```powershell
-  Set-VMProcessor -VMName p8s-test -ExposeVirtualizationExtensions $true
-  Get-VMNetworkAdapter -VMName p8s-test | Set-VMNetworkAdapter -MacAddressSpoofing On
-  ```
-  Use a Generation 2 VM with **Secure Boot off** (ZFS's kernel module is not signed).
+p8sd needs `/dev/kvm` **inside** the test VM, so VMware/VirtualBox must pass the CPU's
+VT-x through to it. They can only do that when **Windows itself is not running a
+hypervisor**. On many Windows 10/11 PCs one is on by default (Hyper-V, WSL2, Docker
+Desktop, Windows Sandbox, Memory Integrity). Then VMware greys out VT-x passthrough and
+VirtualBox shows a **green turtle** icon — nested KVM will not work.
+
+**Step 1 — VT-x is on in the BIOS:** Task Manager → Performance → CPU → `Virtualization: Enabled`.
+If it says Disabled, enable *Intel Virtualization Technology* (or *SVM* on AMD) in the BIOS.
+
+**Step 2 — is a Windows hypervisor running?** PowerShell:
+
+```powershell
+systeminfo | Select-String "Hyper-V"
+```
+
+- `Hyper-V Requirements: VM Monitor Mode Extensions: Yes ...` (four lines) → **no hypervisor running. Skip to 3B / 3C.**
+- `A hypervisor has been detected. Features required for Hyper-V will not be displayed.` → **turn it off (step 3).**
+
+Also open `msinfo32` → System Summary → **Virtualization-based security**: it must say `Not enabled`.
+
+**Step 3 — turn the Windows hypervisor off.**
+
+1. Windows Security → Device security → Core isolation details → **Memory integrity: Off**.
+2. PowerShell **as Administrator** (errors for features your Windows edition doesn't have are fine):
+
+   ```powershell
+   bcdedit /set hypervisorlaunchtype off
+   Disable-WindowsOptionalFeature -Online -NoRestart -FeatureName Microsoft-Hyper-V-All
+   Disable-WindowsOptionalFeature -Online -NoRestart -FeatureName VirtualMachinePlatform
+   Disable-WindowsOptionalFeature -Online -NoRestart -FeatureName HypervisorPlatform
+   Disable-WindowsOptionalFeature -Online -NoRestart -FeatureName Containers-DisposableClientVM
+   ```
+3. **Restart** Windows, then repeat step 2 until it shows the four `Yes`-style lines.
+
+> ⚠️ While this is off, **WSL2, Docker Desktop and Windows Sandbox stop working**. To get them
+> back after testing: `bcdedit /set hypervisorlaunchtype auto`, re-enable the features
+> (`Enable-WindowsOptionalFeature ...` with the same names), turn Memory integrity back on, restart.
+
+### 3B. VMware Workstation Pro 17
+
+VMware Workstation Pro is free for personal use (download from Broadcom's support portal).
+
+**Create the VM** — File → New Virtual Machine → **Custom (advanced)**:
+
+| Wizard page | Setting |
+|---|---|
+| Hardware compatibility | Workstation 17.x |
+| Install from | **I will install the operating system later** (avoids Easy Install) |
+| Guest OS | Linux → **Debian 12.x 64-bit** (Debian 13 may not be listed; this is fine) |
+| Name | `p8s-test` |
+| Firmware | **BIOS** (if you pick UEFI, leave *Secure Boot* **unticked**) |
+| Processors | 1 processor, **4 cores** |
+| Memory | **8192 MB** |
+| Network | **NAT** (simplest; the test VM gets internet and Windows can SSH to it) |
+| Disk controller / type | LSI Logic / **SCSI** (makes the disks `sda` and `sdb`) |
+| Disk | New, **32 GB**, store as a single file |
+
+**Before first boot**, VM → Settings:
+
+1. **Processors** → tick **Virtualize Intel VT-x/EPT or AMD-V/RVI**. Leave *Virtualize IOMMU* unticked.
+2. **Add… → Hard Disk → SCSI → Create new → 64 GB** (this becomes `/dev/sdb`, the ZFS disk).
+3. **CD/DVD** → *Use ISO image file* → the Debian 13 netinst ISO.
+4. OK, then **Power On**.
+
+If powering on says *"Virtualized Intel VT-x/EPT is not supported on this platform"* →
+Windows hypervisor is still on; redo 3.0.
+
+**Networking notes:**
+- With NAT the test VM gets a `192.168.x.x` address on VMnet8. From Windows you can SSH straight to it: `ssh you@<vm-ip>`.
+- Inside the test VM, use libvirt's NAT network (`virbr0`) for p8sd guests, as in section 6. Nothing else to configure.
+
+👉 After installing Debian (section 4): VM → Snapshot → **Take Snapshot** `clean-debian`.
+
+### 3C. Oracle VirtualBox 7
+
+**Create the VM** — Machine → New:
+
+| Page | Setting |
+|---|---|
+| Name and OS | Name `p8s-test`, ISO = Debian 13 netinst, Type **Linux**, Version **Debian (64-bit)** |
+| | Tick **Skip Unattended Installation** |
+| Hardware | **8192 MB** RAM, **4 CPUs**, **Enable EFI: unticked** |
+| Hard Disk | Create, **32 GB**, VDI, dynamically allocated |
+
+**Before first boot**, select the VM → Settings:
+
+1. **System → Processor** → tick **Enable Nested VT-x/AMD-V**.
+   If the box is greyed out, set it from PowerShell (VirtualBox closed, VM powered off):
+   ```powershell
+   & "C:\Program Files\Oracle\VirtualBox\VBoxManage.exe" modifyvm "p8s-test" --nested-hw-virt on
+   ```
+2. **System → Acceleration** → Paravirtualization Interface: **KVM** (default for Linux).
+3. **Storage** → *Controller: SATA* → **Add hard disk** (icon) → Create → **64 GB** VDI. This is `/dev/sdb`, the ZFS disk.
+4. **Network** → Adapter 1: **NAT**. Expand *Advanced* → **Port Forwarding** → add a rule:
+
+   | Name | Protocol | Host IP | Host Port | Guest IP | Guest Port |
+   |---|---|---|---|---|---|
+   | ssh | TCP | 127.0.0.1 | **2222** | *(empty)* | **22** |
+
+   (Alternative: *Bridged Adapter* puts the VM on your LAN; it often doesn't work on Wi-Fi. NAT + port forward always works.)
+
+5. OK, then **Start**.
+
+**Check the turtle:** while the VM runs, look at the bottom-right status bar. A **green
+turtle** means VirtualBox is running on top of Hyper-V → nested KVM won't work → redo 3.0.
+A blue **V** chip icon is correct.
+
+**SSH from Windows** with the port forward:
+
+```powershell
+ssh -p 2222 you@127.0.0.1
+```
+
+👉 After installing Debian (section 4): Machine → Take Snapshot `clean-debian`.
+
+> **VirtualBox is slower for nested VMs** than VMware or Proxmox. Expect guest boots of
+> 1–3 minutes. The smoke test has longer timeouts for this — see section 9.
+
+### 3D. VMware vs VirtualBox — quick reference
+
+| | VMware Workstation 17 | VirtualBox 7 |
+|---|---|---|
+| Nested VT-x switch | Settings → Processors → *Virtualize Intel VT-x/EPT* | Settings → System → Processor → *Enable Nested VT-x/AMD-V* (or `VBoxManage modifyvm --nested-hw-virt on`) |
+| Sign it's broken | *"…not supported on this platform"* at power-on | Green turtle icon; option greyed out |
+| ZFS disk device | `/dev/sdb` (SCSI) — `/dev/nvme0n2` if you chose NVMe | `/dev/sdb` (SATA) |
+| SSH from Windows | `ssh you@<vm-ip>` (VMnet8 NAT) | `ssh -p 2222 you@127.0.0.1` (port forward) |
+| Copy code in | `scp -r L:\P8SOS you@<vm-ip>:~/p8sos` | `scp -P 2222 -r L:\P8SOS you@127.0.0.1:~/p8sos` |
+| API tunnel | `ssh -L 8006:127.0.0.1:8006 you@<vm-ip>` | `ssh -p 2222 -L 8006:127.0.0.1:8006 you@127.0.0.1` |
+| Nested guest speed | Good | Slower — use `SLOW=1` for the smoke test |
 
 ---
 
@@ -129,9 +256,9 @@ grep -cE 'vmx|svm' /proc/cpuinfo     # must be > 0
 ls -l /dev/kvm                        # appears after libvirt is installed in section 6
 ```
 
-If the first command prints `0`, nested virt is off — go back to section 3.
+If the first command prints `0`, nested virt is off — go back to section 3 (on Windows: 3.0).
 
-👉 **Take a Proxmox snapshot now** (`clean-debian`).
+👉 **Take a snapshot now** (`clean-debian`) in Proxmox, VMware or VirtualBox.
 
 ---
 
@@ -140,8 +267,11 @@ If the first command prints `0`, nested virt is off — go back to section 3.
 **From Windows** (PowerShell, OpenSSH is built in). Replace the IP and user:
 
 ```powershell
-scp -r L:\P8SOS you@192.168.1.50:~/p8sos
+scp -r L:\P8SOS you@192.168.1.50:~/p8sos                 # Proxmox / VMware
+scp -P 2222 -r L:\P8SOS you@127.0.0.1:~/p8sos             # VirtualBox (NAT port forward)
 ```
+
+The `.git` folder comes along, so `git log` works inside the VM too.
 
 Or push it to a private Git repo and `git clone` inside the VM.
 
@@ -338,6 +468,7 @@ What it covers:
 Options:
 
 ```bash
+SLOW=1 scripts/smoke-test.sh          # VirtualBox / slow hosts: triples all wait times
 KEEP=1 scripts/smoke-test.sh          # leave the VM running afterwards to poke at it
 TEMPLATE=debian-13 PUBKEY=~/.ssh/other.pub scripts/smoke-test.sh
 ```
@@ -452,7 +583,8 @@ sudo zfs list -t snapshot -r tank/p8s/templates    # template still there
 | **Custom cloud-init** | Create with `"user_data": "#cloud-config\npackages: [nginx]\n"` | nginx installed in the guest (your SSH keys are **not** added — custom user_data replaces the default) |
 | **Template protection** | Try `sudo zfs destroy tank/p8s/templates/debian-13@base` while VMs exist | ZFS refuses — clones depend on it |
 | **Disk space** | `sudo zfs list -o name,used,refer -r tank` before/after 5 VMs | Usage grows only by what guests write |
-| **API from Windows** | On Windows: `ssh -L 8006:127.0.0.1:8006 you@<test-vm-ip>`, then in Git Bash/WSL use `curl http://127.0.0.1:8006/api/v1/health` | Works through the tunnel; the API itself stays on localhost |
+| **API from Windows** | On Windows: `ssh -L 8006:127.0.0.1:8006 you@<test-vm-ip>` (VirtualBox: `ssh -p 2222 -L 8006:127.0.0.1:8006 you@127.0.0.1`), then in a second PowerShell: `curl.exe http://127.0.0.1:8006/api/v1/health` | Works through the tunnel; the API itself stays on localhost |
+| **Same result on both hypervisors** | Run `scripts/smoke-test.sh` in the VMware VM and in the VirtualBox VM | Both pass; note the create time and boot time of each |
 | **Host reboot** | `sudo reboot` the test VM | p8sd comes back by itself; guests come back **stopped** (no autostart yet) — start them via API |
 
 ---
@@ -480,7 +612,13 @@ journalctl -u p8sd -n 50 --no-pager
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| `grep -c vmx /proc/cpuinfo` = 0 | Nested virt off | Section 3; Proxmox CPU type must be `host` |
+| `grep -c vmx /proc/cpuinfo` = 0 | Nested virt off | Section 3; Proxmox CPU type must be `host`; VMware/VirtualBox: nested option ticked **and** Windows hypervisor off (3.0) |
+| VMware: *"Virtualized Intel VT-x/EPT is not supported on this platform"* | Hyper-V / VBS / Memory integrity on in Windows | Section 3.0, restart Windows |
+| VirtualBox: green turtle icon, or *Enable Nested VT-x/AMD-V* greyed out | Same — VirtualBox is running on top of Hyper-V | Section 3.0; then `VBoxManage modifyvm "p8s-test" --nested-hw-virt on` |
+| VirtualBox: `VT-x is not available (VERR_VMX_NO_VMX)` | Another hypervisor holds VT-x (VMware VM running, or Hyper-V) | Close VMware VMs; section 3.0 |
+| VMware/VirtualBox: guests boot very slowly, smoke test times out at "no IP" | Nested virtualization overhead | `SLOW=1 scripts/smoke-test.sh`; give the test VM more CPUs; close other VMs |
+| VirtualBox: `ssh -p 2222` → *Connection refused* | Port forward missing or VM not booted | Settings → Network → Advanced → Port Forwarding (section 3C) |
+| Bootstrap: `/dev/sdb` not found | Disk named differently (VMware NVMe) | `lsblk`; use e.g. `/dev/nvme0n2` |
 | `/dev/kvm` missing | Same as above, or kvm module not loaded | `sudo modprobe kvm_intel` |
 | `modprobe: FATAL: Module zfs not found` | ZFS module build failed, or kernel upgraded without matching headers | `sudo apt install linux-headers-$(uname -r) && sudo dpkg-reconfigure zfs-dkms`, then reboot |
 | ZFS module won't load, "Key was rejected" | Secure Boot on | Disable Secure Boot in the VM/BIOS |

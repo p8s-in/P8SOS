@@ -5,7 +5,8 @@
 #   export P8S_TOKEN=p8s_...           # the token, not the hash
 #   scripts/smoke-test.sh
 #
-# Optional env: P8S_URL, TEMPLATE, PUBKEY, DATASET, SEED_DIR, KEEP=1 (don't delete the VM)
+# Optional env: P8S_URL, TEMPLATE, PUBKEY, DATASET, SEED_DIR, KEEP=1 (don't delete the VM),
+#               SLOW=1 (3x timeouts, for nested VirtualBox/VMware), IP_TIMEOUT, SSH_TIMEOUT, STOP_TIMEOUT
 set -uo pipefail
 
 URL=${P8S_URL:-http://127.0.0.1:8006/api/v1}
@@ -15,6 +16,10 @@ PUBKEY=${PUBKEY:-$HOME/.ssh/id_ed25519.pub}
 DATASET=${DATASET:-tank/p8s/vms}
 SEED_DIR=${SEED_DIR:-/var/lib/p8s/seeds}
 NAME=smoke$RANDOM
+X=1; [[ ${SLOW:-0} == 1 ]] && X=3
+IP_TIMEOUT=${IP_TIMEOUT:-$((120 * X))}
+SSH_TIMEOUT=${SSH_TIMEOUT:-$((180 * X))}
+STOP_TIMEOUT=${STOP_TIMEOUT:-$((120 * X))}
 DOM=p8s-$NAME
 
 pass=0 fail=0
@@ -48,7 +53,7 @@ trap cleanup EXIT
 
 for bin in curl jq sudo; do command -v $bin >/dev/null || { echo "missing $bin" >&2; exit 2; }; done
 sudo -v || exit 2
-echo "p8sd smoke test: url=$URL vm=$NAME template=$TEMPLATE"
+echo "p8sd smoke test: url=$URL vm=$NAME template=$TEMPLATE timeouts(ip/ssh/stop)=${IP_TIMEOUT}/${SSH_TIMEOUT}/${STOP_TIMEOUT}s"
 
 step "1. health and auth"
 CODE=$(curl -s -o /dev/null -w '%{http_code}' "$URL/health"); expect "GET /health (no token)" 200
@@ -89,17 +94,17 @@ sudo test -f "$SEED_DIR/$DOM-seed.iso" && ok "seed ISO exists" || bad "seed ISO 
 
 step "5. guest boots and cloud-init runs"
 ip=""
-for ((i = 0; i < 120; i += 5)); do
+for ((i = 0; i < IP_TIMEOUT; i += 5)); do
   ip=$( { sudo virsh -q domifaddr "$DOM" 2>/dev/null; sudo virsh -q domifaddr "$DOM" --source arp 2>/dev/null; } \
         | awk '$3 == "ipv4" {sub(/\/.*/, "", $4); print $4; exit}')
   [[ -n $ip ]] && break
   sleep 5
 done
-[[ -n $ip ]] && ok "guest got IP $ip" || bad "no IP after 120s (try: sudo virsh console $DOM)"
+[[ -n $ip ]] && ok "guest got IP $ip" || bad "no IP after ${IP_TIMEOUT}s (try: sudo virsh console $DOM)"
 if [[ -n $ip && $keys != '[]' ]]; then
   ssh_opts=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -o BatchMode=yes -o LogLevel=ERROR)
   out=""
-  for ((i = 0; i < 180; i += 5)); do
+  for ((i = 0; i < SSH_TIMEOUT; i += 5)); do
     out=$(ssh "${ssh_opts[@]}" "debian@$ip" 'hostname; df -BG --output=size / | tail -1; cloud-init status --wait >/dev/null 2>&1; systemctl is-active qemu-guest-agent' 2>/dev/null) && break
     sleep 5
   done
@@ -110,13 +115,13 @@ if [[ -n $ip && $keys != '[]' ]]; then
     sz=${g[1]//[^0-9]/}; [[ $sz -ge 9 ]] && ok "root fs grew to ${sz}G" || bad "root fs is ${sz}G, expected ~10G"
     [[ ${g[2]} == active ]] && ok "qemu-guest-agent active" || bad "qemu-guest-agent: ${g[2]:-unknown}"
   else
-    bad "SSH to debian@$ip failed for 180s"
+    bad "SSH to debian@$ip failed for ${SSH_TIMEOUT}s"
   fi
 fi
 
 step "6. power operations"
 api POST "/vms/$NAME/stop"; expect "ACPI stop" 202
-wait_state stopped 120 && ok "guest shut down cleanly" || bad "still $(state) after 120s of ACPI shutdown"
+wait_state stopped "$STOP_TIMEOUT" && ok "guest shut down cleanly" || bad "still $(state) after ${STOP_TIMEOUT}s of ACPI shutdown"
 api POST "/vms/$NAME/stop"; expect "stop again (idempotent)" 202
 api POST "/vms/$NAME/start"; expect "start" 200
 wait_state running 30 && ok "running again" || bad "state $(state)"
