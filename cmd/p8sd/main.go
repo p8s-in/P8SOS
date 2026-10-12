@@ -97,6 +97,11 @@ func serve(args []string) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if need, err := svc.UpgradeDomains(ctx); err != nil {
+		log.Warn("upgrade VM definitions", "err", err)
+	} else if len(need) > 0 {
+		log.Info("VM definitions upgraded (VGA display); power them off and start them to apply", "vms", strings.Join(need, ","))
+	}
 	go svc.RunSchedule(ctx, cfg.BackupTime, nil)
 	go runGuard(ctx, log, run, cfg)
 	virsh := &virt.Virsh{Run: run, URI: cfg.LibvirtURI}

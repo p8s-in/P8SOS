@@ -260,3 +260,38 @@ func (s *Service) DeleteISO(ctx context.Context, name string) error {
 	}
 	return isoErr(lib.Delete(name))
 }
+
+// UpgradeDomains brings older VM definitions up to the current device set
+// (e.g. the VGA display adapter). Running VMs pick changes up at their next
+// power-off/start; their names are returned.
+func (s *Service) UpgradeDomains(ctx context.Context) (needRestart []string, err error) {
+	names, err := s.HV.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, dom := range names {
+		if !strings.HasPrefix(dom, Prefix) {
+			continue
+		}
+		b, err := s.HV.XML(ctx, dom)
+		if err != nil {
+			continue
+		}
+		sp, err := virt.ParseDomainXML(b)
+		if err != nil || sp.Video == virt.VideoModel {
+			continue
+		}
+		unlock := s.lock(dom)
+		st, _ := s.HV.State(ctx, dom)
+		err = s.redefine(ctx, dom, func(*virt.Spec) {})
+		unlock()
+		if err != nil {
+			s.logErr("upgrade "+dom, err)
+			continue
+		}
+		if st != virt.Stopped {
+			needRestart = append(needRestart, strings.TrimPrefix(dom, Prefix))
+		}
+	}
+	return needRestart, nil
+}

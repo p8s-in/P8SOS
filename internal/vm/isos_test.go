@@ -75,3 +75,27 @@ func TestCreateFromISO(t *testing.T) {
 		t.Fatalf("delete twice: %v", err)
 	}
 }
+
+func TestUpgradeDomains(t *testing.T) {
+	ctx := context.Background()
+	svc, hv, _, _ := newSvc()
+	_, _ = svc.Create(ctx, CreateRequest{Name: "old1", Template: "debian-13"})
+	_, _ = svc.Create(ctx, CreateRequest{Name: "old2", Template: "debian-13"})
+	_, _ = svc.Stop(ctx, "old2", true)
+	for _, d := range []string{"p8s-old1", "p8s-old2"} { // pretend: defined before the video change
+		hv.doms[d] = []byte(strings.Replace(string(hv.doms[d]), `type="vga"`, `type="cirrus"`, 1))
+	}
+	hv.state["p8s-old1"] = virt.Running
+	need, err := svc.UpgradeDomains(ctx)
+	if err != nil || len(need) != 1 || need[0] != "old1" {
+		t.Fatalf("need restart %v %v", need, err)
+	}
+	for _, d := range []string{"p8s-old1", "p8s-old2"} {
+		if sp, _ := virt.ParseDomainXML(hv.doms[d]); sp.Video != virt.VideoModel {
+			t.Fatalf("%s video %q", d, sp.Video)
+		}
+	}
+	if need, _ = svc.UpgradeDomains(ctx); len(need) != 0 {
+		t.Fatalf("second run should do nothing: %v", need)
+	}
+}

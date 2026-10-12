@@ -30,7 +30,13 @@ type Spec struct {
 	MAC       string
 	Template  string
 	CreatedAt string // RFC 3339
+	// Video is the display adapter read back from a domain (DomainXML always
+	// writes VideoModel).
+	Video string
 }
+
+// VideoModel is the display adapter every P8S VM gets.
+const VideoModel = "vga"
 
 type domainXML struct {
 	XMLName  xml.Name `xml:"domain"`
@@ -122,6 +128,14 @@ type devicesXML struct {
 		Autoport string `xml:"autoport,attr"`
 		Listen   string `xml:"listen,attr"`
 	} `xml:"graphics"`
+	Video *struct {
+		Model struct {
+			Type    string `xml:"type,attr"`
+			VRAM    int    `xml:"vram,attr,omitempty"`
+			Heads   int    `xml:"heads,attr,omitempty"`
+			Primary string `xml:"primary,attr,omitempty"`
+		} `xml:"model"`
+	} `xml:"video"`
 	RNG struct {
 		Model   string `xml:"model,attr"`
 		Backend struct {
@@ -249,6 +263,17 @@ func DomainXML(s Spec) ([]byte, error) {
 	d.Devices.Console.Type = "pty"
 	d.Devices.Channel.Type = "unix"
 	d.Devices.Channel.Target.Type, d.Devices.Channel.Target.Name = "virtio", "org.qemu.guest_agent.0"
+	// Standard VGA (Bochs/QEMU std). Without this libvirt may pick "cirrus",
+	// whose screen showed garbled text in the browser console.
+	d.Devices.Video = &struct {
+		Model struct {
+			Type    string `xml:"type,attr"`
+			VRAM    int    `xml:"vram,attr,omitempty"`
+			Heads   int    `xml:"heads,attr,omitempty"`
+			Primary string `xml:"primary,attr,omitempty"`
+		} `xml:"model"`
+	}{}
+	d.Devices.Video.Model.Type, d.Devices.Video.Model.VRAM, d.Devices.Video.Model.Heads, d.Devices.Video.Model.Primary = VideoModel, 16384, 1, "yes"
 	d.Devices.Graphics.Type, d.Devices.Graphics.Port = "vnc", "-1"
 	d.Devices.Graphics.Autoport, d.Devices.Graphics.Listen = "yes", "127.0.0.1"
 	d.Devices.RNG.Model = "virtio"
@@ -272,6 +297,9 @@ func ParseDomainXML(b []byte) (Spec, error) {
 		DiskGB:    d.Metadata.VM.DiskGB,
 		CreatedAt: d.Metadata.VM.CreatedAt,
 		OSType:    d.Metadata.VM.OSType,
+	}
+	if d.Devices.Video != nil {
+		s.Video = d.Devices.Video.Model.Type
 	}
 	for _, disk := range d.Devices.Disks {
 		switch disk.Device {
