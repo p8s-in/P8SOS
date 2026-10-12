@@ -57,7 +57,7 @@ func (z *ZFS) CloneDisk(ctx context.Context, snapshot, vm string, sizeGB int) (s
 
 // CreateDisk makes an empty disk for a VM installed from an ISO.
 func (z *ZFS) CreateDisk(ctx context.Context, vm string, sizeGB int) (string, error) {
-	if _, err := z.Run.Run(ctx, "zfs", "create", "-p", "-V", fmt.Sprintf("%dG", sizeGB), "-o", "volmode=dev", z.diskDataset(vm)); err != nil {
+	if _, err := z.Run.Run(ctx, "zfs", "create", "-p", "-s", "-V", fmt.Sprintf("%dG", sizeGB), "-o", "volmode=dev", z.diskDataset(vm)); err != nil {
 		return "", fmt.Errorf("create disk: %w", err)
 	}
 	dev, err := z.WaitDevice(ctx, vm)

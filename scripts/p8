@@ -56,6 +56,8 @@ p8 — manage P8S OS virtual machines
   p8 templates available           OS images that can be added
   p8 templates add NAME            download and add one (e.g. ubuntu-24.04, rocky-9)
   p8 dashboard                     web dashboard address + how to sign in
+  p8 storage                       pool size and what each VM disk uses
+  p8 storage grow                  use the system disk's free space for VMs (file pool)
   p8 lan-setup                     let VMs join your home network (Ethernet only, once)
   p8 status                        is p8sd healthy?
   p8 logs                          follow p8sd logs
@@ -405,6 +407,12 @@ case $cmd in
     echo "  2. Sign in with your API token:"
     echo "     $TOKEN" ;;
   logs) exec journalctl -u p8sd -f ;;
+
+  storage)
+    T=/usr/local/share/p8s/storage.sh
+    [[ -f $T ]] || T=$(dirname "$(readlink -f "$0")")/storage.sh
+    if [[ ${1:-} == grow ]]; then exec sudo bash "$T" grow; fi
+    exec sudo bash "$T" show ;;
 
   lan-setup|lan)
     T=/usr/local/share/p8s/setup-bridge.sh

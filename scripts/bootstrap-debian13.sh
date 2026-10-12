@@ -48,9 +48,15 @@ if ! zpool list -H "$POOL" >/dev/null 2>&1; then
     [[ $ok == yes ]] || exit 1
     zpool create -f -o ashift=12 -O compression=lz4 -O atime=off "$POOL" "$DEV"
   else
-    echo "==> no disk given: creating a sparse 64G file pool (testing only)"
+    # Use the system disk's free space, keeping 10% (at least 20 GB) for Debian.
     mkdir -p /var/lib/p8s
-    truncate -s 64G /var/lib/p8s/"$POOL".img
+    avail=$(df -BG --output=avail /var/lib/p8s | tail -1 | tr -dc 0-9)
+    fs=$(df -BG --output=size /var/lib/p8s | tail -1 | tr -dc 0-9)
+    keep=$(( fs / 10 )); (( keep < 20 )) && keep=20
+    size=$(( avail - keep ))
+    (( size >= 20 )) || { echo "not enough free space for VM storage (${avail} GB free)" >&2; exit 1; }
+    echo "==> no disk given: creating a ${size} GB file pool on the system disk"
+    truncate -s "${size}G" /var/lib/p8s/"$POOL".img
     zpool create -o ashift=12 -O compression=lz4 -O atime=off "$POOL" /var/lib/p8s/"$POOL".img
   fi
 fi

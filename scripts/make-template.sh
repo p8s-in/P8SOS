@@ -102,7 +102,7 @@ echo "==> checksum OK ($ALGO)"
 BYTES=$(qemu-img info --output=json "$WORK/$IMG" | jq -r '."virtual-size"')
 GB=$(( (BYTES + 1073741823) / 1073741824 ))
 echo "==> creating ${GB}G zvol $DS"
-zfs create -p -V "${GB}G" -o volmode=dev "$DS"
+zfs create -p -s -V "${GB}G" -o volmode=dev "$DS"
 wait_zvol "$DS"
 # Write to the real kernel device (/dev/zdN), not the udev symlink: on a fresh
 # system udev can briefly remove and re-create /dev/zvol/... while it settles.

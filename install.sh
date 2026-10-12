@@ -118,6 +118,7 @@ install -d -m 0755 /usr/local/share/p8s
 install -m 0755 "$REPO/scripts/smoke-test.sh" /usr/local/share/p8s/smoke-test.sh
 install -m 0755 "$REPO/scripts/setup-bridge.sh" /usr/local/share/p8s/setup-bridge.sh
 install -m 0755 "$REPO/scripts/make-template.sh" /usr/local/share/p8s/make-template.sh
+install -m 0755 "$REPO/scripts/storage.sh" /usr/local/share/p8s/storage.sh
 ok "installed /usr/local/bin/p8sd and the 'p8' command"
 
 # ---------------------------------------------------------------------------
