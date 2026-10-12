@@ -10,8 +10,13 @@ document.body.insertAdjacentHTML("beforeend", `
   <h2>Create container</h2>
   <div class="sub">A container shares this server's Linux kernel: it starts in a second and needs much less memory than a VM. Linux only.</div>
   <label for="ctName">Name</label><input id="ctName" required pattern="[a-z][a-z0-9\\-]{0,47}[a-z0-9]" placeholder="web2" autocomplete="off">
-  <label for="ctTpl">Template</label><select id="ctTpl" required></select>
+  <label for="ctTpl">Template</label><select id="ctTpl"></select>
   <div class="hint" id="ctTplHint"></div>
+  <div id="ctAddBox" hidden style="border:1px dashed var(--line);border-radius:8px;padding:10px;margin-top:8px">
+    <div class="sub" style="margin-bottom:6px"><b>Add a template</b> — downloaded once (50-200 MB), then every container starts from it in a second.</div>
+    <div class="inline" style="flex-wrap:wrap;margin-top:0"><select id="ctAddSel" style="flex:1;min-width:180px"></select><button class="btn primary" type="button" id="ctAddGo">Add</button></div>
+    <div class="hint" id="ctAddStatus"></div>
+  </div>
   <div class="row">
     <div><label for="ctCPU">CPUs</label><input id="ctCPU" type="number" min="1" value="1"></div>
     <div><label for="ctRAM">RAM (MB)</label><input id="ctRAM" type="number" min="64" step="64" value="512"></div>
@@ -121,14 +126,43 @@ async function ctDelete(name){
 }
 
 /* ---------- create ---------- */
-async function openCreateCT(){
-  $("#fCT").reset();
+async function loadCTTemplates(){
   try { ctTpls = (await call("GET", "/ct-templates")).templates; } catch { ctTpls = []; }
-  $("#ctTpl").innerHTML = ctTpls.map(t => `<option value="${esc(t.name)}">${esc(t.label)}</option>`).join("");
+  const cur = $("#ctTpl").value;
+  $("#ctTpl").innerHTML = ctTpls.map(t => `<option value="${esc(t.name)}" ${t.name === cur ? "selected" : ""}>${esc(t.label)}</option>`).join("");
   $("#ctTplHint").innerHTML = ctTpls.length ? "" : (isAdmin()
-    ? `No container templates yet. Open <b>Server → Container templates</b> and add one (Debian, Ubuntu, Alpine…; 50-200 MB).`
+    ? "No container templates on this server yet: add one below."
     : "No container templates on this server yet; ask your provider.");
   $("#ctGo").disabled = !ctTpls.length;
+  if (isAdmin()) await loadCTCatalog();
+}
+
+// admins add templates right here (a Server task: download, check, unpack)
+let ctAddTimer = null;
+async function loadCTCatalog(){
+  let n;
+  try { n = await call("GET", "/node"); } catch { $("#ctAddBox").hidden = true; return; }
+  const left = (n.ct_catalog || []).filter(c => !c.installed);
+  $("#ctAddBox").hidden = !n.containers || !left.length;
+  $("#ctAddSel").innerHTML = left.map(c => `<option value="${esc(c.name)}">${esc(c.label)}${c.name === "debian-13" ? " (recommended)" : ""}</option>`).join("");
+  const run = n.running;
+  $("#ctAddGo").disabled = !!run;
+  clearTimeout(ctAddTimer);
+  if (run) {
+    $("#ctAddStatus").textContent = run.kind === "ct-template" ? `Adding ${run.arg}… (downloading and unpacking; 1-5 minutes)` : `Waiting: "${run.title}" is running on the server.`;
+    if ($("#dlgCT").open) ctAddTimer = setTimeout(loadCTTemplates, 3000);
+  } else {
+    const last = (n.tasks || []).find(t => t.kind === "ct-template");
+    $("#ctAddStatus").innerHTML = last?.state === "failed"
+      ? `<span style="color:var(--bad)">Adding ${esc(last.arg)} failed</span> — see <b>Server → Tasks → Log</b> (often no internet on the server).`
+      : "";
+  }
+}
+
+async function openCreateCT(){
+  $("#fCT").reset();
+  $("#ctAddStatus").textContent = "";
+  await loadCTTemplates();
   const lan = isAdmin() ? !!host?.networks?.includes("lan") : !!me?.lan;
   $("#ctNet").innerHTML = `<option value="nat">Private (NAT) — reaches the internet</option>` + (lan ? `<option value="lan">Home network — address from your router</option>` : "");
   $("#ctKeys").value = !isAdmin() && me?.ssh_keys?.length ? me.ssh_keys.join("\n") : "";
@@ -139,6 +173,17 @@ async function openCreateCT(){
   }
   $("#dlgCT").showModal(); $("#ctName").focus();
 }
+
+$("#ctAddGo").onclick = async () => {
+  const name = $("#ctAddSel").value;
+  if (!name) return;
+  try {
+    await call("POST", "/node/tasks", {kind: "ct-template", arg: name});
+    toast("Adding " + name + " — you can keep this window open");
+  } catch (err) { toast(err.message, true); }
+  loadCTTemplates();
+};
+$("#dlgCT").addEventListener("close", () => clearTimeout(ctAddTimer));
 
 $("#fCT").addEventListener("submit", async e => {
   if (e.submitter?.value !== "ok") return;
