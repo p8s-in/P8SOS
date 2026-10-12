@@ -32,6 +32,7 @@ type Meta struct {
 	User        string `json:"user"`
 	Network     string `json:"network"`
 	OSType      string `json:"os_type,omitempty"`
+	Owner       string `json:"owner,omitempty"` // P8S user the VM belonged to
 	VCPUs       int    `json:"vcpus"`
 	MemoryMiB   int    `json:"memory_mib"`
 	DiskGB      int    `json:"disk_gb"`

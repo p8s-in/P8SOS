@@ -5,15 +5,54 @@ All bodies are JSON. Unknown fields in request bodies are rejected.
 
 ## Authentication
 
-Every endpoint except `/health` requires a bearer token:
+Every endpoint except `/health`, `/auth` and `/login` needs a bearer token:
 
 ```
 Authorization: Bearer p8s_<64 hex chars>
 ```
 
-Generate one with `p8sd token -name <label>`. The daemon stores only the
-SHA-256 of the token in `/etc/p8s/p8sd.json`. Phase 1 tokens are all-powerful;
-scoped tokens arrive with tenants in Phase 2.
+Two kinds of token work:
+
+- **API tokens** (`p8sd token -name <label>`; the `p8` command uses one from
+  `~/.p8s-token`). Only their SHA-256 is stored in `/etc/p8s/p8sd.json`.
+  They act as an admin.
+- **Sign-in tokens** from `POST /login` with a user name and password (plus a
+  6-digit code when that user has 2FA on). They expire after 12 h unused
+  (7 days at most) and on `POST /logout`, a password change, or when the
+  account is disabled. A p8sd restart signs everyone out.
+
+### Users, roles and plans
+
+| role | can |
+|---|---|
+| `admin` | everything: all VMs, host details, ISOs, users, the whole activity log |
+| `customer` | only VMs they own, within their plan (quota); ISOs can be used, not added |
+
+A customer's plan: `{"vms":2,"vcpus":4,"memory_mib":4096,"disk_gb":60,"lan":false}`
+(totals across all their VMs; `lan` = may use the home/LAN network). Creating,
+resizing or restoring past the plan returns `403` with code `quota`. Another
+user's VM answers `404`, exactly like a VM that doesn't exist.
+
+| endpoint | who | what |
+|---|---|---|
+| `GET /auth` | anyone | `{"accounts": true}` once user accounts exist |
+| `POST /login` | anyone | `{"user","password","otp"}` → `{"token","idle_timeout","user"}`; `401 otp_required` asks for the code; 5 failures per user (20 per IP) in 15 min → `429` |
+| `POST /logout` | signed in | ends this sign-in |
+| `GET /me` | signed in | name, role, plan, usage, 2FA state |
+| `POST /me/password` | user | `{"old_password","new_password"}` (10+ chars); signs out other devices |
+| `POST /me/2fa/setup` | user | `{"secret","uri"}` for an authenticator app (TOTP, 30 s, 6 digits) |
+| `POST /me/2fa/enable` | user | `{"code"}` turns 2FA on |
+| `POST /me/2fa/disable` | user | `{"code"}` turns it off |
+| `GET /users` | admin | users with their usage |
+| `POST /users` | admin | `{"name","role","password","quota"}` |
+| `PATCH /users/{user}` | admin | any of `role`, `quota`, `disabled`, `password`, `reset_2fa` |
+| `DELETE /users/{user}` | admin | only when they own no VMs; the last admin can't be removed |
+| `PUT /vms/{name}/owner` | admin | `{"owner":"alice"}` (`""` = admins only); works while the VM runs |
+| `POST /vms` with `"owner"` | admin | make a VM for a customer |
+| `GET /audit?limit=200` | signed in | who changed what, newest first (customers: their own) |
+
+Users live in `/var/lib/p8s/users.json` (passwords as PBKDF2-SHA256), the
+activity log in `/var/lib/p8s/audit.log`.
 
 ## Errors
 
@@ -226,4 +265,4 @@ curl -s -H "Authorization: Bearer $TOK" -X DELETE $P8S/vms/web1 -w '%{http_code}
 
 - Change autostart on an existing VM; CPU/RAM changes on a running VM.
 - Async jobs: `POST` returns `202` + `/jobs/{id}` for long operations.
-- Tenants, projects, quotas, scoped tokens (Phase 2).
+- Scoped API tokens per user; billing (v0.5).

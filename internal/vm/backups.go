@@ -105,7 +105,7 @@ func (s *Service) runBackup(ctx context.Context, name string, keep int, p jobs.P
 	p("copying the disk")
 	m, err := s.Backups.Save(ctx, dom, snap, Backup{
 		ID: id, VM: name, Template: v.Template, User: v.User, Network: v.Network, OSType: v.OSType,
-		VCPUs: v.VCPUs, MemoryMiB: v.MemoryMiB, DiskGB: v.DiskGB, Consistent: consistent,
+		VCPUs: v.VCPUs, MemoryMiB: v.MemoryMiB, DiskGB: v.DiskGB, Consistent: consistent, Owner: v.Owner,
 	})
 	if err != nil {
 		return "", err
@@ -273,7 +273,7 @@ func (s *Service) restoreAsNew(ctx context.Context, name string, m Backup, p job
 	spec := virt.Spec{
 		Name: dom, UUID: uuid, VCPUs: max(m.VCPUs, 1), MemoryMiB: max(m.MemoryMiB, 256), DiskGB: diskGB,
 		DiskPath: disk, SeedISO: seed, Bridge: s.bridgeFor(network), MAC: virt.RandomMAC(),
-		Template: m.Template, OSType: m.OSType, CreatedAt: time.Now().UTC().Format(time.RFC3339),
+		Template: m.Template, OSType: m.OSType, CreatedAt: time.Now().UTC().Format(time.RFC3339), Owner: m.Owner,
 	}
 	x, err := virt.DomainXML(spec)
 	if err != nil {

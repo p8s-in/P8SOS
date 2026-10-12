@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"p8sos/internal/api"
+	"p8sos/internal/audit"
 	"p8sos/internal/backup"
 	"p8sos/internal/cloudinit"
 	"p8sos/internal/config"
@@ -35,6 +36,7 @@ import (
 	"p8sos/internal/metrics"
 	"p8sos/internal/storage"
 	"p8sos/internal/tlsutil"
+	"p8sos/internal/users"
 	"p8sos/internal/virt"
 	"p8sos/internal/vm"
 	"p8sos/internal/web"
@@ -139,7 +141,11 @@ func serve(args []string) error {
 				in.Networks = svc.Networks()
 				return in
 			},
-			UI: web.Handler(),
+			UI:       web.Handler(),
+			Users:    &users.Store{Path: filepath.Join(cfg.DataDir, "users.json")},
+			Sessions: &users.Sessions{},
+			Audit:    &audit.Log{Path: filepath.Join(cfg.DataDir, "audit.log")},
+			Issuer:   issuer(),
 		}).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		// VM create can take a while (clone + seed + define + start).
@@ -225,4 +231,12 @@ func runGuard(ctx context.Context, log *slog.Logger, run execx.Runner, cfg *conf
 		case <-time.After(5 * time.Minute):
 		}
 	}
+}
+
+// issuer names this host in authenticator apps, e.g. "P8S OS (p8s-node)".
+func issuer() string {
+	if h, err := os.Hostname(); err == nil && h != "" {
+		return "P8S OS (" + h + ")"
+	}
+	return "P8S OS"
 }

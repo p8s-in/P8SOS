@@ -52,6 +52,9 @@ type Hypervisor interface {
 	Screenshot(ctx context.Context, name string) ([]byte, error)
 	// SetUserPassword sets a guest account's password via the guest agent.
 	SetUserPassword(ctx context.Context, name, user, password string) error
+	// SetLiveMetadata replaces the P8S metadata of a running domain (the saved
+	// definition is updated separately with Define).
+	SetLiveMetadata(ctx context.Context, name, xml string) error
 }
 
 type Virsh struct {
@@ -198,6 +201,11 @@ func (v *Virsh) DomStats(ctx context.Context) (string, error) {
 
 func (v *Virsh) SetUserPassword(ctx context.Context, name, user, password string) error {
 	_, err := v.virsh(ctx, "set-user-password", name, user, password)
+	return err
+}
+
+func (v *Virsh) SetLiveMetadata(ctx context.Context, name, xml string) error {
+	_, err := v.virsh(ctx, "metadata", name, MetaNS, "--key", "p8s", "--set", xml, "--live")
 	return err
 }
 

@@ -30,6 +30,8 @@ type Spec struct {
 	MAC       string
 	Template  string
 	CreatedAt string // RFC 3339
+	// Owner is the P8S user the VM belongs to; empty = the host's admins.
+	Owner string
 	// Video is the display adapter read back from a domain (DomainXML always
 	// writes VideoModel).
 	Video string
@@ -96,6 +98,7 @@ type metaXML struct {
 	Template  string `xml:"template"`
 	DiskGB    int    `xml:"disk_gb"`
 	CreatedAt string `xml:"created_at"`
+	Owner     string `xml:"owner,omitempty"`
 }
 
 type devicesXML struct {
@@ -178,6 +181,17 @@ type ifaceXML struct {
 	} `xml:"model"`
 }
 
+// MetadataXML is the P8S metadata element of a spec, for updating a running
+// domain in place (virsh metadata --live).
+func MetadataXML(s Spec) (string, error) {
+	m := metaXML{OSType: s.OSType, Template: s.Template, DiskGB: s.DiskGB, CreatedAt: s.CreatedAt, Owner: s.Owner}
+	b, err := xml.Marshal(struct {
+		XMLName xml.Name `xml:"vm"`
+		metaXML
+	}{metaXML: m})
+	return string(b), err
+}
+
 // DomainXML renders a KVM domain: q35, host-passthrough CPU, virtio disk/NIC,
 // serial console, guest-agent channel, VNC bound to localhost only.
 func DomainXML(s Spec) ([]byte, error) {
@@ -188,7 +202,7 @@ func DomainXML(s Spec) ([]byte, error) {
 	d.Type = "kvm"
 	d.Name = s.Name
 	d.UUID = s.UUID
-	d.Metadata.VM = metaXML{OSType: s.OSType, Template: s.Template, DiskGB: s.DiskGB, CreatedAt: s.CreatedAt}
+	d.Metadata.VM = metaXML{OSType: s.OSType, Template: s.Template, DiskGB: s.DiskGB, CreatedAt: s.CreatedAt, Owner: s.Owner}
 	win := s.OSType == "windows"
 	d.Memory.Unit, d.Memory.Value = "MiB", s.MemoryMiB
 	d.VCPU = s.VCPUs
@@ -297,6 +311,7 @@ func ParseDomainXML(b []byte) (Spec, error) {
 		DiskGB:    d.Metadata.VM.DiskGB,
 		CreatedAt: d.Metadata.VM.CreatedAt,
 		OSType:    d.Metadata.VM.OSType,
+		Owner:     d.Metadata.VM.Owner,
 	}
 	if d.Devices.Video != nil {
 		s.Video = d.Devices.Video.Model.Type

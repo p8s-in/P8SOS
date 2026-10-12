@@ -27,7 +27,12 @@ Each phase ships something usable on its own.
 
 ## Phase 2 — Tenants and networking (months 2–4)
 
-Users, projects, quotas (SQLite); scoped tokens; per-tenant VLAN/bridge;
+- [x] User accounts (v0.3): admin / customer roles, sign-in with password, TOTP 2FA, lockout after failed sign-ins,
+      per-customer plans (VMs, CPUs, RAM, disk, LAN), customers see only their VMs/backups/jobs, VM owner hand-over,
+      activity (audit) log; dashboard Users / Activity / account dialogs; `p8 users|user|give|audit`
+- [x] Thin VM disks, `p8 storage grow`, file pool sized from free space
+
+Still to do: projects, scoped API tokens per user; per-tenant VLAN/bridge;
 nftables firewall per VM; IP pools (static assignment via cloud-init network
 config); containers via Incus. Replaces Proxmox on the home lab.
 

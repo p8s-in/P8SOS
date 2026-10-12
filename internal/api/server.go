@@ -3,9 +3,6 @@ package api
 
 import (
 	"context"
-	"crypto/sha256"
-	"crypto/subtle"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,13 +11,14 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"strings"
 	"sync"
 	"time"
 
+	"p8sos/internal/audit"
 	"p8sos/internal/config"
 	"p8sos/internal/console"
 	"p8sos/internal/metrics"
+	"p8sos/internal/users"
 	"p8sos/internal/vm"
 )
 
@@ -54,6 +52,7 @@ type VMService interface {
 	EjectISO(ctx context.Context, name string) (vm.VM, error)
 	Screenshot(ctx context.Context, name string) ([]byte, error)
 	SetPassword(ctx context.Context, name, user, password string) error
+	SetOwner(ctx context.Context, name, owner string) (vm.VM, error)
 }
 
 type Server struct {
@@ -76,7 +75,17 @@ type Server struct {
 	// Dial connects to a VM's VNC port; nil = net.Dialer (tests replace it).
 	Dial func(ctx context.Context, addr string) (net.Conn, error)
 
-	once sync.Once
+	// Accounts. Users nil = only API tokens (one admin), as before v0.3.
+	Users    *users.Store
+	Sessions *users.Sessions
+	Limiter  *users.Limiter // failed sign-in lockout; nil = defaults
+	Audit    *audit.Log     // who changed what; nil = not kept
+	Issuer   string         // name shown in authenticator apps
+
+	once      sync.Once
+	lmOnce    sync.Once
+	qlocks    sync.Map // user -> *sync.Mutex (quota checks)
+	jobOwners sync.Map // job id -> who started it
 }
 
 func (s *Server) tickets() *console.Tickets {
@@ -92,6 +101,8 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", s.health)
 	mux.HandleFunc("GET /api/v1/console", s.consoleSocket) // authorized by its one-time ticket
+	mux.HandleFunc("GET /api/v1/auth", s.authInfo)
+	mux.HandleFunc("POST /api/v1/login", s.login)
 
 	auth := http.NewServeMux()
 	auth.HandleFunc("GET /api/v1/templates", s.listTemplates)
@@ -127,7 +138,19 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("GET /api/v1/vms/{name}/screenshot", s.screenshot)
 	auth.HandleFunc("GET /api/v1/jobs", s.listJobs)
 	auth.HandleFunc("GET /api/v1/jobs/{id}", s.getJob)
-	mux.Handle("/api/v1/", s.requireToken(auth))
+	auth.HandleFunc("POST /api/v1/logout", s.logout)
+	auth.HandleFunc("GET /api/v1/me", s.me)
+	auth.HandleFunc("POST /api/v1/me/password", s.changeMyPassword)
+	auth.HandleFunc("POST /api/v1/me/2fa/setup", s.setup2FA)
+	auth.HandleFunc("POST /api/v1/me/2fa/enable", s.enable2FA)
+	auth.HandleFunc("POST /api/v1/me/2fa/disable", s.disable2FA)
+	auth.HandleFunc("GET /api/v1/users", s.listUsers)
+	auth.HandleFunc("POST /api/v1/users", s.addUser)
+	auth.HandleFunc("PATCH /api/v1/users/{user}", s.updateUser)
+	auth.HandleFunc("DELETE /api/v1/users/{user}", s.deleteUser)
+	auth.HandleFunc("PUT /api/v1/vms/{name}/owner", s.setOwner)
+	auth.HandleFunc("GET /api/v1/audit", s.auditLog)
+	mux.Handle("/api/v1/", s.requireAuth(s.audited(auth)))
 	if s.UI != nil {
 		mux.Handle("/", s.UI) // the page itself is public; every API call it makes needs the token
 	}
@@ -161,6 +184,9 @@ func (s *Server) listTemplates(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) hostInfo(w http.ResponseWriter, r *http.Request) {
+	if !s.adminOnly(w, r) {
+		return
+	}
 	if s.Host == nil {
 		writeErr(w, http.StatusNotFound, "not_found", "host info not available")
 		return
@@ -174,13 +200,41 @@ func (s *Server) listVMs(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"vms": vms})
+	p, out := who(r), []vm.VM{}
+	for _, v := range vms {
+		if mayUse(p, v.Owner) {
+			out = append(out, v)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"vms": out})
 }
 
 func (s *Server) createVM(w http.ResponseWriter, r *http.Request) {
 	var req vm.CreateRequest
 	if !decode(w, r, &req) {
 		return
+	}
+	p := who(r)
+	if !p.Admin {
+		req.Owner = p.Name
+		if req.Network == vm.NetLAN && !p.Quota.LAN {
+			writeErr(w, http.StatusForbidden, "forbidden", "your plan doesn't include the LAN network; use nat")
+			return
+		}
+		defer s.quotaLock(p.Name)()
+		if err := s.checkQuota(r.Context(), p, Usage{VMs: 1, VCPUs: max(req.VCPUs, 1), MemoryMiB: max(req.MemoryMiB, 1024), DiskGB: s.diskFor(req)}); err != nil {
+			s.fail(w, err)
+			return
+		}
+	} else if req.Owner != "" {
+		if s.Users == nil {
+			writeErr(w, http.StatusBadRequest, "invalid", "user accounts are not enabled on this host")
+			return
+		}
+		if _, err := s.Users.Get(req.Owner); err != nil {
+			s.fail(w, err)
+			return
+		}
 	}
 	v, err := s.VMs.Create(r.Context(), req)
 	if err != nil {
@@ -192,15 +246,17 @@ func (s *Server) createVM(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getVM(w http.ResponseWriter, r *http.Request) {
-	v, err := s.VMs.Get(r.Context(), r.PathValue("name"))
-	if err != nil {
-		s.fail(w, err)
+	v, ok := s.vmFor(w, r)
+	if !ok {
 		return
 	}
 	writeJSON(w, http.StatusOK, v)
 }
 
 func (s *Server) startVM(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.vmFor(w, r); !ok {
+		return
+	}
 	v, err := s.VMs.Start(r.Context(), r.PathValue("name"))
 	if err != nil {
 		s.fail(w, err)
@@ -210,6 +266,9 @@ func (s *Server) startVM(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) stopVM(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.vmFor(w, r); !ok {
+		return
+	}
 	var body struct {
 		Force bool `json:"force"`
 	}
@@ -225,6 +284,9 @@ func (s *Server) stopVM(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) rebootVM(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.vmFor(w, r); !ok {
+		return
+	}
 	v, err := s.VMs.Reboot(r.Context(), r.PathValue("name"))
 	if err != nil {
 		s.fail(w, err)
@@ -234,6 +296,9 @@ func (s *Server) rebootVM(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteVM(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.vmFor(w, r); !ok {
+		return
+	}
 	if err := s.VMs.Delete(r.Context(), r.PathValue("name")); err != nil {
 		s.fail(w, err)
 		return
@@ -242,9 +307,30 @@ func (s *Server) deleteVM(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) resizeVM(w http.ResponseWriter, r *http.Request) {
+	cur, ok := s.vmFor(w, r)
+	if !ok {
+		return
+	}
 	var req vm.ResizeRequest
 	if !decode(w, r, &req) {
 		return
+	}
+	if p := who(r); !p.Admin {
+		defer s.quotaLock(p.Name)()
+		d := Usage{}
+		if req.VCPUs > 0 {
+			d.VCPUs = req.VCPUs - cur.VCPUs
+		}
+		if req.MemoryMiB > 0 {
+			d.MemoryMiB = req.MemoryMiB - cur.MemoryMiB
+		}
+		if req.DiskGB > 0 {
+			d.DiskGB = req.DiskGB - cur.DiskGB
+		}
+		if err := s.checkQuota(r.Context(), p, d); err != nil {
+			s.fail(w, err)
+			return
+		}
 	}
 	v, err := s.VMs.Resize(r.Context(), r.PathValue("name"), req)
 	if err != nil {
@@ -255,6 +341,9 @@ func (s *Server) resizeVM(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listSnapshots(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.vmFor(w, r); !ok {
+		return
+	}
 	snaps, err := s.VMs.Snapshots(r.Context(), r.PathValue("name"))
 	if err != nil {
 		s.fail(w, err)
@@ -264,6 +353,9 @@ func (s *Server) listSnapshots(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) createSnapshot(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.vmFor(w, r); !ok {
+		return
+	}
 	var body struct {
 		Name string `json:"name"`
 	}
@@ -279,6 +371,9 @@ func (s *Server) createSnapshot(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) rollback(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.vmFor(w, r); !ok {
+		return
+	}
 	var body struct {
 		DestroyNewer bool `json:"destroy_newer"`
 	}
@@ -294,6 +389,9 @@ func (s *Server) rollback(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteSnapshot(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.vmFor(w, r); !ok {
+		return
+	}
 	if err := s.VMs.DeleteSnapshot(r.Context(), r.PathValue("name"), r.PathValue("snap")); err != nil {
 		s.fail(w, err)
 		return
@@ -302,6 +400,9 @@ func (s *Server) deleteSnapshot(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) consoleTicket(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.vmFor(w, r); !ok {
+		return
+	}
 	name := r.PathValue("name")
 	if _, err := s.VMs.ConsoleAddr(r.Context(), name); err != nil {
 		s.fail(w, err)
@@ -365,20 +466,33 @@ func (s *Server) listBackups(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"backups": b})
+	p, out := who(r), []vm.Backup{}
+	for _, m := range b {
+		if mayUse(p, m.Owner) {
+			out = append(out, m)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"backups": out})
 }
 
 func (s *Server) startBackup(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.vmFor(w, r); !ok {
+		return
+	}
 	j, err := s.VMs.StartBackup(r.Context(), r.PathValue("name"))
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
+	s.noteJob(r, j.ID)
 	w.Header().Set("Location", "/api/v1/jobs/"+j.ID)
 	writeJSON(w, http.StatusAccepted, j)
 }
 
 func (s *Server) deleteBackup(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.backupFor(w, r); !ok {
+		return
+	}
 	if err := s.VMs.DeleteBackup(r.PathValue("name"), r.PathValue("id")); err != nil {
 		s.fail(w, err)
 		return
@@ -393,11 +507,38 @@ func (s *Server) restoreBackup(w http.ResponseWriter, r *http.Request) {
 	if r.ContentLength != 0 && !decode(w, r, &body) {
 		return
 	}
+	m, ok := s.backupFor(w, r)
+	if !ok {
+		return
+	}
+	p := who(r)
+	target := body.Name
+	if target == "" {
+		target = m.VM
+	}
+	if !p.Admin {
+		defer s.quotaLock(p.Name)()
+		v, err := s.VMs.Get(r.Context(), target)
+		switch {
+		case err == nil && !mayUse(p, v.Owner):
+			writeErr(w, http.StatusConflict, "exists", fmt.Sprintf("the name %q is taken; restore under another name", target))
+			return
+		case errors.Is(err, vm.ErrNotFound): // becomes a new VM: must fit the plan
+			if err := s.checkQuota(r.Context(), p, Usage{VMs: 1, VCPUs: m.VCPUs, MemoryMiB: m.MemoryMiB, DiskGB: m.DiskGB}); err != nil {
+				s.fail(w, err)
+				return
+			}
+		case err != nil:
+			s.fail(w, err)
+			return
+		}
+	}
 	j, err := s.VMs.StartRestore(r.Context(), r.PathValue("name"), r.PathValue("id"), body.Name)
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
+	s.noteJob(r, j.ID)
 	w.Header().Set("Location", "/api/v1/jobs/"+j.ID)
 	writeJSON(w, http.StatusAccepted, j)
 }
@@ -410,8 +551,7 @@ type scheduleView struct {
 
 func (s *Server) getSchedule(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	if _, err := s.VMs.Get(r.Context(), name); err != nil {
-		s.fail(w, err)
+	if _, ok := s.vmFor(w, r); !ok {
 		return
 	}
 	sch, err := s.VMs.GetSchedule(name)
@@ -435,8 +575,7 @@ func (s *Server) putSchedule(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &body) {
 		return
 	}
-	if _, err := s.VMs.Get(r.Context(), name); err != nil {
-		s.fail(w, err)
+	if _, ok := s.vmFor(w, r); !ok {
 		return
 	}
 	if body.Daily && body.Keep == 0 {
@@ -451,8 +590,7 @@ func (s *Server) putSchedule(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) vmMetrics(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	if _, err := s.VMs.Get(r.Context(), name); err != nil {
-		s.fail(w, err)
+	if _, ok := s.vmFor(w, r); !ok {
 		return
 	}
 	pts := []metrics.Point{}
@@ -463,6 +601,9 @@ func (s *Server) vmMetrics(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) hostMetrics(w http.ResponseWriter, r *http.Request) {
+	if !s.adminOnly(w, r) {
+		return
+	}
 	pts := []metrics.HostPoint{}
 	if s.Metrics != nil {
 		pts = s.Metrics.Host()
@@ -482,6 +623,9 @@ func (s *Server) listISOs(w http.ResponseWriter, r *http.Request) {
 // uploadISO takes the raw image as the request body (PUT, any size up to the
 // library's limit). Uploads can take long, so this request gets hours, not minutes.
 func (s *Server) uploadISO(w http.ResponseWriter, r *http.Request) {
+	if !s.adminOnly(w, r) {
+		return
+	}
 	rc := http.NewResponseController(w)
 	_ = rc.SetReadDeadline(time.Now().Add(6 * time.Hour))
 	_ = rc.SetWriteDeadline(time.Now().Add(6 * time.Hour))
@@ -494,6 +638,9 @@ func (s *Server) uploadISO(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) downloadISO(w http.ResponseWriter, r *http.Request) {
+	if !s.adminOnly(w, r) {
+		return
+	}
 	var body struct {
 		URL    string `json:"url"`
 		Name   string `json:"name"`
@@ -507,11 +654,15 @@ func (s *Server) downloadISO(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
+	s.noteJob(r, j.ID)
 	w.Header().Set("Location", "/api/v1/jobs/"+j.ID)
 	writeJSON(w, http.StatusAccepted, j)
 }
 
 func (s *Server) deleteISO(w http.ResponseWriter, r *http.Request) {
+	if !s.adminOnly(w, r) {
+		return
+	}
 	if err := s.VMs.DeleteISO(r.Context(), r.PathValue("name")); err != nil {
 		s.fail(w, err)
 		return
@@ -520,6 +671,9 @@ func (s *Server) deleteISO(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) screenshot(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.vmFor(w, r); !ok {
+		return
+	}
 	b, err := s.VMs.Screenshot(r.Context(), r.PathValue("name"))
 	if err != nil {
 		s.fail(w, err)
@@ -531,6 +685,9 @@ func (s *Server) screenshot(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) ejectISO(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.vmFor(w, r); !ok {
+		return
+	}
 	v, err := s.VMs.EjectISO(r.Context(), r.PathValue("name"))
 	if err != nil {
 		s.fail(w, err)
@@ -540,11 +697,20 @@ func (s *Server) ejectISO(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listJobs(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"jobs": s.VMs.ListJobs()})
+	owned, out := s.ownedNames(r.Context(), who(r)), []vm.Job{}
+	for _, j := range s.VMs.ListJobs() {
+		if s.mayJob(r, j, owned) {
+			out = append(out, j)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"jobs": out})
 }
 
 func (s *Server) getJob(w http.ResponseWriter, r *http.Request) {
 	j, ok := s.VMs.Job(r.PathValue("id"))
+	if ok && !who(r).Admin {
+		ok = s.mayJob(r, j, s.ownedNames(r.Context(), who(r)))
+	}
 	if !ok {
 		writeErr(w, http.StatusNotFound, "not_found", "no such job")
 		return
@@ -553,6 +719,9 @@ func (s *Server) getJob(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) setPassword(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.vmFor(w, r); !ok {
+		return
+	}
 	var body struct {
 		User     string `json:"user"`
 		Password string `json:"password"`
@@ -568,28 +737,6 @@ func (s *Server) setPassword(w http.ResponseWriter, r *http.Request) {
 }
 
 // --- middleware ---
-
-func (s *Server) requireToken(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tok, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if !ok || tok == "" || !s.validToken(tok) {
-			w.Header().Set("WWW-Authenticate", `Bearer realm="p8sd"`)
-			writeErr(w, http.StatusUnauthorized, "unauthorized", "missing or invalid bearer token")
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
-func (s *Server) validToken(tok string) bool {
-	sum := sha256.Sum256([]byte(tok))
-	got := []byte(hex.EncodeToString(sum[:]))
-	match := 0
-	for _, t := range s.Tokens { // check all to keep timing constant
-		match |= subtle.ConstantTimeCompare(got, []byte(t.SHA256))
-	}
-	return match == 1
-}
 
 type statusWriter struct {
 	http.ResponseWriter
@@ -627,6 +774,16 @@ func decode(w http.ResponseWriter, r *http.Request, v any) bool {
 
 func (s *Server) fail(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, errQuota):
+		writeErr(w, http.StatusForbidden, "quota", err.Error())
+	case errors.Is(err, users.ErrNotFound):
+		writeErr(w, http.StatusNotFound, "not_found", err.Error())
+	case errors.Is(err, users.ErrExists):
+		writeErr(w, http.StatusConflict, "exists", err.Error())
+	case errors.Is(err, users.ErrInvalid):
+		writeErr(w, http.StatusBadRequest, "invalid", err.Error())
+	case errors.Is(err, users.ErrBadOTP):
+		writeErr(w, http.StatusBadRequest, "bad_otp", err.Error())
 	case errors.Is(err, vm.ErrInvalid):
 		writeErr(w, http.StatusBadRequest, "invalid", err.Error())
 	case errors.Is(err, vm.ErrNotFound):
@@ -653,4 +810,17 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// diskFor is the disk a create request will get (a template's size when none is asked).
+func (s *Server) diskFor(req vm.CreateRequest) int {
+	if req.DiskGB > 0 || req.ISO != "" {
+		return req.DiskGB
+	}
+	for i, t := range s.Templates {
+		if t.Name == req.Template || (req.Template == "" && i == 0) {
+			return t.MinDiskGB
+		}
+	}
+	return 0
 }

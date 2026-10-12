@@ -109,3 +109,25 @@ func TestDomainXMLInstallISO(t *testing.T) {
 		}
 	}
 }
+
+func TestOwnerRoundTrip(t *testing.T) {
+	x, err := DomainXML(Spec{Name: "p8s-a", UUID: "u", VCPUs: 1, MemoryMiB: 512, DiskGB: 4, DiskPath: "/dev/zvol/x", Bridge: "virbr0",
+		MAC: "52:54:00:00:00:01", Template: "debian-13", Owner: "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sp, err := ParseDomainXML(x)
+	if err != nil || sp.Owner != "alice" {
+		t.Fatalf("owner %q (%v)", sp.Owner, err)
+	}
+	m, err := MetadataXML(sp)
+	if err != nil || !strings.Contains(m, "<owner>alice</owner>") || !strings.HasPrefix(m, "<vm>") {
+		t.Fatalf("metadata %s (%v)", m, err)
+	}
+	// libvirt hands metadata set with `virsh metadata --key p8s` back prefixed
+	live := strings.Replace(string(x), `<vm xmlns="https://p8s.dev/xmlns/vm/1">`, `<p8s:vm xmlns:p8s="https://p8s.dev/xmlns/vm/1">`, 1)
+	live = strings.Replace(live, "</vm>", "</p8s:vm>", 1)
+	if sp, err := ParseDomainXML([]byte(live)); err != nil || sp.Owner != "alice" || sp.Template != "debian-13" {
+		t.Fatalf("prefixed metadata: owner %q template %q (%v)", sp.Owner, sp.Template, err)
+	}
+}

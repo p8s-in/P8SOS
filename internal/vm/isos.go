@@ -124,7 +124,7 @@ func (s *Service) createFromISO(ctx context.Context, r CreateRequest) (VM, error
 	spec := virt.Spec{
 		Name: dom, UUID: newUUID(), VCPUs: r.VCPUs, MemoryMiB: r.MemoryMiB, DiskGB: r.DiskGB,
 		DiskPath: disk, InstallISO: isoPath, OSType: r.OSType, Bridge: s.bridgeFor(r.Network), MAC: virt.RandomMAC(),
-		Template: "iso:" + r.ISO, CreatedAt: time.Now().UTC().Format(time.RFC3339),
+		Template: "iso:" + r.ISO, CreatedAt: time.Now().UTC().Format(time.RFC3339), Owner: r.Owner,
 	}
 	x, err := virt.DomainXML(spec)
 	if err != nil {

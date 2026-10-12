@@ -90,6 +90,7 @@ type VM struct {
 	Autostart bool       `json:"autostart"` // starts when the host boots
 	UUID      string     `json:"uuid"`
 	CreatedAt string     `json:"created_at"`
+	Owner     string     `json:"owner,omitempty"` // P8S user it belongs to; empty = admins only
 }
 
 type CreateRequest struct {
@@ -110,8 +111,10 @@ type CreateRequest struct {
 	RootPassword string `json:"root_password,omitempty"`
 	// SSHPasswordAuth allows SSH logins as root with RootPassword (default true when one is set).
 	SSHPasswordAuth *bool `json:"ssh_password_auth,omitempty"`
-	Start           *bool `json:"start,omitempty"`     // default true
-	Autostart       *bool `json:"autostart,omitempty"` // default true: start when the host boots
+	// Owner is the P8S user the VM is made for (set by the API from the login).
+	Owner     string `json:"owner,omitempty"`
+	Start     *bool  `json:"start,omitempty"`     // default true
+	Autostart *bool  `json:"autostart,omitempty"` // default true: start when the host boots
 }
 
 // Network names a VM can be attached to.
@@ -288,7 +291,7 @@ func (s *Service) Create(ctx context.Context, r CreateRequest) (VM, error) {
 	spec := virt.Spec{
 		Name: dom, UUID: uuid, VCPUs: r.VCPUs, MemoryMiB: r.MemoryMiB, DiskGB: r.DiskGB,
 		DiskPath: disk, SeedISO: seed, Bridge: s.bridgeFor(r.Network), MAC: virt.RandomMAC(),
-		Template: t.Name, CreatedAt: time.Now().UTC().Format(time.RFC3339),
+		Template: t.Name, CreatedAt: time.Now().UTC().Format(time.RFC3339), Owner: r.Owner,
 	}
 	xml, err := virt.DomainXML(spec)
 	if err != nil {
@@ -339,7 +342,8 @@ func (s *Service) get(ctx context.Context, dom string) (VM, error) {
 		Name: strings.TrimPrefix(spec.Name, Prefix), State: st, Template: spec.Template,
 		VCPUs: spec.VCPUs, MemoryMiB: spec.MemoryMiB, DiskGB: spec.DiskGB,
 		MAC: spec.MAC, Network: s.networkOf(spec.Bridge), UUID: spec.UUID, CreatedAt: spec.CreatedAt,
-		User: "debian",
+		Owner: spec.Owner,
+		User:  "debian",
 	}
 	if t, ok := s.template(spec.Template); ok {
 		v.User = t.User()

@@ -147,6 +147,11 @@ func (f *fakeVMs) Screenshot(ctx context.Context, n string) ([]byte, error) {
 	_, err := f.Get(ctx, n)
 	return []byte("\x89PNGfake"), err
 }
+func (f *fakeVMs) SetOwner(ctx context.Context, n, owner string) (vm.VM, error) {
+	v, err := f.Get(ctx, n)
+	v.Owner = owner
+	return v, err
+}
 func (f *fakeVMs) EjectISO(ctx context.Context, n string) (vm.VM, error) { return f.Get(ctx, n) }
 
 type fakeMetrics struct{}

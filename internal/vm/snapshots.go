@@ -329,3 +329,27 @@ func (s *Service) SetPassword(ctx context.Context, name, user, password string) 
 	}
 	return fmt.Errorf("%w: could not set the password for %q: %v", ErrConflict, user, err)
 }
+
+// SetOwner gives a VM to another P8S user ("" = admins only). Works while it runs.
+func (s *Service) SetOwner(ctx context.Context, name, owner string) (VM, error) {
+	dom := Prefix + name
+	defer s.lock(dom)()
+	st, err := s.state(ctx, dom)
+	if err != nil {
+		return VM{}, err
+	}
+	var spec virt.Spec
+	if err := s.redefine(ctx, dom, func(sp *virt.Spec) { sp.Owner = owner; spec = *sp }); err != nil {
+		return VM{}, err
+	}
+	if st != virt.Stopped {
+		x, err := virt.MetadataXML(spec)
+		if err != nil {
+			return VM{}, err
+		}
+		if err := s.HV.SetLiveMetadata(ctx, dom, x); err != nil {
+			return VM{}, fmt.Errorf("vm %q will show the new owner after its next restart: %w", name, err)
+		}
+	}
+	return s.get(ctx, dom)
+}

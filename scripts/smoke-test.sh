@@ -303,6 +303,36 @@ else
 fi
 rm -rf "$(dirname "$ISOF")"
 
+step "6e. user accounts (customers see only their own VMs)"
+CU=smoke-cust; CPW=smoke-cust-pass-$RANDOM
+api DELETE "/users/$CU"   # leftover from an interrupted run
+api POST /users '{"name":"'"$CU"'","role":"customer","password":"'"$CPW"'","quota":{"vms":1,"vcpus":1,"memory_mib":1024,"disk_gb":20}}'
+expect "add customer" 201
+out=$(curl -ks -X POST -H 'Content-Type: application/json' -d '{"user":"'"$CU"'","password":"'"$CPW"'"}' "$URL/login")
+CT=$(jq -r '.token // empty' <<<"$out")
+[[ -n $CT ]] && ok "customer signs in" || bad "customer sign-in: $out"
+capi() { local T=$TOK; TOK=$CT; api "$@"; TOK=$T; }
+capi GET /vms
+[[ $(jq -r --arg n "$NAME" '[.vms[].name] | index($n)' <<<"$BODY") == null ]] && ok "customer doesn't see the admin's VM" || bad "customer sees $NAME: $BODY"
+capi GET "/vms/$NAME";               expect "admin's VM looks like no VM" 404
+capi POST "/vms/$NAME/stop" '{"force":true}'; expect "customer can't stop the admin's VM" 404
+capi GET /host;                      expect "host details are admin-only" 403
+capi POST /vms '{"name":"'"${NAME}c"'","template":"debian-13","vcpus":2,"start":false}'; expect "over the plan (2 CPUs of 1)" 403
+capi POST /vms '{"name":"'"${NAME}c"'","template":"debian-13","vcpus":1,"memory_mib":512,"start":false}'; expect "customer creates a VM in the plan" 201
+[[ $(jq -r .owner <<<"$BODY") == "$CU" ]] && ok "VM belongs to the customer" || bad "owner: $BODY"
+capi POST /vms '{"name":"'"${NAME}d"'","template":"debian-13","vcpus":1,"start":false}'; expect "second VM is over the plan" 403
+api GET "/vms/${NAME}c"; [[ $(jq -r .owner <<<"$BODY") == "$CU" ]] && ok "admin sees the customer's VM" || bad "admin view: $BODY"
+api PUT "/vms/$NAME/owner" '{"owner":"'"$CU"'"}'; expect "give the test VM to the customer" 200
+capi GET "/vms/$NAME"; expect "customer now sees it" 200
+api PUT "/vms/$NAME/owner" '{"owner":""}'; expect "take it back" 200
+capi GET "/vms/$NAME"; expect "customer can't see it again" 404
+capi DELETE "/vms/${NAME}c"; expect "customer deletes own VM" 204
+api PATCH "/users/$CU" '{"disabled":true}'; expect "disable customer" 200
+capi GET /vms; expect "disabled customer is signed out" 401
+api DELETE "/users/$CU"; expect "delete customer" 204
+api GET "/audit?limit=50"
+jq -e --arg u "$CU" '[.entries[] | select(.user == $u)] | length > 0' <<<"$BODY" >/dev/null && ok "activity log records the customer's actions" || bad "audit: $BODY"
+
 step "7. delete"
 if [[ ${KEEP:-0} == 1 ]]; then
   echo "  KEEP=1: leaving $NAME in place"
