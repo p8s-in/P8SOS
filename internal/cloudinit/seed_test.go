@@ -18,7 +18,7 @@ func TestUserDataRootPassword(t *testing.T) {
 	h := HashPassword("longenough")
 	ud := UserData(Spec{Hostname: "web1", RootPasswordHash: h, RootSSHPassword: true})
 	for _, want := range []string{"disable_root: false", `password: "` + h + `", type: hash`, "ssh_pwauth: true",
-		"PermitRootLogin yes", "reload-or-restart, ssh", "expire: false"} {
+		"PermitRootLogin yes", "reload-or-restart sshd", "expire: false"} {
 		if !strings.Contains(ud, want) {
 			t.Errorf("missing %q in:\n%s", want, ud)
 		}

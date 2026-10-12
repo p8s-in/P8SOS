@@ -86,6 +86,18 @@ p8 resize web1 cpus=4 ram=4096 disk=40
 In the dashboard: **Manage** on a VM. Resizing and rolling back need the VM stopped;
 `p8` stops and restarts it for you after asking.
 
+## More operating systems
+
+Debian 13 comes installed. Add others once (downloads the official cloud image, checks its checksum):
+```
+p8 templates available            # debian-12, ubuntu-24.04, ubuntu-22.04, rocky-9, alma-9
+p8 templates add ubuntu-24.04
+p8 create app1 2 2048 20 --os ubuntu-24.04
+```
+They then also appear under **Operating system** in the dashboard's New VM dialog. Each OS has its
+own login user (`ubuntu`, `rocky`, `almalinux`, …) — `p8 ssh` and the dashboard's copy-SSH know it.
+Test one with: `TEMPLATE=ubuntu-24.04 p8 test`.
+
 ## Root password (like a VPS)
 
 When creating a VM you can set a **root password** (dashboard: *Root password* fields; command line:

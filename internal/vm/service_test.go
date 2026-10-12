@@ -582,3 +582,17 @@ func TestRootPassword(t *testing.T) {
 		}
 	}
 }
+
+func TestLoginUserFromTemplate(t *testing.T) {
+	ctx := context.Background()
+	svc, _, _, _ := newSvc()
+	svc.Templates = append(svc.Templates, config.Template{Name: "ubuntu-24.04", Snapshot: "tank/t/ubuntu@base", MinDiskGB: 4, DefaultUser: "ubuntu"})
+	u, err := svc.Create(ctx, CreateRequest{Name: "u1", Template: "ubuntu-24.04"})
+	if err != nil || u.User != "ubuntu" || u.Template != "ubuntu-24.04" {
+		t.Fatalf("ubuntu VM: %v %+v", err, u)
+	}
+	d, _ := svc.Create(ctx, CreateRequest{Name: "d1", Template: "debian-13"})
+	if d.User != "debian" {
+		t.Fatalf("old-style template without default_user should mean debian: %+v", d)
+	}
+}

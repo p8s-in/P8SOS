@@ -36,6 +36,7 @@ config); containers via Incus. Replaces Proxmox on the home lab.
 - [x] Web dashboard v1 (pulled forward): HTTPS with self-signed cert, token sign-in, host cards,
       VM list with live refresh, create / start / stop / reboot / force-off / delete, phone layout
 - [x] Browser console (noVNC over a ticketed WebSocket proxy in p8sd), set guest password, type text
+- [x] More OS templates: Debian 12/13, Ubuntu 22.04/24.04, Rocky 9, AlmaLinux 9 (`p8 templates add`, checksum-verified)
 - [ ] Metrics graphs, backups
 
 Admin + customer panels, noVNC console proxied through p8sd auth, metrics,

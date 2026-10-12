@@ -99,7 +99,8 @@ func UserData(s Spec) string {
 	sb.WriteString("package_update: true\npackages:\n  - qemu-guest-agent\n")
 	sb.WriteString("runcmd:\n  - [systemctl, enable, --now, qemu-guest-agent]\n")
 	if s.RootSSHPassword && s.RootPasswordHash != "" {
-		sb.WriteString("  - [systemctl, reload-or-restart, ssh]\n")
+		// Debian/Ubuntu call the service "ssh", RHEL-likes "sshd".
+		sb.WriteString("  - [sh, -c, 'systemctl reload-or-restart ssh 2>/dev/null || systemctl reload-or-restart sshd']\n")
 	}
 	return sb.String()
 }

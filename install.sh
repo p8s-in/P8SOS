@@ -116,6 +116,7 @@ install -m 0755 "$REPO/scripts/p8" /usr/local/bin/p8
 install -d -m 0755 /usr/local/share/p8s
 install -m 0755 "$REPO/scripts/smoke-test.sh" /usr/local/share/p8s/smoke-test.sh
 install -m 0755 "$REPO/scripts/setup-bridge.sh" /usr/local/share/p8s/setup-bridge.sh
+install -m 0755 "$REPO/scripts/make-template.sh" /usr/local/share/p8s/make-template.sh
 ok "installed /usr/local/bin/p8sd and the 'p8' command"
 
 # ---------------------------------------------------------------------------
@@ -142,7 +143,7 @@ if (( ! have_cfg )); then
     vm_dataset: $ds, bridge: $br, default_ssh_keys: [$key],
     max_vcpus: $cpus, max_memory_mib: $mem, max_disk_gb: 200,
     tokens: [{name: $t.name, sha256: $t.sha256}],
-    templates: [{name: "debian-13", snapshot: $snap, min_disk_gb: $gb, os_variant: "debian13"}]
+    templates: [{name: "debian-13", snapshot: $snap, min_disk_gb: $gb, os_variant: "debian13", label: "Debian 13 (trixie)", default_user: "debian"}]
   }' > "$CONF"
   chmod 0600 "$CONF"
   ( umask 077; jq -r .token <<<"$T" > "$TOKEN_FILE" )

@@ -103,13 +103,19 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) listTemplates(w http.ResponseWriter, r *http.Request) {
 	type tpl struct {
-		Name      string `json:"name"`
-		MinDiskGB int    `json:"min_disk_gb"`
-		OSVariant string `json:"os_variant"`
+		Name        string `json:"name"`
+		Label       string `json:"label"`
+		MinDiskGB   int    `json:"min_disk_gb"`
+		OSVariant   string `json:"os_variant"`
+		DefaultUser string `json:"default_user"`
 	}
 	out := []tpl{}
 	for _, t := range s.Templates {
-		out = append(out, tpl{t.Name, t.MinDiskGB, t.OSVariant})
+		label := t.Label
+		if label == "" {
+			label = t.Name
+		}
+		out = append(out, tpl{t.Name, label, t.MinDiskGB, t.OSVariant, t.User()})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"templates": out})
 }

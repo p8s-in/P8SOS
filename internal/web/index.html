@@ -92,7 +92,8 @@ dialog.wide{width:min(620px,calc(100vw - 32px))}
   <label for="cName">Name</label>
   <input id="cName" required pattern="[a-z][a-z0-9\-]{0,47}[a-z0-9]" placeholder="web1" autocomplete="off">
   <div class="hint">Lowercase letters, digits and hyphens.</div>
-  <label for="cTpl">Template</label><select id="cTpl"></select>
+  <label for="cTpl">Operating system</label><select id="cTpl"></select>
+  <div class="hint" id="cTplHint"></div>
   <label for="cNet">Network</label>
   <select id="cNet">
     <option value="nat">Private — reachable from the host (NAT)</option>
@@ -281,10 +282,10 @@ function renderVMs(){
     const acts = v.state === "running"
       ? `<button class="btn" data-a="stop" ${dis}>Stop</button><button class="btn" data-a="reboot" ${dis}>Reboot</button><button class="btn" data-a="kill" ${dis} title="Power off immediately">Force off</button><button class="btn" data-a="console" ${dis} title="See and use the VM's screen">Console</button>`
       : `<button class="btn" data-a="start" ${dis}>Start</button>`;
-    const ip = v.ip ? `<span class="mono copy" data-copy="ssh debian@${esc(v.ip)}" title="Click to copy the SSH command">${esc(v.ip)}</span>` : `<span class="muted">${v.state === "running" ? "booting…" : "—"}</span>`;
+    const ip = v.ip ? `<span class="mono copy" data-copy="ssh ${esc(v.user || "debian")}@${esc(v.ip)}" title="Click to copy the SSH command">${esc(v.ip)}</span>` : `<span class="muted">${v.state === "running" ? "booting…" : "—"}</span>`;
     return `<tr data-n="${esc(v.name)}">
       <td data-k="State"><span class="state ${esc(v.state)}"><span class="dot"></span>${b ? "working…" : esc(v.state)}</span></td>
-      <td data-k="Name"><b>${esc(v.name)}</b><div class="sub">${esc(v.template)}${v.network === "lan" ? " · home network" : ""}</div></td>
+      <td data-k="Name"><b>${esc(v.name)}</b><div class="sub">${esc(templates.find(t => t.name === v.template)?.label || v.template)}${v.network === "lan" ? " · home network" : ""}</div></td>
       <td data-k="IP">${ip}</td>
       <td data-k="CPU">${v.vcpus}</td><td data-k="RAM">${gb(v.memory_mib)}</td><td data-k="Disk">${v.disk_gb} GB</td>
       <td data-k="Autostart">${v.autostart ? "yes" : "no"}</td>
@@ -312,9 +313,10 @@ document.addEventListener("click", async e => {
 
 async function openCreate(){
   try { templates = (await call("GET", "/templates")).templates; } catch (err) { return toast(err.message, true); }
-  $("#cTpl").innerHTML = templates.map(t => `<option value="${esc(t.name)}" data-min="${t.min_disk_gb}">${esc(t.name)}</option>`).join("");
+  $("#cTpl").innerHTML = templates.map(t => `<option value="${esc(t.name)}" data-min="${t.min_disk_gb}" data-user="${esc(t.default_user)}">${esc(t.label || t.name)}</option>`).join("");
   const min = templates[0]?.min_disk_gb || 1;
   $("#cDisk").min = min; if (+$("#cDisk").value < min) $("#cDisk").value = Math.max(10, min);
+  tplHint();
   $("#cName").value = ""; $("#cKeys").value = ""; $("#cPw").value = $("#cPw2").value = ""; $("#cPwSSH").checked = true;
   host = await call("GET", "/host").catch(() => host);
   const lan = !!host?.networks?.includes("lan");
@@ -331,7 +333,11 @@ function netHint(){
     : "Only the host can reach this VM. Choose Home network to reach it from other devices.";
 }
 $("#cNet").onchange = netHint;
-$("#cTpl").onchange = e => { const min = +e.target.selectedOptions[0].dataset.min; $("#cDisk").min = min; if (+$("#cDisk").value < min) $("#cDisk").value = min; };
+function tplHint(){
+  const o = $("#cTpl").selectedOptions[0];
+  $("#cTplHint").innerHTML = o ? `SSH keys go to user <b>${esc(o.dataset.user)}</b>. More systems: <span class="mono">p8 templates available</span> on the host.` : "";
+}
+$("#cTpl").onchange = e => { const min = +e.target.selectedOptions[0].dataset.min; $("#cDisk").min = min; if (+$("#cDisk").value < min) $("#cDisk").value = min; tplHint(); };
 $("#fCreate").onsubmit = async e => {
   if (e.submitter?.value !== "ok") return;
   e.preventDefault();
@@ -476,6 +482,7 @@ async function refresh(withHost){
   try {
     vms = (await call("GET", "/vms")).vms;
     if (withHost || tick % 4 === 0) host = await call("GET", "/host").catch(() => null);
+    if (withHost && !templates.length) templates = (await call("GET", "/templates").catch(() => ({templates: []}))).templates;
     if (!version) { const h = await fetch(API + "/health").then(r => r.json()).catch(() => ({})); version = h.version || ""; }
     if ($("#hVer")) $("#hVer").textContent = version ? "p8sd " + version : "";
     render();

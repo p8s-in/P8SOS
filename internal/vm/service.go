@@ -64,6 +64,7 @@ type VM struct {
 	Name      string     `json:"name"`
 	State     virt.State `json:"state"`
 	Template  string     `json:"template"`
+	User      string     `json:"user"` // login user with the SSH keys (debian, ubuntu, rocky, ...)
 	VCPUs     int        `json:"vcpus"`
 	MemoryMiB int        `json:"memory_mib"`
 	DiskGB    int        `json:"disk_gb"`
@@ -315,6 +316,10 @@ func (s *Service) get(ctx context.Context, dom string) (VM, error) {
 		Name: strings.TrimPrefix(spec.Name, Prefix), State: st, Template: spec.Template,
 		VCPUs: spec.VCPUs, MemoryMiB: spec.MemoryMiB, DiskGB: spec.DiskGB,
 		MAC: spec.MAC, Network: s.networkOf(spec.Bridge), UUID: spec.UUID, CreatedAt: spec.CreatedAt,
+		User: "debian",
+	}
+	if t, ok := s.template(spec.Template); ok {
+		v.User = t.User()
 	}
 	// Best effort: these must never make GET/list fail.
 	v.Autostart, _ = s.HV.Autostart(ctx, dom)

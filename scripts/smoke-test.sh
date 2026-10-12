@@ -78,6 +78,10 @@ api POST /vms '{"name":"x'"$NAME"'","template":"'"$TEMPLATE"'","colour":"red"}';
 api POST /vms '{not json';                                               expect "malformed JSON" 400
 api GET /vms/does-not-exist;                                             expect "get missing VM" 404
 
+api GET /templates
+LOGIN=$(jq -r --arg t "$TEMPLATE" '.templates[] | select(.name == $t) | .default_user // "debian"' <<<"$BODY")
+[[ -n $LOGIN ]] && ok "template $TEMPLATE is installed (login user: $LOGIN)" || { bad "template $TEMPLATE is not installed"; LOGIN=debian; }
+
 step "3. create $NAME"
 keys='[]'
 if [[ -f $PUBKEY ]]; then keys=$(jq -Rc '[.]' <"$PUBKEY"); else echo "  (no $PUBKEY; SSH check will be skipped)"; fi
@@ -117,36 +121,36 @@ if [[ -n $ip && $keys != '[]' ]]; then
   ssh_opts=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -o BatchMode=yes -o LogLevel=ERROR)
   out=""
   for ((i = 0; i < SSH_TIMEOUT; i += 5)); do
-    out=$(ssh "${ssh_opts[@]}" "debian@$ip" 'hostname; df -BG --output=size / | tail -1; cloud-init status --wait >/dev/null 2>&1; systemctl is-active qemu-guest-agent' 2>/dev/null) && break
+    out=$(ssh "${ssh_opts[@]}" "$LOGIN@$ip" 'hostname; df -BG --output=size / | tail -1; cloud-init status --wait >/dev/null 2>&1; systemctl is-active qemu-guest-agent' 2>/dev/null) && break
     sleep 5
   done
   if [[ -n $out ]]; then
-    ok "SSH as debian@$ip works"
+    ok "SSH as $LOGIN@$ip works"
     mapfile -t g <<<"$out"
     [[ ${g[0]} == "$NAME" ]] && ok "hostname is $NAME" || bad "hostname is '${g[0]}'"
     sz=${g[1]//[^0-9]/}; [[ $sz -ge 9 ]] && ok "root fs grew to ${sz}G" || bad "root fs is ${sz}G, expected ~10G"
     [[ ${g[2]} == active ]] && ok "qemu-guest-agent active" || bad "qemu-guest-agent: ${g[2]:-unknown}"
-    r=$(ssh "${ssh_opts[@]}" "debian@$ip" 'sudo getent shadow root | cut -d: -f2 | cut -c1-3; sudo sshd -T 2>/dev/null | grep -i "^permitrootlogin"' 2>/dev/null)
+    r=$(ssh "${ssh_opts[@]}" "$LOGIN@$ip" 'sudo getent shadow root | cut -d: -f2 | cut -c1-3; sudo sshd -T 2>/dev/null | grep -i "^permitrootlogin"' 2>/dev/null)
     [[ $(head -1 <<<"$r") == '$6$' ]] && ok "root password set (SHA-512 hash in /etc/shadow)" || bad "root password not set: $r"
     [[ $(tail -1 <<<"$r") == "permitrootlogin yes" ]] && ok "SSH allows root password login" || bad "sshd: $(tail -1 <<<"$r")"
 
     # Reboot: the guest's boot_id changes once it has really restarted.
-    b1=$(ssh "${ssh_opts[@]}" "debian@$ip" cat /proc/sys/kernel/random/boot_id 2>/dev/null)
+    b1=$(ssh "${ssh_opts[@]}" "$LOGIN@$ip" cat /proc/sys/kernel/random/boot_id 2>/dev/null)
     api POST "/vms/$NAME/reboot"; expect "reboot" 202
     b2=""
     for ((i = 0; i < SSH_TIMEOUT; i += 5)); do
       sleep 5
-      b2=$(ssh "${ssh_opts[@]}" "debian@$ip" cat /proc/sys/kernel/random/boot_id 2>/dev/null) && [[ -n $b2 && $b2 != "$b1" ]] && break
+      b2=$(ssh "${ssh_opts[@]}" "$LOGIN@$ip" cat /proc/sys/kernel/random/boot_id 2>/dev/null) && [[ -n $b2 && $b2 != "$b1" ]] && break
     done
     [[ -n $b2 && $b2 != "$b1" ]] && ok "guest rebooted and is reachable again" || bad "guest did not come back after reboot"
 
     # Snapshot a running guest (filesystems frozen via the guest agent), then change the file.
-    ssh "${ssh_opts[@]}" "debian@$ip" 'echo one | sudo tee /var/p8s-marker >/dev/null; sync' 2>/dev/null
+    ssh "${ssh_opts[@]}" "$LOGIN@$ip" 'echo one | sudo tee /var/p8s-marker >/dev/null; sync' 2>/dev/null
     api POST "/vms/$NAME/snapshots" '{"name":"smoke1"}'; expect "snapshot running VM" 201
-    ssh "${ssh_opts[@]}" "debian@$ip" 'echo two | sudo tee /var/p8s-marker >/dev/null; sync' 2>/dev/null
+    ssh "${ssh_opts[@]}" "$LOGIN@$ip" 'echo two | sudo tee /var/p8s-marker >/dev/null; sync' 2>/dev/null
     MARKER=1
   else
-    bad "SSH to debian@$ip failed for ${SSH_TIMEOUT}s"
+    bad "SSH to $LOGIN@$ip failed for ${SSH_TIMEOUT}s"
   fi
 fi
 
@@ -198,7 +202,7 @@ if [[ ${MARKER:-0} == 1 ]]; then
   api POST "/vms/$NAME/start"; expect "start after rollback" 200
   m=""
   for ((i = 0; i < SSH_TIMEOUT; i += 5)); do
-    sleep 5; m=$(ssh "${ssh_opts[@]}" "debian@$ip" 'cat /var/p8s-marker' 2>/dev/null) && [[ -n $m ]] && break
+    sleep 5; m=$(ssh "${ssh_opts[@]}" "$LOGIN@$ip" 'cat /var/p8s-marker' 2>/dev/null) && [[ -n $m ]] && break
   done
   [[ $m == one ]] && ok "rollback restored the guest's files (marker=one)" || bad "marker after rollback is '$m', want 'one'"
   api POST "/vms/$NAME/stop" '{"force":true}'
@@ -236,7 +240,7 @@ if jq -e '.networks | index("lan")' <<<"$BODY" >/dev/null 2>&1; then
     out=""
     for ((i = 0; i < SSH_TIMEOUT; i += 5)); do
       out=$(ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -o BatchMode=yes \
-        -o LogLevel=ERROR "debian@$lip" 'ip -4 route show default' 2>/dev/null) && break
+        -o LogLevel=ERROR "$LOGIN@$lip" 'ip -4 route show default' 2>/dev/null) && break
       sleep 5
     done
     [[ -n $out ]] && ok "SSH to $lip works (gateway: $(awk '{print $3; exit}' <<<"$out"))" || bad "SSH to $lip failed"

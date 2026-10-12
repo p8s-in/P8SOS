@@ -17,8 +17,9 @@ usage() {
 p8 — manage P8S OS virtual machines
 
   p8 list                          show all VMs
-  p8 create NAME [CPUS] [RAM_MB] [DISK_GB] [--lan] [--root-password]
-                                   make a VM (default 1 CPU, 1024 MB, template size)
+  p8 create NAME [CPUS] [RAM_MB] [DISK_GB] [--os TEMPLATE] [--lan] [--root-password]
+                                   make a VM (default 1 CPU, 1024 MB, template size, debian-13)
+                                   --os: which OS, see  p8 templates
                                    --lan: on your home network, IP from your router
                                    --root-password: asks for a root password (SSH login allowed)
   p8 show NAME                     details of one VM
@@ -38,7 +39,9 @@ p8 — manage P8S OS virtual machines
   p8 ssh NAME                      log into the VM as user 'debian'
   p8 console NAME                  serial console (exit with Ctrl+])
   p8 bootlog NAME                  follow the VM's boot messages (Ctrl+C to stop)
-  p8 templates                     available templates
+  p8 templates                     installed OS templates
+  p8 templates available           OS images that can be added
+  p8 templates add NAME            download and add one (e.g. ubuntu-24.04, rocky-9)
   p8 dashboard                     web dashboard address + how to sign in
   p8 lan-setup                     let VMs join your home network (Ethernet only, once)
   p8 status                        is p8sd healthy?
@@ -49,6 +52,7 @@ p8 — manage P8S OS virtual machines
 Examples:
   p8 create web1 2 2048 20
   p8 create web2 2 2048 20 --lan
+  p8 templates add ubuntu-24.04 && p8 create app1 2 2048 20 --os ubuntu-24.04
   p8 snap web1 before-upgrade
   p8 resize web1 cpus=4 ram=4096 disk=40
   p8 ssh web1
@@ -121,15 +125,23 @@ case $cmd in
     table <<<"$body" ;;
 
   create|new)
-    net=nat; args=(); askpw=0
-    for a in "$@"; do case $a in --lan) net=lan ;; --nat) net=nat ;; --root-password|--password) askpw=1 ;; *) args+=("$a") ;; esac; done
+    net=nat; args=(); askpw=0; os=debian-13; next_os=0
+    for a in "$@"; do
+      if (( next_os )); then os=$a; next_os=0; continue; fi
+      case $a in
+        --lan) net=lan ;; --nat) net=nat ;; --root-password|--password) askpw=1 ;;
+        --os|--template) next_os=1 ;; --os=*|--template=*) os=${a#*=} ;;
+        *) args+=("$a") ;;
+      esac
+    done
     set -- "${args[@]}"
     need "${1:-}"
     keys='[]'
     [[ -f $PUBKEY ]] && keys=$(jq -Rc '[.]' <"$PUBKEY") || red "note: $PUBKEY not found, you won't be able to SSH in"
     req=$(jq -nc --arg n "$1" --argjson k "$keys" --arg c "${2:-0}" --arg m "${3:-0}" --arg d "${4:-0}" \
       --arg net "$net" \
-      '{name:$n, template:"debian-13", vcpus:($c|tonumber), memory_mib:($m|tonumber), disk_gb:($d|tonumber), ssh_keys:$k, network:$net}')
+      --arg os "$os" \
+      '{name:$n, template:$os, vcpus:($c|tonumber), memory_mib:($m|tonumber), disk_gb:($d|tonumber), ssh_keys:$k, network:$net}')
     if (( askpw )); then
       pw=$(ask_password "root password for $1") || exit 1
       req=$(jq -c --arg p "$pw" '. + {root_password: $p, ssh_password_auth: true}' <<<"$req")
@@ -231,14 +243,28 @@ case $cmd in
     need "${1:-}"; ip=""
     for _ in $(seq 24); do ip=$(vm_ip "$1"); [[ -n $ip ]] && break; echo "waiting for $1 to get an IP ..."; sleep 5; done
     [[ -n $ip ]] || { red "no IP after 2 min. Look at the boot: p8 console $1"; exit 1; }
-    exec ssh "${SSH_OPTS[@]}" "debian@$ip" ;;
+    u=$(call GET "/vms/$1" | jq -r '.user // "debian"')
+    exec ssh "${SSH_OPTS[@]}" "$u@$ip" ;;
 
   console) need "${1:-}"; exec sudo virsh console "p8s-$1" ;;
   bootlog) need "${1:-}"; exec sudo tail -n "${2:-60}" -f "/var/log/libvirt/qemu/p8s-$1-console.log" ;;
 
   templates)
-    body=$(call GET /templates) || exit 1
-    jq -r '.templates[] | "\(.name)  (min \(.min_disk_gb) GB)"' <<<"$body" ;;
+    MT=/usr/local/share/p8s/make-template.sh
+    [[ -f $MT ]] || MT=$(dirname "$(readlink -f "$0")")/make-template.sh
+    case ${1:-} in
+      available|list) echo "Can be added with: p8 templates add NAME"; bash "$MT" --list ;;
+      add)
+        [[ -n ${2:-} ]] || { red "which one?  p8 templates available"; exit 1; }
+        echo "Downloading and importing $2 (a few hundred MB, takes a few minutes)..."
+        sudo bash "$MT" "$2" --register || exit 1 ;;
+      *)
+        body=$(call GET /templates) || exit 1
+        printf '%-14s %-24s %-10s %s\n' NAME OS LOGIN MIN_DISK
+        jq -r '.templates[] | [.name, .label, .default_user, "\(.min_disk_gb) GB"] | @tsv' <<<"$body" |
+          while IFS=$'\t' read -r n l u d; do printf '%-14s %-24s %-10s %s\n' "$n" "$l" "$u" "$d"; done
+        echo; echo "More: p8 templates available" ;;
+    esac ;;
 
   status)
     if h=$(curl -kfs "$URL/health"); then green "✔ p8sd is running ($(jq -r .version <<<"$h"))"

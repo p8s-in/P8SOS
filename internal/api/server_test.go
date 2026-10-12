@@ -99,7 +99,7 @@ func newTestServer() (*httptest.Server, *fakeVMs) {
 	f := &fakeVMs{}
 	s := &Server{VMs: f, Version: "test",
 		Tokens:    []config.Token{{Name: "t", SHA256: hex.EncodeToString(sum[:])}},
-		Templates: []config.Template{{Name: "debian-13", MinDiskGB: 4}}}
+		Templates: []config.Template{{Name: "debian-13", MinDiskGB: 4}, {Name: "ubuntu-24.04", MinDiskGB: 4, Label: "Ubuntu 24.04 LTS", DefaultUser: "ubuntu"}}}
 	return httptest.NewServer(s.Handler()), f
 }
 
@@ -135,6 +135,8 @@ func TestAPI(t *testing.T) {
 		{"GET", "/api/v1/vms", "wrong", "", 401, "unauthorized"},
 		{"GET", "/api/v1/vms", secret, "", 200, `"name":"web1"`},
 		{"GET", "/api/v1/templates", secret, "", 200, `"debian-13"`},
+		{"GET", "/api/v1/templates", secret, "", 200, `"label":"Ubuntu 24.04 LTS","min_disk_gb":4,"os_variant":"","default_user":"ubuntu"`},
+		{"GET", "/api/v1/templates", secret, "", 200, `"name":"debian-13","label":"debian-13","min_disk_gb":4,"os_variant":"","default_user":"debian"`},
 		{"POST", "/api/v1/vms", secret, `{"name":"api1","template":"debian-13","vcpus":2,"ssh_keys":["ssh-ed25519 AAAA"]}`, 201, `"name":"api1"`},
 		{"POST", "/api/v1/vms", secret, `{"name":"dup","template":"debian-13"}`, 409, `"exists"`},
 		{"POST", "/api/v1/vms", secret, `{"template":"debian-13"}`, 400, `"invalid"`},

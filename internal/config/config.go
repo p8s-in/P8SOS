@@ -39,6 +39,17 @@ type Template struct {
 	Snapshot  string `json:"snapshot"`    // e.g. "tank/p8s/templates/debian-13@base"
 	MinDiskGB int    `json:"min_disk_gb"` // must be >= the zvol's volsize
 	OSVariant string `json:"os_variant"`  // informational, e.g. "debian13"
+	Label     string `json:"label"`       // shown in the dashboard, e.g. "Ubuntu 24.04 LTS"
+	// DefaultUser is the image's login user that gets the SSH keys ("debian", "ubuntu", "rocky").
+	DefaultUser string `json:"default_user"`
+}
+
+// User returns the template's login user (older configs have none: Debian).
+func (t Template) User() string {
+	if t.DefaultUser != "" {
+		return t.DefaultUser
+	}
+	return "debian"
 }
 
 var (
