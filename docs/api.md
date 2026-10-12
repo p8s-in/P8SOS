@@ -153,6 +153,16 @@ deletes the newer ones — without `destroy_newer` that is a `409` listing them.
 
 `DELETE /vms/{name}/snapshots/{snap}` → `204`.
 
+### Console (VM screen in the browser)
+`POST /vms/{name}/console` → `201 {"ticket":"…","path":"/api/v1/console?ticket=…","expires_in":30}`
+(`409` if the VM isn't running). Then open a WebSocket (subprotocol `binary`) to `path`:
+it carries the VM's VNC (RFB) stream, as used by noVNC. The ticket works **once**, for 30 s,
+and only from a page served by this host (Origin check). No bearer token on the socket itself.
+
+`POST /vms/{name}/password` `{"user":"debian","password":"…"}` → `204`. Sets a guest account's
+password through the guest agent so you can log in on the console (cloud images ship with
+passwords locked). 8–128 chars. `409` if the VM isn't running or the agent isn't up yet.
+
 ## Example session
 
 ```bash
@@ -172,4 +182,3 @@ curl -s -H "Authorization: Bearer $TOK" -X DELETE $P8S/vms/web1 -w '%{http_code}
 - Change autostart on an existing VM; CPU/RAM changes on a running VM.
 - Async jobs: `POST` returns `202` + `/jobs/{id}` for long operations.
 - Tenants, projects, quotas, scoped tokens (Phase 2).
-- Console websocket for noVNC (Phase 3).

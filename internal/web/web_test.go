@@ -24,3 +24,22 @@ func TestServesPageWithSecurityHeaders(t *testing.T) {
 		t.Fatalf("other paths: %d", rec.Code)
 	}
 }
+
+func TestServesConsoleAndNoVNC(t *testing.T) {
+	for path, want := range map[string]string{
+		"/console":           "new RFB(",
+		"/novnc.min.js":      "window.RFB",
+		"/novnc-LICENSE.txt": "MPL",
+	} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("GET", path, nil)
+		req.Host = "192.168.0.106:8006"
+		Handler().ServeHTTP(rec, req)
+		if rec.Code != 200 || !strings.Contains(rec.Body.String(), want) {
+			t.Errorf("%s: %d, missing %q", path, rec.Code, want)
+		}
+		if csp := rec.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "wss://192.168.0.106:8006") {
+			t.Errorf("%s: csp %q", path, csp)
+		}
+	}
+}

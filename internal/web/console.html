@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Console — P8S OS</title>
+<style>
+:root{--bg:#0e1116;--panel:#161b22;--text:#e6edf3;--muted:#8b949e;--line:#262c36;--accent:#818cf8;--ok:#12b76a;--warn:#f79009;--bad:#f04438}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;background:#000;color:var(--text);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+button,input{font:inherit;color:inherit}
+.bar{display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--panel);border-bottom:1px solid var(--line);flex-wrap:wrap}
+.logo{font-weight:700}.logo b{color:var(--accent)}
+.name{font-weight:650}
+.st{display:inline-flex;align-items:center;gap:6px;color:var(--muted);font-size:13px}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--warn)}
+.st.ok .dot{background:var(--ok)} .st.bad .dot{background:var(--bad)}
+.spacer{flex:1}
+.btn{border:1px solid var(--line);background:#1f2630;padding:5px 10px;border-radius:7px;cursor:pointer;white-space:nowrap}
+.btn:hover{border-color:var(--muted)} .btn:disabled{opacity:.5;cursor:default}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#0e1116;font-weight:600}
+#screen{position:absolute;top:var(--bar-h,49px);left:0;right:0;bottom:0;background:#000}
+#msg{position:absolute;inset:var(--bar-h,49px) 0 0 0;display:flex;align-items:center;justify-content:center;text-align:center;padding:24px;color:var(--muted)}
+#msg[hidden]{display:none}
+dialog{border:1px solid var(--line);border-radius:12px;padding:0;background:var(--panel);color:var(--text);width:min(420px,calc(100vw - 32px))}
+dialog::backdrop{background:rgba(0,0,0,.6)}
+dialog form{padding:20px} dialog h2{margin:0 0 4px;font-size:17px}
+.sub{color:var(--muted);font-size:13px}
+label{display:block;font-size:13px;font-weight:550;margin:12px 0 4px}
+input,textarea{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:7px;background:#0e1116}
+textarea{min-height:80px;font-family:ui-monospace,Menlo,Consolas,monospace}
+.dlg-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}
+#toast{position:fixed;right:16px;bottom:16px;background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--ok);padding:10px 14px;border-radius:8px;max-width:360px;display:none}
+#toast.err{border-left-color:var(--bad)}
+</style>
+</head>
+<body>
+<div class="bar" id="bar">
+  <span class="logo">P8S <b>OS</b></span>
+  <span class="name" id="vmName"></span>
+  <span class="st" id="st"><span class="dot"></span><span id="stText">Connecting…</span></span>
+  <span class="spacer"></span>
+  <button class="btn" id="bCAD" disabled title="Send Ctrl+Alt+Del to the VM">Ctrl+Alt+Del</button>
+  <button class="btn" id="bType" disabled title="Type text into the VM (e.g. a long password)">Type text</button>
+  <button class="btn" id="bPw" title="Set a login password inside the VM">Set password</button>
+  <button class="btn" id="bFull" title="Full screen">Full screen</button>
+  <button class="btn primary" id="bRe" hidden>Reconnect</button>
+</div>
+<div id="screen"></div>
+<div id="msg" hidden></div>
+
+<dialog id="dlgPw"><form method="dialog" id="fPw">
+  <h2>Set login password</h2>
+  <div class="sub">VMs are created with SSH keys only, so no account has a password. Set one here to log in on
+    this screen. Needs the VM to be fully booted.</div>
+  <label for="pwUser">User</label><input id="pwUser" value="debian" autocomplete="off" pattern="[a-z_][a-z0-9_\-]{0,31}" required>
+  <label for="pw1">Password</label><input id="pw1" type="password" minlength="8" maxlength="128" autocomplete="new-password" required>
+  <label for="pw2">Repeat password</label><input id="pw2" type="password" minlength="8" maxlength="128" autocomplete="new-password" required>
+  <div class="dlg-actions"><button class="btn" value="cancel" formnovalidate>Cancel</button><button class="btn primary" value="ok">Set password</button></div>
+</form></dialog>
+
+<dialog id="dlgType"><form method="dialog" id="fType">
+  <h2>Type text into the VM</h2>
+  <div class="sub">Sent as key presses (US keyboard layout). Newlines press Enter.</div>
+  <label for="typeText">Text</label><textarea id="typeText"></textarea>
+  <div class="dlg-actions"><button class="btn" value="cancel" formnovalidate>Cancel</button><button class="btn primary" value="ok">Type it</button></div>
+</form></dialog>
+
+<div id="toast"></div>
+
+<script src="/novnc.min.js"></script>
+<script>
+"use strict";
+const $ = s => document.querySelector(s);
+const params = new URLSearchParams(location.search);
+const vm = params.get("vm") || "";
+let ticket = new URLSearchParams(location.hash.slice(1)).get("ticket") || "";
+history.replaceState(null, "", location.pathname + location.search); // tickets are one-time; don't keep it in the URL
+let rfb = null;
+
+const token = (() => { try { return sessionStorage.getItem("p8s.token") || localStorage.getItem("p8s.token") || ""; } catch { return ""; } })();
+document.title = `${vm} — console — P8S OS`;
+$("#vmName").textContent = vm;
+document.documentElement.style.setProperty("--bar-h", $("#bar").offsetHeight + "px");
+addEventListener("resize", () => document.documentElement.style.setProperty("--bar-h", $("#bar").offsetHeight + "px"));
+
+function toast(msg, err){
+  const t = $("#toast"); t.textContent = msg; t.className = err ? "err" : ""; t.style.display = "block";
+  clearTimeout(t._h); t._h = setTimeout(() => t.style.display = "none", err ? 7000 : 3500);
+}
+function status(text, kind){ $("#stText").textContent = text; $("#st").className = "st " + (kind || ""); }
+function message(html){ const m = $("#msg"); m.innerHTML = html || ""; m.hidden = !html; }
+
+async function api(method, path, body){
+  const r = await fetch("/api/v1" + path, {method,
+    headers: {"Authorization": "Bearer " + token, ...(body ? {"Content-Type": "application/json"} : {})},
+    body: body ? JSON.stringify(body) : undefined});
+  if (r.status === 204) return null;
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) { const e = new Error(d?.error?.message || "HTTP " + r.status); e.status = r.status; throw e; }
+  return d;
+}
+
+async function connect(){
+  $("#bRe").hidden = true; message(""); status("Connecting…");
+  if (!ticket) {
+    if (!token) { status("Not signed in", "bad"); message("Open the console from the P8S OS dashboard (Console button)."); return; }
+    try { ticket = (await api("POST", `/vms/${encodeURIComponent(vm)}/console`)).ticket; }
+    catch (err) { status("Can't connect", "bad"); message(esc(err.message)); $("#bRe").hidden = false; return; }
+  }
+  const url = (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/api/v1/console?ticket=" + encodeURIComponent(ticket);
+  ticket = ""; // used up by this connection
+  $("#screen").innerHTML = "";
+  rfb = new RFB($("#screen"), url, {wsProtocols: ["binary"], shared: true});
+  rfb.scaleViewport = true;
+  rfb.background = "#000";
+  rfb.focusOnClick = true;
+  rfb.addEventListener("connect", () => { status("Connected", "ok"); $("#bCAD").disabled = $("#bType").disabled = false; rfb.focus(); });
+  rfb.addEventListener("disconnect", e => {
+    $("#bCAD").disabled = $("#bType").disabled = true; rfb = null;
+    status(e.detail.clean ? "Disconnected" : "Connection lost", "bad");
+    message("The console is closed. If the VM was stopped or restarted, press Reconnect.");
+    $("#bRe").hidden = false;
+  });
+  rfb.addEventListener("desktopname", e => { if (e.detail.name) status("Connected", "ok"); });
+}
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+$("#bRe").onclick = connect;
+$("#bCAD").onclick = () => { rfb?.sendCtrlAltDel(); rfb?.focus(); };
+$("#bFull").onclick = () => document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen().catch(() => {});
+
+/* Type text: send physical key presses for a US layout, with Shift where needed,
+   so it works whatever the guest's keyboard state. */
+const SHIFTED = {'~':'`','!':'1','@':'2','#':'3','$':'4','%':'5','^':'6','&':'7','*':'8','(':'9',')':'0','_':'-','+':'=',
+  '{':'[','}':']','|':'\\',':':';','"':"'",'<':',','>':'.','?':'/'};
+const CODE = {'`':'Backquote','-':'Minus','=':'Equal','[':'BracketLeft',']':'BracketRight','\\':'Backslash',';':'Semicolon',
+  "'":'Quote',',':'Comma','.':'Period','/':'Slash',' ':'Space'};
+function keyFor(ch){
+  if (/[a-z]/.test(ch)) return {code: "Key" + ch.toUpperCase(), shift: false};
+  if (/[A-Z]/.test(ch)) return {code: "Key" + ch, shift: true};
+  if (/[0-9]/.test(ch)) return {code: "Digit" + ch, shift: false};
+  if (ch in SHIFTED) { const b = SHIFTED[ch]; return {code: /[0-9]/.test(b) ? "Digit" + b : CODE[b], shift: true}; }
+  if (ch in CODE) return {code: CODE[ch], shift: false};
+  return null;
+}
+async function typeText(text){
+  const XK_Shift_L = 0xffe1, XK_Return = 0xff0d, XK_Tab = 0xff09;
+  let skipped = 0;
+  for (const ch of text) {
+    if (!rfb) return;
+    if (ch === "\n") { rfb.sendKey(XK_Return, "Enter"); }
+    else if (ch === "\t") { rfb.sendKey(XK_Tab, "Tab"); }
+    else {
+      const k = keyFor(ch); if (!k) { skipped++; continue; }
+      if (k.shift) rfb.sendKey(XK_Shift_L, "ShiftLeft", true);
+      rfb.sendKey(ch.codePointAt(0), k.code);
+      if (k.shift) rfb.sendKey(XK_Shift_L, "ShiftLeft", false);
+    }
+    await new Promise(r => setTimeout(r, 12));
+  }
+  if (skipped) toast(`${skipped} character(s) skipped: only US-keyboard characters can be typed`, true);
+}
+$("#bType").onclick = () => { $("#typeText").value = ""; $("#dlgType").showModal(); };
+$("#fType").onsubmit = e => {
+  if (e.submitter?.value !== "ok") return;
+  const t = $("#typeText").value; $("#dlgType").close(); typeText(t).then(() => rfb?.focus());
+};
+
+$("#bPw").onclick = () => {
+  if (!token) return toast("Open the console from the dashboard to use this", true);
+  $("#pw1").value = $("#pw2").value = ""; $("#dlgPw").showModal(); $("#pw1").focus();
+};
+$("#fPw").onsubmit = async e => {
+  if (e.submitter?.value !== "ok") return;
+  e.preventDefault();
+  if ($("#pw1").value !== $("#pw2").value) return toast("The passwords don't match", true);
+  const user = $("#pwUser").value.trim();
+  try {
+    await api("POST", `/vms/${encodeURIComponent(vm)}/password`, {user, password: $("#pw1").value});
+    $("#dlgPw").close(); toast(`Password set. Log in as ${user} on the screen.`); rfb?.focus();
+  } catch (err) { toast(err.message, true); }
+};
+
+connect();
+</script>
+</body>
+</html>

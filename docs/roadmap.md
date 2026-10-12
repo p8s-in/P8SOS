@@ -35,7 +35,8 @@ config); containers via Incus. Replaces Proxmox on the home lab.
 
 - [x] Web dashboard v1 (pulled forward): HTTPS with self-signed cert, token sign-in, host cards,
       VM list with live refresh, create / start / stop / reboot / force-off / delete, phone layout
-- [ ] Browser console (noVNC), metrics graphs, backups
+- [x] Browser console (noVNC over a ticketed WebSocket proxy in p8sd), set guest password, type text
+- [ ] Metrics graphs, backups
 
 Admin + customer panels, noVNC console proxied through p8sd auth, metrics,
 scheduled backups (ZFS send to a second pool or remote).

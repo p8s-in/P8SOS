@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"p8sos/internal/execx"
@@ -45,6 +46,10 @@ type Hypervisor interface {
 	// disk snapshot is clean. Freeze fails if the agent isn't running.
 	FSFreeze(ctx context.Context, name string) error
 	FSThaw(ctx context.Context, name string) error
+	// VNCAddr is the host:port of a running domain's VNC screen (127.0.0.1 only).
+	VNCAddr(ctx context.Context, name string) (string, error)
+	// SetUserPassword sets a guest account's password via the guest agent.
+	SetUserPassword(ctx context.Context, name, user, password string) error
 }
 
 type Virsh struct {
@@ -138,6 +143,38 @@ func (v *Virsh) FSFreeze(ctx context.Context, name string) error {
 
 func (v *Virsh) FSThaw(ctx context.Context, name string) error {
 	_, err := v.virsh(ctx, "domfsthaw", name)
+	return err
+}
+
+func (v *Virsh) VNCAddr(ctx context.Context, name string) (string, error) {
+	out, err := v.virsh(ctx, "domdisplay", "--type", "vnc", name)
+	if err != nil {
+		return "", err
+	}
+	return ParseVNCDisplay(string(out))
+}
+
+// ParseVNCDisplay turns `virsh domdisplay` output (vnc://localhost:0) into
+// 127.0.0.1:5900. Only loopback displays are accepted: p8sd is the only way in.
+func ParseVNCDisplay(out string) (string, error) {
+	s := strings.TrimSpace(out)
+	rest, ok := strings.CutPrefix(s, "vnc://")
+	if !ok {
+		return "", fmt.Errorf("no VNC display (got %q)", s)
+	}
+	host, disp, ok := strings.Cut(rest, ":")
+	n, err := strconv.Atoi(strings.TrimRight(disp, "/"))
+	if !ok || err != nil || n < 0 {
+		return "", fmt.Errorf("bad VNC display %q", s)
+	}
+	if host != "localhost" && host != "127.0.0.1" {
+		return "", fmt.Errorf("VNC display %q is not on loopback", s)
+	}
+	return fmt.Sprintf("127.0.0.1:%d", 5900+n), nil
+}
+
+func (v *Virsh) SetUserPassword(ctx context.Context, name, user, password string) error {
+	_, err := v.virsh(ctx, "set-user-password", name, user, password)
 	return err
 }
 

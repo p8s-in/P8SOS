@@ -18,6 +18,7 @@ type fakeHV struct {
 	state     map[string]virt.State
 	failStart bool
 	noAgent   bool
+	pw        string
 	frozen    int
 	thawed    int
 	auto      map[string]bool
@@ -111,6 +112,14 @@ func (h *fakeHV) FSThaw(_ context.Context, n string) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.thawed++
+	return nil
+}
+func (h *fakeHV) VNCAddr(_ context.Context, n string) (string, error) { return "127.0.0.1:5900", nil }
+func (h *fakeHV) SetUserPassword(_ context.Context, n, user, pw string) error {
+	if h.noAgent {
+		return errors.New("guest agent is not connected")
+	}
+	h.pw = user + ":" + pw
 	return nil
 }
 func (h *fakeHV) Addresses(_ context.Context, n string) ([]string, error) {
@@ -505,5 +514,33 @@ func TestResize(t *testing.T) {
 	}
 	if v, _ = svc.Start(ctx, "web1"); v.State != virt.Running {
 		t.Fatalf("start after resize: %s", v.State)
+	}
+}
+
+func TestConsoleAndPassword(t *testing.T) {
+	ctx := context.Background()
+	svc, hv, _, _ := newSvc()
+	_, _ = svc.Create(ctx, CreateRequest{Name: "web1", Template: "debian-13"})
+	if a, err := svc.ConsoleAddr(ctx, "web1"); err != nil || a != "127.0.0.1:5900" {
+		t.Fatalf("console: %q %v", a, err)
+	}
+	if err := svc.SetPassword(ctx, "web1", "", "s3cret-pass"); err != nil || hv.pw != "debian:s3cret-pass" {
+		t.Fatalf("password: %v %q", err, hv.pw)
+	}
+	for _, bad := range [][2]string{{"debian", "short"}, {"Root!", "longenough"}, {"debian", "two\nlines!"}} {
+		if err := svc.SetPassword(ctx, "web1", bad[0], bad[1]); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("%v: %v", bad, err)
+		}
+	}
+	hv.noAgent = true
+	if err := svc.SetPassword(ctx, "web1", "debian", "longenough"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("no agent: %v", err)
+	}
+	_, _ = svc.Stop(ctx, "web1", true)
+	if _, err := svc.ConsoleAddr(ctx, "web1"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("console of stopped VM: %v", err)
+	}
+	if _, err := svc.ConsoleAddr(ctx, "nope"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("console of missing VM: %v", err)
 	}
 }

@@ -145,6 +145,20 @@ if [[ -n $ip && $keys != '[]' ]]; then
   fi
 fi
 
+step "5b. browser console"
+api POST "/vms/$NAME/console"; expect "console ticket" 201
+path=$(jq -r '.path // empty' <<<"$BODY")
+out=$(curl -ks --http1.1 -i -N --max-time 4 -H "Connection: Upgrade" -H "Upgrade: websocket" -H "Sec-WebSocket-Version: 13" \
+  -H "Sec-WebSocket-Key: MDEyMzQ1Njc4OWFiY2RlZg==" -H "Sec-WebSocket-Protocol: binary" "${URL%/api/v1}$path" 2>/dev/null | tr -d '\0')
+[[ $out == *"101 Switching Protocols"* ]] && ok "console WebSocket opens" || bad "console WebSocket: $(head -1 <<<"$out")"
+[[ $out == *"RFB 003.008"* ]] && ok "VM screen answers (VNC)" || bad "no VNC greeting from the VM screen"
+code=$(curl -ks --http1.1 -o /dev/null -w '%{http_code}' -H "Connection: Upgrade" -H "Upgrade: websocket" -H "Sec-WebSocket-Version: 13" \
+  -H "Sec-WebSocket-Key: MDEyMzQ1Njc4OWFiY2RlZg==" "${URL%/api/v1}$path")
+[[ $code == 401 ]] && ok "console ticket works only once" || bad "reused ticket -> $code"
+if [[ ${MARKER:-0} == 1 ]]; then  # guest agent is up (SSH worked)
+  api POST "/vms/$NAME/password" '{"user":"debian","password":"smoke-test-pw-1"}'; expect "set guest password" 204
+fi
+
 step "6. power operations"
 api POST "/vms/$NAME/stop"; expect "ACPI stop" 202
 wait_state stopped "$STOP_TIMEOUT" && ok "guest shut down cleanly" || bad "still $(state) after ${STOP_TIMEOUT}s of ACPI shutdown"

@@ -264,7 +264,7 @@ function renderVMs(){
   body.innerHTML = vms.map(v => {
     const b = busy.has(v.name), dis = b ? "disabled" : "";
     const acts = v.state === "running"
-      ? `<button class="btn" data-a="stop" ${dis}>Stop</button><button class="btn" data-a="reboot" ${dis}>Reboot</button><button class="btn" data-a="kill" ${dis} title="Power off immediately">Force off</button>`
+      ? `<button class="btn" data-a="stop" ${dis}>Stop</button><button class="btn" data-a="reboot" ${dis}>Reboot</button><button class="btn" data-a="kill" ${dis} title="Power off immediately">Force off</button><button class="btn" data-a="console" ${dis} title="See and use the VM's screen">Console</button>`
       : `<button class="btn" data-a="start" ${dis}>Start</button>`;
     const ip = v.ip ? `<span class="mono copy" data-copy="ssh debian@${esc(v.ip)}" title="Click to copy the SSH command">${esc(v.ip)}</span>` : `<span class="muted">${v.state === "running" ? "booting…" : "—"}</span>`;
     return `<tr data-n="${esc(v.name)}">
@@ -285,6 +285,7 @@ document.addEventListener("click", async e => {
   const name = btn.closest("tr").dataset.n, a = btn.dataset.a;
   if (a === "delete") return openDelete(name);
   if (a === "manage") return openManage(name);
+  if (a === "console") { window.open(`/console?vm=${encodeURIComponent(name)}`, `p8s-console-${name}`); return; }
   const path = {start: "/start", stop: "/stop", reboot: "/reboot", kill: "/stop"}[a];
   busy.add(name); renderVMs();
   try {

@@ -254,3 +254,45 @@ func findSnap(snaps []Snapshot, name string) int {
 	}
 	return -1
 }
+
+// ConsoleAddr is where a running VM's screen (VNC) can be reached on the host.
+func (s *Service) ConsoleAddr(ctx context.Context, name string) (string, error) {
+	dom := Prefix + name
+	st, err := s.state(ctx, dom)
+	if err != nil {
+		return "", err
+	}
+	if st != virt.Running {
+		return "", fmt.Errorf("%w: vm %q is %s; start it to see its screen", ErrConflict, name, st)
+	}
+	return s.HV.VNCAddr(ctx, dom)
+}
+
+var reUser = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
+
+// SetPassword sets a guest account's password through the guest agent, so the
+// user can log in on the console (cloud images ship with passwords locked).
+func (s *Service) SetPassword(ctx context.Context, name, user, password string) error {
+	if user == "" {
+		user = "debian"
+	}
+	if !reUser.MatchString(user) {
+		return fmt.Errorf("%w: user must be a Linux user name", ErrInvalid)
+	}
+	if len(password) < 8 || len(password) > 128 || strings.ContainsAny(password, "\n\r\x00") {
+		return fmt.Errorf("%w: password must be 8-128 characters on one line", ErrInvalid)
+	}
+	dom := Prefix + name
+	defer s.lock(dom)()
+	st, err := s.state(ctx, dom)
+	if err != nil {
+		return err
+	}
+	if st != virt.Running {
+		return fmt.Errorf("%w: vm %q is %s; start it first", ErrConflict, name, st)
+	}
+	if err := s.HV.SetUserPassword(ctx, dom, user, password); err != nil {
+		return fmt.Errorf("%w: could not set the password — is the VM fully booted? (guest agent: %v)", ErrConflict, err)
+	}
+	return nil
+}

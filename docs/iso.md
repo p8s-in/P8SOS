@@ -86,6 +86,14 @@ p8 resize web1 cpus=4 ram=4096 disk=40
 In the dashboard: **Manage** on a VM. Resizing and rolling back need the VM stopped;
 `p8` stops and restarts it for you after asking.
 
+## 8. Console (the VM's screen in your browser)
+
+Dashboard → **Console** on a running VM opens its screen in a new tab: you see it boot and can
+type into it, even when its network is broken. VMs have no password by default (SSH keys
+only): press **Set password** in the console once, then log in as `debian`.
+**Type text** types long strings for you (US keyboard layout); **Ctrl+Alt+Del** reboots like a
+real keyboard would.
+
 ## Updating an installed host
 
 Copy the newest `P8SOS` folder to the host (USB stick, or `git clone`), then: `sudo bash update.sh`.

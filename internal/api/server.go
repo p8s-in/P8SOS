@@ -8,13 +8,18 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"p8sos/internal/config"
+	"p8sos/internal/console"
 	"p8sos/internal/vm"
 )
 
@@ -32,6 +37,8 @@ type VMService interface {
 	CreateSnapshot(ctx context.Context, name, snap string) (vm.Snapshot, error)
 	Rollback(ctx context.Context, name, snap string, destroyNewer bool) (vm.VM, error)
 	DeleteSnapshot(ctx context.Context, name, snap string) error
+	ConsoleAddr(ctx context.Context, name string) (string, error)
+	SetPassword(ctx context.Context, name, user, password string) error
 }
 
 type Server struct {
@@ -42,11 +49,26 @@ type Server struct {
 	Log       *slog.Logger
 	Host      func(ctx context.Context) any // host capacity for the dashboard; nil = 404
 	UI        http.Handler                  // web dashboard served at /; nil = none
+	Tickets   *console.Tickets              // console passes; nil = created on first use
+	// Dial connects to a VM's VNC port; nil = net.Dialer (tests replace it).
+	Dial func(ctx context.Context, addr string) (net.Conn, error)
+
+	once sync.Once
+}
+
+func (s *Server) tickets() *console.Tickets {
+	s.once.Do(func() {
+		if s.Tickets == nil {
+			s.Tickets = &console.Tickets{}
+		}
+	})
+	return s.Tickets
 }
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", s.health)
+	mux.HandleFunc("GET /api/v1/console", s.consoleSocket) // authorized by its one-time ticket
 
 	auth := http.NewServeMux()
 	auth.HandleFunc("GET /api/v1/templates", s.listTemplates)
@@ -63,6 +85,8 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("POST /api/v1/vms/{name}/snapshots/{snap}/rollback", s.rollback)
 	auth.HandleFunc("DELETE /api/v1/vms/{name}/snapshots/{snap}", s.deleteSnapshot)
 	auth.HandleFunc("GET /api/v1/host", s.hostInfo)
+	auth.HandleFunc("POST /api/v1/vms/{name}/console", s.consoleTicket)
+	auth.HandleFunc("POST /api/v1/vms/{name}/password", s.setPassword)
 	mux.Handle("/api/v1/", s.requireToken(auth))
 	if s.UI != nil {
 		mux.Handle("/", s.UI) // the page itself is public; every API call it makes needs the token
@@ -231,6 +255,72 @@ func (s *Server) deleteSnapshot(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (s *Server) consoleTicket(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if _, err := s.VMs.ConsoleAddr(r.Context(), name); err != nil {
+		s.fail(w, err)
+		return
+	}
+	t, ttl := s.tickets().Issue(name)
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"ticket": t, "path": "/api/v1/console?ticket=" + t, "expires_in": int(ttl.Seconds()),
+	})
+}
+
+// consoleSocket bridges the browser (noVNC over WebSocket) to the VM's VNC port.
+func (s *Server) consoleSocket(w http.ResponseWriter, r *http.Request) {
+	if o := r.Header.Get("Origin"); o != "" {
+		if u, err := url.Parse(o); err != nil || u.Host != r.Host {
+			writeErr(w, http.StatusForbidden, "forbidden", "console must be opened from this host's dashboard")
+			return
+		}
+	}
+	name, ok := s.tickets().Redeem(r.URL.Query().Get("ticket"))
+	if !ok {
+		writeErr(w, http.StatusUnauthorized, "unauthorized", "console ticket is invalid, used or expired")
+		return
+	}
+	addr, err := s.VMs.ConsoleAddr(r.Context(), name)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	dial := s.Dial
+	if dial == nil {
+		d := &net.Dialer{Timeout: 5 * time.Second}
+		dial = func(ctx context.Context, addr string) (net.Conn, error) { return d.DialContext(ctx, "tcp", addr) }
+	}
+	tcp, err := dial(r.Context(), addr)
+	if err != nil {
+		s.fail(w, fmt.Errorf("connect to the VM's screen at %s: %w", addr, err))
+		return
+	}
+	ws, err := console.Upgrade(w, r)
+	if err != nil {
+		tcp.Close()
+		return
+	}
+	if s.Log != nil {
+		s.Log.Info("console opened", "vm", name, "remote", r.RemoteAddr)
+	}
+	console.Proxy(ws, tcp)
+}
+
+func (s *Server) setPassword(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		User     string `json:"user"`
+		Password string `json:"password"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	if err := s.VMs.SetPassword(r.Context(), r.PathValue("name"), body.User, body.Password); err != nil {
+		s.fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // --- middleware ---
 
 func (s *Server) requireToken(next http.Handler) http.Handler {
@@ -261,6 +351,9 @@ type statusWriter struct {
 }
 
 func (w *statusWriter) WriteHeader(c int) { w.code = c; w.ResponseWriter.WriteHeader(c) }
+
+// Unwrap lets http.ResponseController reach the real writer (WebSocket hijack).
+func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 func (s *Server) logRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

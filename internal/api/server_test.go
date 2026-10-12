@@ -1,15 +1,19 @@
 package api
 
 import (
+	"bufio"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"p8sos/internal/config"
 	"p8sos/internal/vm"
@@ -74,6 +78,18 @@ func (f *fakeVMs) DeleteSnapshot(ctx context.Context, n, snap string) error {
 		return fmt.Errorf("%w: snapshot", vm.ErrNotFound)
 	}
 	return nil
+}
+
+func (f *fakeVMs) ConsoleAddr(ctx context.Context, n string) (string, error) {
+	_, err := f.Get(ctx, n)
+	return "vnc-of-" + n, err
+}
+func (f *fakeVMs) SetPassword(ctx context.Context, n, user, pw string) error {
+	if len(pw) < 8 {
+		return fmt.Errorf("%w: password too short", vm.ErrInvalid)
+	}
+	_, err := f.Get(ctx, n)
+	return err
 }
 
 const secret = "p8s_testtoken"
@@ -146,6 +162,11 @@ func TestAPI(t *testing.T) {
 		{"DELETE", "/api/v1/vms/web1/snapshots/s1", secret, "", 204, ""},
 		{"DELETE", "/api/v1/vms/web1/snapshots/zz", secret, "", 404, "not_found"},
 		{"GET", "/api/v1/vms/web1/snapshots", "", "", 401, "unauthorized"},
+		{"POST", "/api/v1/vms/web1/password", secret, `{"password":"longenough"}`, 204, ""},
+		{"POST", "/api/v1/vms/web1/password", secret, `{"password":"short"}`, 400, "too short"},
+		{"POST", "/api/v1/vms/nope/console", secret, "", 404, "not_found"},
+		{"POST", "/api/v1/vms/web1/console", "", "", 401, "unauthorized"},
+		{"GET", "/api/v1/console?ticket=bogus", "", "", 401, "ticket"},
 	}
 	for _, c := range cases {
 		code, body := do(t, srv, c.method, c.path, c.tok, c.body)
@@ -173,5 +194,90 @@ func TestHostAndUI(t *testing.T) {
 	}
 	if code, body := do(t, srv, "GET", "/", "", ""); code != 200 || body != "dashboard" {
 		t.Fatalf("ui: %d %s", code, body)
+	}
+}
+
+func TestConsoleWebSocket(t *testing.T) {
+	// A fake VNC server: greets like QEMU, then echoes.
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			go func() { defer c.Close(); _, _ = c.Write([]byte("RFB 003.008\n")); _, _ = io.Copy(c, c) }()
+		}
+	}()
+	sum := sha256.Sum256([]byte(secret))
+	var dialed string
+	s := &Server{VMs: &fakeVMs{}, Version: "test", Tokens: []config.Token{{Name: "t", SHA256: hex.EncodeToString(sum[:])}},
+		Dial: func(ctx context.Context, addr string) (net.Conn, error) {
+			dialed = addr
+			return net.Dial("tcp", l.Addr().String())
+		}}
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	code, body := do(t, srv, "POST", "/api/v1/vms/web1/console", secret, "")
+	if code != 201 || !strings.Contains(body, `"path":"/api/v1/console?ticket=`) {
+		t.Fatalf("ticket: %d %s", code, body)
+	}
+	var tk struct{ Path string }
+	_ = json.Unmarshal([]byte(body), &tk)
+
+	open := func(path, origin string) (net.Conn, *bufio.Reader, *http.Response) {
+		c, err := net.Dial("tcp", strings.TrimPrefix(srv.URL, "http://"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		host := strings.TrimPrefix(srv.URL, "http://")
+		req := "GET " + path + " HTTP/1.1\r\nHost: " + host + "\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n" +
+			"Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: MDEyMzQ1Njc4OWFiY2RlZg==\r\nSec-WebSocket-Protocol: binary\r\n"
+		if origin != "" {
+			req += "Origin: " + origin + "\r\n"
+		}
+		_, _ = io.WriteString(c, req+"\r\n")
+		br := bufio.NewReader(c)
+		resp, err := http.ReadResponse(br, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c, br, resp
+	}
+
+	// Another site's page can't use a ticket.
+	c, _, resp := open(tk.Path, "https://evil.example")
+	c.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("foreign origin: %d", resp.StatusCode)
+	}
+	c, br, resp := open(tk.Path, srv.URL)
+	defer c.Close()
+	if resp.StatusCode != 101 || resp.Header.Get("Sec-WebSocket-Protocol") != "binary" {
+		t.Fatalf("upgrade: %d", resp.StatusCode)
+	}
+	if dialed != "vnc-of-web1" {
+		t.Fatalf("dialed %q", dialed)
+	}
+	_ = c.SetReadDeadline(time.Now().Add(3 * time.Second))
+	hdr := make([]byte, 2)
+	if _, err := io.ReadFull(br, hdr); err != nil || hdr[0] != 0x82 {
+		t.Fatalf("frame header %x %v", hdr, err)
+	}
+	greet := make([]byte, hdr[1])
+	_, _ = io.ReadFull(br, greet)
+	if string(greet) != "RFB 003.008\n" {
+		t.Fatalf("greeting %q", greet)
+	}
+	// The ticket was used up.
+	c2, _, resp2 := open(tk.Path, srv.URL)
+	c2.Close()
+	if resp2.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("reused ticket: %d", resp2.StatusCode)
 	}
 }
