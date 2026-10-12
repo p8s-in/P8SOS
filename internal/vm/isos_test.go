@@ -99,3 +99,47 @@ func TestUpgradeDomains(t *testing.T) {
 		t.Fatalf("second run should do nothing: %v", need)
 	}
 }
+
+func TestCreateWindows11(t *testing.T) {
+	ctx := context.Background()
+	svc, hv, _, _ := newSvc()
+	svc.ISOs = &isos.Library{Dir: t.TempDir()}
+	for _, n := range []string{"Win11.iso", "virtio-win.iso"} {
+		if _, err := svc.SaveISO(n, bytes.NewReader(isoBytes())); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := svc.Create(ctx, CreateRequest{Name: "w11", ISO: "Win11.iso", OSType: "windows11", DiskGB: 40, MemoryMiB: 4096}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("too small: %v", err)
+	}
+	svc.TPMReady = func() bool { return false }
+	if _, err := svc.Create(ctx, CreateRequest{Name: "w11", ISO: "Win11.iso", OSType: "windows11", DiskGB: 64, MemoryMiB: 4096}); err == nil || !strings.Contains(err.Error(), "swtpm") {
+		t.Fatalf("no swtpm: %v", err)
+	}
+	svc.TPMReady = nil
+	v, err := svc.Create(ctx, CreateRequest{Name: "w11", ISO: "Win11.iso", DriversISO: "virtio-win.iso", OSType: "windows11", DiskGB: 64, MemoryMiB: 4096})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.OSType != "windows11" || v.Drivers != "virtio-win.iso" || v.VCPUs != 2 {
+		t.Fatalf("vm %+v", v)
+	}
+	x := string(hv.doms["p8s-w11"])
+	if !strings.Contains(x, `firmware="efi"`) || !strings.Contains(x, "<tpm") || !strings.Contains(x, "virtio-win.iso") {
+		t.Fatalf("xml:\n%s", x)
+	}
+	if err := svc.DeleteISO(ctx, "virtio-win.iso"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("drivers iso in use: %v", err)
+	}
+	// resizing keeps UEFI + TPM (the definition is re-rendered)
+	if _, err := svc.Stop(ctx, "w11", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.EjectISO(ctx, "w11"); err != nil {
+		t.Fatal(err)
+	}
+	x = string(hv.doms["p8s-w11"])
+	if !strings.Contains(x, `firmware="efi"`) || !strings.Contains(x, "<tpm") || strings.Contains(x, `device="cdrom"`) {
+		t.Fatalf("after eject:\n%s", x)
+	}
+}

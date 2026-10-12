@@ -182,8 +182,14 @@ dialog form.uform{padding:0}
   <div class="hint" id="cTplHint"></div>
   <div id="cIsoOnly" hidden>
     <label for="cOS">Kind of system</label>
-    <select id="cOS"><option value="linux">Linux or other</option><option value="windows">Windows</option></select>
-    <div class="hint">Windows gets devices its installer knows (SATA disk, Intel network card).</div>
+    <select id="cOS"><option value="linux">Linux or other</option>
+      <option value="windows11">Windows 11 / Server 2022, 2025 (UEFI, Secure Boot, TPM 2.0)</option>
+      <option value="windows">Windows 10 / Server 2019 or older (BIOS)</option></select>
+    <div class="hint" id="cOSHint"></div>
+    <div id="cDrvBox" hidden>
+      <label for="cDrv">Drivers CD</label><select id="cDrv"></select>
+      <div class="hint">virtio-win adds the guest tools and faster drivers after installing. Get it under <b>ISO images → Windows drivers</b>.</div>
+    </div>
   </div>
   <label for="cNet">Network</label>
   <select id="cNet">
@@ -322,6 +328,9 @@ dialog form.uform{padding:0}
   <h3>Or download from the internet <span class="sub" style="font-weight:400">(straight to the server)</span></h3>
   <div class="inline"><input id="iUrl" placeholder="https://…/something.iso" autocomplete="off"></div>
   <div class="inline"><input id="iSum" placeholder="SHA-256 checksum (optional, recommended)" autocomplete="off"><button class="btn" id="iDl">Download</button></div>
+  <h3>Windows drivers</h3>
+  <div class="inline"><span class="sub" style="flex:1">virtio-win (Fedora project, ~700 MB): drivers and guest tools for Windows VMs. Add it as the drivers CD when you create a Windows VM.</span>
+    <button class="btn" id="iVirtio">Download virtio-win</button></div>
   <h3>On the server</h3>
   <table class="snaps"><tbody id="iList"></tbody></table>
   <div class="dlg-actions"><button class="btn" id="iClose">Close</button></div>
@@ -826,7 +835,7 @@ function renderVMs(){
     const ip = v.ip ? `<span class="mono copy" data-copy="ssh ${esc(v.user || "debian")}@${esc(v.ip)}" title="Click to copy the SSH command">${esc(v.ip)}</span>` : `<span class="muted">${v.state !== "running" ? "—" : v.iso ? "installing? open Console" : "booting…"}</span>`;
     return `<tr data-n="${esc(v.name)}">
       <td data-k="State"><span class="state ${esc(v.state)}"><span class="dot"></span>${b ? "working…" : esc(v.state)}</span></td>
-      <td data-k="Name"><b>${esc(v.name)}</b><div class="sub">${esc(templates.find(t => t.name === v.template)?.label || v.template.replace(/^iso:/, "from "))}${v.os_type === "windows" ? " · Windows" : ""}${v.network === "lan" ? " · home network" : ""}${v.public ? " · public IP" : ""}${v.iso ? " · CD in drive" : ""}${isAdmin() && v.owner ? ` · <b>${esc(v.owner)}</b>` : ""}</div></td>
+      <td data-k="Name"><b>${esc(v.name)}</b><div class="sub">${esc(templates.find(t => t.name === v.template)?.label || v.template.replace(/^iso:/, "from "))}${v.os_type === "windows11" ? " · Windows (UEFI, TPM)" : v.os_type === "windows" ? " · Windows" : ""}${v.network === "lan" ? " · home network" : ""}${v.public ? " · public IP" : ""}${v.iso ? " · CD in drive" : ""}${isAdmin() && v.owner ? ` · <b>${esc(v.owner)}</b>` : ""}</div></td>
       <td data-k="IP">${ip}</td>
       <td data-k="CPU">${v.vcpus}</td><td data-k="RAM">${gb(v.memory_mib)}</td><td data-k="Disk">${v.disk_gb} GB</td>
       <td data-k="Autostart">${v.autostart ? "yes" : "no"}</td>
@@ -871,7 +880,7 @@ async function openCreate(){
     `</optgroup><optgroup label="Install from ISO (in the console)">` +
     (isoList.length ? isoList.map(i => `<option value="iso:${esc(i.name)}" data-min="1">${esc(i.name)}</option>`).join("")
       : `<option value="" disabled>No ISOs yet — add one with the ISOs button</option>`) + `</optgroup>`;
-  $("#cOS").value = "linux";
+  $("#cOS").value = "linux"; $("#cDrv").innerHTML = ""; osHint();
   const min = templates[0]?.min_disk_gb || 1;
   $("#cDisk").min = min; if (+$("#cDisk").value < min) $("#cDisk").value = Math.max(10, min);
   tplHint();
@@ -916,6 +925,8 @@ $("#cNet").onchange = netHint;
 function tplHint(){
   const o = $("#cTpl").selectedOptions[0], iso = !!o?.value.startsWith("iso:");
   $("#cIsoOnly").hidden = !iso; $("#cCloudOnly").hidden = iso;
+  if (iso && /win/i.test(o.value) && !/virtio/i.test(o.value) && $("#cOS").value === "linux") { $("#cOS").value = /2016|2019|win10|windows.?10|win7|windows.?7/i.test(o.value) ? "windows" : "windows11"; }
+  if (iso) osHint();
   if (iso && +$("#cDisk").value < 32) $("#cDisk").value = 32;
   if (iso && +$("#cCpu").value < 2) $("#cCpu").value = 2;
   if (iso && +$("#cMem").value < 2048) $("#cMem").value = "2048";
@@ -923,6 +934,29 @@ function tplHint(){
     ? "Starts with an empty disk and boots the ISO. The console opens so you can install; the VM boots from its disk afterwards."
     : `Ready in a minute. SSH keys go to user <b>${esc(o.dataset.user)}</b>. More systems: <span class="mono">p8 templates available</span> on the host.`;
 }
+function osHint(){
+  const os = $("#cOS").value, win = os !== "linux";
+  $("#cOSHint").textContent = {linux: "Fast virtio disk and network (Linux has the drivers built in).",
+    windows11: "UEFI with Secure Boot and a virtual TPM 2.0 chip, as Windows 11 requires. Needs at least 2 CPUs, 4 GB RAM and 64 GB disk.",
+    windows: "Classic BIOS. Gets devices the installer knows (SATA disk, Intel network card)."}[os];
+  $("#cDrvBox").hidden = !win;
+  if (win) {
+    const isos = [...$("#cTpl").options].map(o => o.value).filter(v => v.startsWith("iso:")).map(v => v.slice(4)).filter(n => n !== $("#cTpl").value.slice(4));
+    const cur = $("#cDrv").value;
+    $("#cDrv").innerHTML = `<option value="">None</option>` + isos.map(n => `<option ${n === cur || (!cur && /virtio-win/i.test(n)) ? "selected" : ""}>${esc(n)}</option>`).join("");
+  }
+  if (os === "windows11") {
+    // a priced plan too small for Windows 11: move to the smallest one that fits
+    if (typeof selPlan !== "undefined" && selPlan && !$("#cPlanBox").hidden && (selPlan.vcpus < 2 || selPlan.memory_mib < 4096 || selPlan.disk_gb < 64)) {
+      const fit = plans.filter(p => !p.hidden && p.vcpus >= 2 && p.memory_mib >= 4096 && p.disk_gb >= 64).sort((a, b) => a.price_monthly - b.price_monthly)[0];
+      if (fit) pickPlan(fit.id); else if (isAdmin()) pickPlan(""); else toast("Windows 11 needs a plan with 2 CPUs, 4 GB RAM and 64 GB disk", true);
+    }
+    if (+$("#cCpu").value < 2) $("#cCpu").value = 2;
+    if (+$("#cMem").value < 4096) $("#cMem").value = "4096";
+    if (+$("#cDisk").value < 64) $("#cDisk").value = 64;
+  }
+}
+$("#cOS").onchange = osHint;
 $("#cTpl").onchange = e => { const min = +e.target.selectedOptions[0].dataset.min; $("#cDisk").min = min; if (+$("#cDisk").value < min) $("#cDisk").value = min; tplHint(); };
 $("#fCreate").onsubmit = async e => {
   if (e.submitter?.value !== "ok") return;
@@ -939,7 +973,8 @@ $("#fCreate").onsubmit = async e => {
       ...(plan?.public_ip ? {} : pool ? {ip_pool: pool} : {network: net}),
       ...(!$("#cOwnerBox").hidden && $("#cOwner").value ? {owner: $("#cOwner").value} : {})};
     if (iso) {
-      await call("POST", "/vms", {...common, iso, os_type: $("#cOS").value});
+      const win = $("#cOS").value !== "linux";
+      await call("POST", "/vms", {...common, iso, os_type: $("#cOS").value, ...(win && $("#cDrv").value ? {drivers_iso: $("#cDrv").value} : {})});
       $("#dlgCreate").close(); toast(`${name} created and booting ${iso} — install it in the console`);
       window.open(`/console?vm=${encodeURIComponent(name)}`, `p8s-console-${name}`);
     } else {
@@ -1320,6 +1355,12 @@ $("#iDl").onclick = async () => {
   try {
     const j = await call("POST", "/isos/download", {url, sha256: $("#iSum").value.trim()});
     $("#iUrl").value = ""; $("#iSum").value = "";
+    trackJob(j, () => { if ($("#dlgIsos").open) loadIsos(); });
+  } catch (err) { toast(err.message, true); }
+};
+$("#iVirtio").onclick = async () => {
+  try {
+    const j = await call("POST", "/isos/download", {url: "https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win.iso", name: "virtio-win.iso"});
     trackJob(j, () => { if ($("#dlgIsos").open) loadIsos(); });
   } catch (err) { toast(err.message, true); }
 };

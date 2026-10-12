@@ -79,8 +79,24 @@ func (s *Service) createFromISO(ctx context.Context, r CreateRequest) (VM, error
 	case "":
 		r.OSType = "linux"
 	case "linux", "windows":
+	case "windows11":
+		// the Windows 11 installer refuses smaller machines ("This PC can't run Windows 11")
+		if r.VCPUs < 2 || r.MemoryMiB < 4096 || r.DiskGB < 64 {
+			errs = append(errs, "Windows 11 needs at least 2 CPUs, 4096 MB RAM and a 64 GB disk")
+		}
+		if s.TPMReady != nil && !s.TPMReady() {
+			errs = append(errs, "Windows 11 needs the software TPM (swtpm), which isn't installed; run: sudo bash update.sh")
+		}
 	default:
-		errs = append(errs, `os_type must be "linux" or "windows"`)
+		errs = append(errs, `os_type must be "linux", "windows" or "windows11"`)
+	}
+	driversPath := ""
+	if r.DriversISO != "" {
+		p, err := lib.Path(r.DriversISO)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("no drivers ISO %q in the library", r.DriversISO))
+		}
+		driversPath = p
 	}
 	if msg := s.checkPool(&r); msg != "" {
 		errs = append(errs, msg)
@@ -138,7 +154,7 @@ func (s *Service) createFromISO(ctx context.Context, r CreateRequest) (VM, error
 	}
 	spec := virt.Spec{
 		Name: dom, UUID: newUUID(), VCPUs: r.VCPUs, MemoryMiB: r.MemoryMiB, DiskGB: r.DiskGB,
-		DiskPath: disk, InstallISO: isoPath, OSType: r.OSType, Bridge: bridge, MAC: virt.RandomMAC(),
+		DiskPath: disk, InstallISO: isoPath, DriversISO: driversPath, OSType: r.OSType, Bridge: bridge, MAC: virt.RandomMAC(),
 		Template: "iso:" + r.ISO, CreatedAt: time.Now().UTC().Format(time.RFC3339), Owner: r.Owner,
 	}
 	x, err := virt.DomainXML(spec)
@@ -188,7 +204,7 @@ func (s *Service) EjectISO(ctx context.Context, name string) (VM, error) {
 	if st != virt.Stopped {
 		return VM{}, fmt.Errorf("%w: stop vm %q before ejecting the CD (it is %s)", ErrConflict, name, st)
 	}
-	if err := s.redefine(ctx, dom, func(sp *virt.Spec) { sp.InstallISO = "" }); err != nil {
+	if err := s.redefine(ctx, dom, func(sp *virt.Spec) { sp.InstallISO, sp.DriversISO = "", "" }); err != nil {
 		return VM{}, err
 	}
 	return s.get(ctx, dom)
@@ -269,7 +285,7 @@ func (s *Service) DeleteISO(ctx context.Context, name string) error {
 			continue
 		}
 		if b, err := s.HV.XML(ctx, n); err == nil {
-			if sp, err := virt.ParseDomainXML(b); err == nil && sp.InstallISO == p {
+			if sp, err := virt.ParseDomainXML(b); err == nil && (sp.InstallISO == p || sp.DriversISO == p) {
 				return fmt.Errorf("%w: VM %q still has %s in its CD drive (stop it and eject first)", ErrConflict, strings.TrimPrefix(n, Prefix), name)
 			}
 		}

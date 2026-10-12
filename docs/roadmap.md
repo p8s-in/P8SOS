@@ -47,6 +47,8 @@ Each phase ships something usable on its own.
 - [x] P8S OS subscriptions (v0.6): Home (free) / Business / Hosting / Partner / Internal, Ed25519-signed keys tied to
       server IDs, offline check + optional daily online check, 14-day grace, dashboard Subscription page and notice,
       `p8 license`; `p8s-licensed` licence server with a Razorpay shop, GST invoices, renew/rebind/revoke ([subscriptions.md](subscriptions.md))
+- [x] Windows 11 / Server 2022+ VMs: UEFI + Secure Boot + TPM 2.0, full Hyper-V enlightenments, virtio-win drivers CD ([windows.md](windows.md))
+- [x] P8S OS branding on the server (boot menu, login screen, SSH welcome)
 - [x] Containers (LXC, unprivileged, ZFS clones, cgroup limits, cloud-init, browser terminal with xterm.js), Create CT, Manage, container templates on the Server page, `p8 ct` ([containers.md](containers.md))
 - [x] Editions: Home / Standard / Enterprise / Datacenter (one ISO, the licence key decides)
 - [x] Proxmox-style dashboard: top bar, sidebar tree (server → VMs and containers), grouped menus, ⋯ action menus

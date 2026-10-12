@@ -329,6 +329,12 @@ passwords locked). 8–128 chars. `409` if the VM isn't running or the agent isn
 | POST | `/api/v1/updates/install` | download, verify and install the available release (202) |
 | PUT | `/api/v1/updates/channel` | `{"channel":"stable"|"testing"}` (stable needs a subscription) |
 
+### Windows VMs
+
+`POST /api/v1/vms` with `"iso"` takes `"os_type": "linux" | "windows" (BIOS) | "windows11"` (UEFI, Secure Boot,
+TPM 2.0; needs ≥ 2 CPUs, 4096 MiB, 64 GB) and `"drivers_iso"` (a second CD from the library, e.g. `virtio-win.iso`).
+VMs show `"os_type"` and `"drivers_iso"`. See [windows.md](windows.md).
+
 ### Containers (LXC)
 
 | Method | Path | |

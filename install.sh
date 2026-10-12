@@ -67,6 +67,10 @@ if ! command -v cloudflared >/dev/null; then
     apt-get update -qq && apt-get install -y -qq cloudflared >/dev/null; } 2>/dev/null &&
     ok "cloudflared installed (for public access)" || echo "  note: cloudflared not installed; public access won't work until it is"
 fi
+# Windows 11 VMs: software TPM 2.0 chip (swtpm) and UEFI firmware with Secure Boot (ovmf).
+if ! command -v swtpm >/dev/null || [[ ! -e /usr/share/OVMF/OVMF_CODE_4M.ms.fd && ! -e /usr/share/OVMF/OVMF_CODE_4M.secboot.fd ]]; then
+  apt-get install -y -qq swtpm swtpm-tools ovmf >/dev/null 2>&1 && ok "TPM and UEFI firmware installed (Windows 11 VMs)" || echo "  note: swtpm not installed; Windows 11 VMs won't be available"
+fi
 # Containers (LXC, unprivileged): ids 100000-165535 belong to containers' root.
 if ! command -v lxc-start >/dev/null || ! command -v newuidmap >/dev/null; then
   apt-get install -y -qq lxc uidmap >/dev/null 2>&1 && ok "LXC installed (containers)" || echo "  note: LXC not installed; containers won't be available"

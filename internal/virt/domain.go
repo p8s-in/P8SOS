@@ -25,11 +25,15 @@ type Spec struct {
 	InstallISO string
 	// OSType "windows" uses devices Windows has drivers for (SATA disk, e1000e
 	// NIC) and Hyper-V enlightenments; anything else uses virtio.
-	OSType    string
-	Bridge    string
-	MAC       string
-	Template  string
-	CreatedAt string // RFC 3339
+	// "windows11" is the same on UEFI with Secure Boot and a TPM 2.0 chip
+	// (what Windows 11 and Server 2022/2025 want).
+	OSType string
+	// DriversISO is a second CD, e.g. virtio-win (Windows drivers and guest tools).
+	DriversISO string
+	Bridge     string
+	MAC        string
+	Template   string
+	CreatedAt  string // RFC 3339
 	// Owner is the P8S user the VM belongs to; empty = the host's admins.
 	Owner string
 	// Video is the display adapter read back from a domain (DomainXML always
@@ -54,11 +58,21 @@ type domainXML struct {
 	} `xml:"memory"`
 	VCPU int `xml:"vcpu"`
 	OS   struct {
-		Type struct {
+		Firmware string `xml:"firmware,attr,omitempty"` // "efi" = UEFI (libvirt picks OVMF)
+		Type     struct {
 			Arch    string `xml:"arch,attr"`
 			Machine string `xml:"machine,attr"`
 			Value   string `xml:",chardata"`
 		} `xml:"type"`
+		FirmwareFeatures *struct {
+			Features []struct {
+				Enabled string `xml:"enabled,attr"`
+				Name    string `xml:"name,attr"`
+			} `xml:"feature"`
+		} `xml:"firmware"`
+		Loader *struct {
+			Secure string `xml:"secure,attr,omitempty"`
+		} `xml:"loader"`
 		Boot []struct {
 			Dev string `xml:"dev,attr"`
 		} `xml:"boot"`
@@ -67,11 +81,12 @@ type domainXML struct {
 		ACPI   *struct{}  `xml:"acpi"`
 		APIC   *struct{}  `xml:"apic"`
 		HyperV *hypervXML `xml:"hyperv"`
+		SMM    *struct {
+			State string `xml:"state,attr"`
+		} `xml:"smm"`
 	} `xml:"features"`
-	Clock *struct {
-		Offset string `xml:"offset,attr"`
-	} `xml:"clock"`
-	CPU struct {
+	Clock *clockXML `xml:"clock"`
+	CPU   struct {
 		Mode string `xml:"mode,attr"`
 	} `xml:"cpu"`
 	OnPoweroff string     `xml:"on_poweroff"`
@@ -80,17 +95,35 @@ type domainXML struct {
 	Devices    devicesXML `xml:"devices"`
 }
 
+type onOff struct {
+	State string `xml:"state,attr"`
+}
+
 type hypervXML struct {
-	Relaxed struct {
-		State string `xml:"state,attr"`
-	} `xml:"relaxed"`
-	VAPIC struct {
-		State string `xml:"state,attr"`
-	} `xml:"vapic"`
+	Relaxed   onOff `xml:"relaxed"`
+	VAPIC     onOff `xml:"vapic"`
 	Spinlocks struct {
 		State   string `xml:"state,attr"`
 		Retries string `xml:"retries,attr"`
 	} `xml:"spinlocks"`
+	// The rest make Windows noticeably faster on KVM (what Proxmox enables).
+	VPIndex     *onOff `xml:"vpindex"`
+	Runtime     *onOff `xml:"runtime"`
+	Synic       *onOff `xml:"synic"`
+	STimer      *onOff `xml:"stimer"`
+	Reset       *onOff `xml:"reset"`
+	Frequencies *onOff `xml:"frequencies"`
+	TLBFlush    *onOff `xml:"tlbflush"`
+	IPI         *onOff `xml:"ipi"`
+}
+
+type clockXML struct {
+	Offset string `xml:"offset,attr"`
+	Timers []struct {
+		Name       string `xml:"name,attr"`
+		Present    string `xml:"present,attr,omitempty"`
+		TickPolicy string `xml:"tickpolicy,attr,omitempty"`
+	} `xml:"timer"`
 }
 
 type metaXML struct {
@@ -131,6 +164,13 @@ type devicesXML struct {
 		Autoport string `xml:"autoport,attr"`
 		Listen   string `xml:"listen,attr"`
 	} `xml:"graphics"`
+	TPM *struct {
+		Model   string `xml:"model,attr"`
+		Backend struct {
+			Type    string `xml:"type,attr"`
+			Version string `xml:"version,attr"`
+		} `xml:"backend"`
+	} `xml:"tpm"`
 	Video *struct {
 		Model struct {
 			Type    string `xml:"type,attr"`
@@ -203,7 +243,8 @@ func DomainXML(s Spec) ([]byte, error) {
 	d.Name = s.Name
 	d.UUID = s.UUID
 	d.Metadata.VM = metaXML{OSType: s.OSType, Template: s.Template, DiskGB: s.DiskGB, CreatedAt: s.CreatedAt, Owner: s.Owner}
-	win := s.OSType == "windows"
+	win := s.OSType == "windows" || s.OSType == "windows11"
+	uefi := s.OSType == "windows11"
 	d.Memory.Unit, d.Memory.Value = "MiB", s.MemoryMiB
 	d.VCPU = s.VCPUs
 	d.OS.Type.Arch, d.OS.Type.Machine, d.OS.Type.Value = "x86_64", "q35", "hvm"
@@ -216,14 +257,42 @@ func DomainXML(s Spec) ([]byte, error) {
 		}{"cdrom"})
 	}
 	d.Features.ACPI, d.Features.APIC = &struct{}{}, &struct{}{}
+	if uefi { // UEFI with Secure Boot (Microsoft keys enrolled); SMM is required for it
+		d.OS.Firmware = "efi"
+		d.OS.FirmwareFeatures = &struct {
+			Features []struct {
+				Enabled string `xml:"enabled,attr"`
+				Name    string `xml:"name,attr"`
+			} `xml:"feature"`
+		}{}
+		for _, f := range []string{"secure-boot", "enrolled-keys"} {
+			d.OS.FirmwareFeatures.Features = append(d.OS.FirmwareFeatures.Features, struct {
+				Enabled string `xml:"enabled,attr"`
+				Name    string `xml:"name,attr"`
+			}{"yes", f})
+		}
+		d.OS.Loader = &struct {
+			Secure string `xml:"secure,attr,omitempty"`
+		}{"yes"}
+		d.Features.SMM = &struct {
+			State string `xml:"state,attr"`
+		}{"on"}
+	}
 	if win {
 		h := &hypervXML{}
 		h.Relaxed.State, h.VAPIC.State = "on", "on"
 		h.Spinlocks.State, h.Spinlocks.Retries = "on", "8191"
+		on := &onOff{"on"}
+		h.VPIndex, h.Runtime, h.Synic, h.STimer, h.Reset, h.Frequencies, h.TLBFlush, h.IPI = on, on, on, on, on, on, on, on
 		d.Features.HyperV = h
-		d.Clock = &struct {
-			Offset string `xml:"offset,attr"`
-		}{"localtime"}
+		d.Clock = &clockXML{Offset: "localtime"}
+		for _, t := range [][3]string{{"rtc", "", "catchup"}, {"pit", "", "delay"}, {"hpet", "no", ""}, {"hypervclock", "yes", ""}} {
+			d.Clock.Timers = append(d.Clock.Timers, struct {
+				Name       string `xml:"name,attr"`
+				Present    string `xml:"present,attr,omitempty"`
+				TickPolicy string `xml:"tickpolicy,attr,omitempty"`
+			}{t[0], t[1], t[2]})
+		}
 	}
 	d.CPU.Mode = "host-passthrough"
 	d.OnPoweroff, d.OnReboot, d.OnCrash = "destroy", "restart", "restart"
@@ -249,6 +318,14 @@ func DomainXML(s Spec) ([]byte, error) {
 		cd.Driver.Name, cd.Driver.Type = "qemu", "raw"
 		cd.Source.File = s.InstallISO
 		cd.Target.Dev, cd.Target.Bus = "sdb", "sata"
+		d.Devices.Disks = append(d.Devices.Disks, cd)
+	}
+
+	if s.DriversISO != "" {
+		cd := diskXML{Type: "file", Device: "cdrom", ReadOnly: &struct{}{}}
+		cd.Driver.Name, cd.Driver.Type = "qemu", "raw"
+		cd.Source.File = s.DriversISO
+		cd.Target.Dev, cd.Target.Bus = "sdd", "sata"
 		d.Devices.Disks = append(d.Devices.Disks, cd)
 	}
 
@@ -288,6 +365,16 @@ func DomainXML(s Spec) ([]byte, error) {
 		} `xml:"model"`
 	}{}
 	d.Devices.Video.Model.Type, d.Devices.Video.Model.VRAM, d.Devices.Video.Model.Heads, d.Devices.Video.Model.Primary = VideoModel, 16384, 1, "yes"
+	if uefi { // TPM 2.0 chip (software, swtpm); its state is kept by libvirt
+		d.Devices.TPM = &struct {
+			Model   string `xml:"model,attr"`
+			Backend struct {
+				Type    string `xml:"type,attr"`
+				Version string `xml:"version,attr"`
+			} `xml:"backend"`
+		}{Model: "tpm-crb"}
+		d.Devices.TPM.Backend.Type, d.Devices.TPM.Backend.Version = "emulator", "2.0"
+	}
 	d.Devices.Graphics.Type, d.Devices.Graphics.Port = "vnc", "-1"
 	d.Devices.Graphics.Autoport, d.Devices.Graphics.Listen = "yes", "127.0.0.1"
 	d.Devices.RNG.Model = "virtio"
@@ -325,6 +412,8 @@ func ParseDomainXML(b []byte) (Spec, error) {
 		case "cdrom":
 			if disk.Target.Dev == "sdb" {
 				s.InstallISO = disk.Source.File
+			} else if disk.Target.Dev == "sdd" {
+				s.DriversISO = disk.Source.File
 			} else {
 				s.SeedISO = disk.Source.File
 			}

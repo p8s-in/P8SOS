@@ -109,6 +109,7 @@ func serve(args []string) error {
 		Bridge:       cfg.Bridge,
 		LANBridge:    cfg.LANBridge,
 		BridgeUp:     func(n string) bool { _, err := os.Stat("/sys/class/net/" + n + "/bridge"); return err == nil },
+		TPMReady:     func() bool { _, err := exec.LookPath("swtpm"); return err == nil },
 		Limits:       vm.Limits{MaxVCPUs: cfg.MaxVCPUs, MaxMemoryMiB: cfg.MaxMemoryMiB, MaxDiskGB: cfg.MaxDiskGB},
 		SSHKeys:      cfg.SSHKeys,
 		Log:          log,

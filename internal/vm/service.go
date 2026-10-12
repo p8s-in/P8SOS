@@ -57,6 +57,8 @@ type Service struct {
 	LANBridge string // bridge onto the home network (network "lan"); empty = not set up
 	// BridgeUp reports whether a host bridge exists; nil means "assume yes".
 	BridgeUp func(name string) bool
+	// TPMReady reports whether the software TPM (swtpm) is installed; nil = yes.
+	TPMReady func() bool
 	Limits   Limits
 	SSHKeys  []string // default keys for creates that pass none
 	// AgentRetry is the pause between guest-agent retries; 0 = 3s (tests shorten it).
@@ -85,9 +87,10 @@ type VM struct {
 	Name      string     `json:"name"`
 	State     virt.State `json:"state"`
 	Template  string     `json:"template"`
-	User      string     `json:"user"`              // login user with the SSH keys (debian, ubuntu, rocky, ...)
-	ISO       string     `json:"iso,omitempty"`     // installer CD still in the drive
-	OSType    string     `json:"os_type,omitempty"` // "windows" for Windows VMs (SATA/e1000e devices)
+	User      string     `json:"user"`                  // login user with the SSH keys (debian, ubuntu, rocky, ...)
+	ISO       string     `json:"iso,omitempty"`         // installer CD still in the drive
+	OSType    string     `json:"os_type,omitempty"`     // "windows" (BIOS) / "windows11" (UEFI, Secure Boot, TPM)
+	Drivers   string     `json:"drivers_iso,omitempty"` // drivers CD (virtio-win) still in the drive
 	VCPUs     int        `json:"vcpus"`
 	MemoryMiB int        `json:"memory_mib"`
 	DiskGB    int        `json:"disk_gb"`
@@ -117,8 +120,12 @@ type CreateRequest struct {
 	Plan string `json:"plan,omitempty"`
 	// ISO installs by hand from an image in the ISO library instead of a
 	// template: empty disk of DiskGB, boots the CD, install via the console.
-	ISO    string `json:"iso,omitempty"`
-	OSType string `json:"os_type,omitempty"` // with ISO: "linux" (default, virtio) or "windows"
+	ISO string `json:"iso,omitempty"`
+	// OSType with ISO: "linux" (default, virtio), "windows" (BIOS; Windows 10 and
+	// older) or "windows11" (UEFI + Secure Boot + TPM 2.0; Windows 11, Server 2022/2025).
+	OSType string `json:"os_type,omitempty"`
+	// DriversISO is a second CD from the library, e.g. virtio-win (Windows drivers).
+	DriversISO string `json:"drivers_iso,omitempty"`
 	// RootPassword sets root's password (8-128 chars). It is stored only as a
 	// SHA-512 crypt hash inside the VM's seed and never returned by the API.
 	RootPassword string `json:"root_password,omitempty"`
@@ -388,6 +395,9 @@ func (s *Service) get(ctx context.Context, dom string) (VM, error) {
 	}
 	if spec.InstallISO != "" {
 		v.ISO = filepath.Base(spec.InstallISO)
+	}
+	if spec.DriversISO != "" {
+		v.Drivers = filepath.Base(spec.DriversISO)
 	}
 	v.OSType = spec.OSType
 	// Best effort: these must never make GET/list fail.

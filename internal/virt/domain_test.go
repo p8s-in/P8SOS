@@ -131,3 +131,32 @@ func TestOwnerRoundTrip(t *testing.T) {
 		t.Fatalf("prefixed metadata: owner %q template %q (%v)", sp.Owner, sp.Template, err)
 	}
 }
+
+func TestWindows11Domain(t *testing.T) {
+	s := Spec{Name: "p8s-win", VCPUs: 4, MemoryMiB: 8192, DiskGB: 80, DiskPath: "/dev/zvol/tank/p8s/vms/p8s-win-disk0",
+		InstallISO: "/var/lib/p8s/isos/Win11.iso", DriversISO: "/var/lib/p8s/isos/virtio-win.iso", OSType: "windows11",
+		Bridge: "virbr0", MAC: "52:54:00:aa:bb:cc", Template: "iso:Win11.iso"}
+	x, err := DomainXML(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`<os firmware="efi">`, `<feature enabled="yes" name="secure-boot"></feature>`, `<feature enabled="yes" name="enrolled-keys"></feature>`,
+		`<loader secure="yes"></loader>`, `<smm state="on"></smm>`, `<tpm model="tpm-crb">`, `<backend type="emulator" version="2.0"></backend>`,
+		`<synic state="on"></synic>`, `<timer name="hypervclock" present="yes"></timer>`, `<target dev="sdd" bus="sata">`, `bus="sata"`} {
+		if !strings.Contains(string(x), want) {
+			t.Fatalf("missing %s in\n%s", want, x)
+		}
+	}
+	back, err := ParseDomainXML(x)
+	if err != nil || back.OSType != "windows11" || back.DriversISO != s.DriversISO || back.InstallISO != s.InstallISO {
+		t.Fatalf("round trip: %v %+v", err, back)
+	}
+	// plain Windows stays on BIOS without a TPM; Linux gets neither
+	for _, os := range []string{"windows", "linux"} {
+		s.OSType = os
+		x, _ = DomainXML(s)
+		if strings.Contains(string(x), "efi") || strings.Contains(string(x), "<tpm") {
+			t.Fatalf("%s got UEFI/TPM:\n%s", os, x)
+		}
+	}
+}
