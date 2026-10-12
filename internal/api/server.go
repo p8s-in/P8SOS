@@ -300,7 +300,9 @@ func (s *Server) fail(w http.ResponseWriter, err error) {
 		if s.Log != nil {
 			s.Log.Error("request failed", "err", err)
 		}
-		writeErr(w, http.StatusInternalServerError, "internal", "internal error; see p8sd logs")
+		// Single-admin host: show the real cause (libvirt/zfs stderr) instead of a
+		// bare 500, so problems can be fixed without digging through the journal.
+		writeErr(w, http.StatusInternalServerError, "internal", "host error: "+err.Error())
 	}
 }
 

@@ -29,7 +29,7 @@ scoped tokens arrive with tenants in Phase 2.
 | 404  | `not_found`   | VM does not exist                          |
 | 405  | —             | wrong method for the path                  |
 | 409  | `exists`      | VM name already taken                      |
-| 500  | `internal`    | host-side failure; details only in logs    |
+| 500  | `internal`    | host-side failure; message has the cause   |
 
 ## VM object
 

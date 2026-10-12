@@ -128,7 +128,7 @@ func TestAPI(t *testing.T) {
 		{"GET", "/api/v1/vms/nope", secret, "", 404, "not_found"},
 		{"POST", "/api/v1/vms/web1/start", secret, "", 200, "web1"},
 		{"POST", "/api/v1/vms/web1/stop", secret, `{"force":true}`, 202, "web1"},
-		{"POST", "/api/v1/vms/web1/stop", secret, "", 500, "internal error"},
+		{"POST", "/api/v1/vms/web1/stop", secret, "", 500, "host error: boom"},
 		{"POST", "/api/v1/vms/web1/reboot", secret, "", 202, "web1"},
 		{"POST", "/api/v1/vms/nope/reboot", secret, "", 404, "not_found"},
 		{"DELETE", "/api/v1/vms/web1", secret, "", 204, ""},
