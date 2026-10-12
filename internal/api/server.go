@@ -21,6 +21,7 @@ import (
 	"p8sos/internal/console"
 	"p8sos/internal/firewall"
 	"p8sos/internal/metrics"
+	"p8sos/internal/tunnel"
 	"p8sos/internal/users"
 	"p8sos/internal/vm"
 )
@@ -83,9 +84,10 @@ type Server struct {
 	// Accounts. Users nil = only API tokens (one admin), as before v0.3.
 	Users    *users.Store
 	Sessions *users.Sessions
-	Limiter  *users.Limiter // failed sign-in lockout; nil = defaults
-	Audit    *audit.Log     // who changed what; nil = not kept
-	Issuer   string         // name shown in authenticator apps
+	Limiter  *users.Limiter  // failed sign-in lockout; nil = defaults
+	Audit    *audit.Log      // who changed what; nil = not kept
+	Issuer   string          // name shown in authenticator apps
+	Tunnel   *tunnel.Manager // public websites via Cloudflare Tunnel; nil = off
 
 	once      sync.Once
 	lmOnce    sync.Once
@@ -155,6 +157,13 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("PATCH /api/v1/users/{user}", s.updateUser)
 	auth.HandleFunc("DELETE /api/v1/users/{user}", s.deleteUser)
 	auth.HandleFunc("PUT /api/v1/vms/{name}/owner", s.setOwner)
+	auth.HandleFunc("GET /api/v1/tunnel", s.getTunnel)
+	auth.HandleFunc("POST /api/v1/tunnel/setup", s.setupTunnel)
+	auth.HandleFunc("PUT /api/v1/tunnel/dashboard", s.setDashboardHost)
+	auth.HandleFunc("GET /api/v1/sites", s.listSites)
+	auth.HandleFunc("GET /api/v1/vms/{name}/sites", s.listSites)
+	auth.HandleFunc("POST /api/v1/vms/{name}/sites", s.addSite)
+	auth.HandleFunc("DELETE /api/v1/sites/{host}", s.deleteSite)
 	auth.HandleFunc("GET /api/v1/vms/{name}/firewall", s.getFirewall)
 	auth.HandleFunc("PUT /api/v1/vms/{name}/firewall", s.putFirewall)
 	auth.HandleFunc("GET /api/v1/audit", s.auditLog)
@@ -318,6 +327,11 @@ func (s *Server) deleteVM(w http.ResponseWriter, r *http.Request) {
 	if err := s.VMs.Delete(r.Context(), r.PathValue("name")); err != nil {
 		s.fail(w, r, err)
 		return
+	}
+	if s.Tunnel != nil { // its websites go with it
+		if err := s.Tunnel.RemoveVM(context.WithoutCancel(r.Context()), r.PathValue("name")); err != nil && s.Log != nil {
+			s.Log.Error("remove websites of deleted vm", "vm", r.PathValue("name"), "err", err)
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

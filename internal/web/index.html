@@ -195,6 +195,19 @@ dialog form.uform{padding:0}
   <div class="hint">Disks can only grow. The VM's filesystem grows to the new size when it boots.</div>
   <div class="inline"><span class="spacer"></span><button class="btn primary" id="mRzGo">Apply</button></div>
 
+  <h3>Websites on the internet</h3>
+  <div id="mSiteBox">
+    <div class="sub" id="mSiteSub"></div>
+    <table class="snaps"><tbody id="mSites"></tbody></table>
+    <div class="inline" id="mSiteAdd">
+      <input id="mSiteName" placeholder="name" autocomplete="off" style="flex:1 1 120px" pattern="[a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?" aria-label="Website name">
+      <span class="sub" id="mSiteDom"></span>
+      <input id="mSitePort" type="number" min="1" max="65535" value="80" style="flex:0 0 84px" aria-label="Port in the VM">
+      <label class="check" style="margin:0;white-space:nowrap"><input id="mSiteTLS" type="checkbox"> VM speaks HTTPS</label>
+      <button class="btn" id="mSiteGo">Publish</button>
+    </div>
+  </div>
+
   <h3>Firewall</h3>
   <div class="sub">Off: anything can connect to this VM. On: only what is listed below gets in;
     everything the VM starts itself (updates, downloads) keeps working.</div>
@@ -269,6 +282,7 @@ dialog form.uform{padding:0}
       <div><label>RAM (MB)</label><input data-q="memory_mib" type="number" min="0" step="256" value="4096"></div>
       <div><label>Disk (GB)</label><input data-q="disk_gb" type="number" min="0" value="60"></div>
     </div>
+    <div class="row qrow"><div><label>Websites</label><input data-q="sites" type="number" min="0" value="3"></div></div>
     <label class="check"><input data-q="lan" type="checkbox"> May use the home/LAN network</label>
     <div class="dlg-actions"><button class="btn primary">Add user</button></div>
   </form>
@@ -647,7 +661,8 @@ async function openManage(name){
   $("#mBackups").innerHTML = `<tr><td class="muted">Loading…</td></tr>`;
   $("#mCharts").innerHTML = "";
   $("#mFwRules").innerHTML = `<tr><td class="muted">Loading…</td></tr>`;
-  await Promise.all([loadSnaps(), loadBackups(), loadVMCharts(), loadFirewall()]);
+  $("#mSites").innerHTML = ""; $("#mSiteName").value = ""; $("#mSitePort").value = 80; $("#mSiteTLS").checked = false;
+  await Promise.all([loadSnaps(), loadBackups(), loadVMCharts(), loadFirewall(), loadSites()]);
 }
 async function loadSnaps(){
   try { snaps = (await call("GET", `/vms/${encodeURIComponent(mName)}/snapshots`)).snapshots; }
@@ -754,6 +769,46 @@ $("#mPwGo").onclick = async () => {
   } catch (err) { toast(err.message, true); }
   go.disabled = false;
 };
+
+/* ---------- websites (Cloudflare Tunnel) ---------- */
+let tun = null;
+async function loadSites(){
+  tun = await call("GET", "/tunnel").catch(() => ({set_up: false}));
+  $("#mSiteAdd").hidden = !tun.set_up;
+  if (!tun.set_up) {
+    $("#mSiteSub").innerHTML = isAdmin()
+      ? `Give VMs a public https:// address without opening your router. Set it up once on the host: <span class="mono">p8 tunnel setup</span>`
+      : "Publishing websites isn't available on this server yet.";
+    $("#mSites").innerHTML = ""; return;
+  }
+  $("#mSiteSub").textContent = `https://NAME.${tun.domain} reaches a port of this VM (certificate by Cloudflare). If the firewall is on, allow that port.`;
+  $("#mSiteDom").textContent = "." + tun.domain;
+  try {
+    const l = (await call("GET", `/vms/${encodeURIComponent(mName)}/sites`)).sites;
+    $("#mSites").innerHTML = l.length ? l.map(x => `<tr data-host="${esc(x.host)}"><td><a href="https://${esc(x.host)}" target="_blank" rel="noopener"><b>${esc(x.host)}</b></a>
+      <div class="sub">→ port ${x.port}${x.https ? " (HTTPS)" : ""} · ${x.ip ? esc(x.ip) : "waiting for the VM's address"}</div></td>
+      <td><button class="btn danger" data-site="del">Remove</button></td></tr>`).join("")
+      : `<tr><td class="muted">Nothing published.</td></tr>`;
+  } catch (err) { toast(err.message, true); }
+}
+$("#mSiteGo").onclick = async () => {
+  const name = $("#mSiteName").value.trim().toLowerCase(), port = +$("#mSitePort").value, go = $("#mSiteGo");
+  if (!/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(name)) return toast("Name: lowercase letters, digits and hyphens, e.g. shop", true);
+  go.disabled = true;
+  try {
+    const x = await call("POST", `/vms/${encodeURIComponent(mName)}/sites`, {name, port, https: $("#mSiteTLS").checked});
+    toast(`https://${x.host} is live (DNS can take a minute)`); $("#mSiteName").value = ""; await loadSites(); refresh();
+  } catch (err) { toast(err.message, true); }
+  go.disabled = false;
+};
+$("#mSites").addEventListener("click", async e => {
+  const b = e.target.closest("[data-site]"); if (!b) return;
+  if (!armed(b, "Remove — sure?")) return;
+  b.disabled = true;
+  const host = b.closest("tr").dataset.host;
+  try { await call("DELETE", `/sites/${encodeURIComponent(host)}`); toast(`${host} is off the internet`); await loadSites(); }
+  catch (err) { toast(err.message, true); b.disabled = false; }
+});
 
 /* ---------- per-VM firewall ---------- */
 let fwRules = [];
@@ -1033,7 +1088,7 @@ async function loadUsers(){
   $("#uList").innerHTML = userList.length ? userList.map(u => {
     const q = u.quota, us = u.usage;
     const plan = u.role === "admin" ? "no limits" :
-      `${us.vms}/${q.vms} VMs · ${us.vcpus}/${q.vcpus} CPU · ${gb(us.memory_mib)}/${gb(q.memory_mib)} · ${us.disk_gb}/${q.disk_gb} GB${q.lan ? " · LAN" : ""}`;
+      `${us.vms}/${q.vms} VMs · ${us.vcpus}/${q.vcpus} CPU · ${gb(us.memory_mib)}/${gb(q.memory_mib)} · ${us.disk_gb}/${q.disk_gb} GB · ${us.sites || 0}/${q.sites || 0} sites${q.lan ? " · LAN" : ""}`;
     return `<tr data-u="${esc(u.name)}"><td><b>${esc(u.name)}</b><span class="pill ${u.role === "admin" ? "on" : ""}">${u.role}</span>
       ${u.two_factor ? '<span class="pill">2FA</span>' : ""}${u.disabled ? '<span class="pill">disabled</span>' : ""}
       <div class="sub">${plan}</div><div class="uedit" hidden></div></td>
@@ -1066,7 +1121,8 @@ $("#uList").addEventListener("click", async e => {
         <div><label>CPUs</label><input data-q="vcpus" type="number" min="0" value="${q.vcpus}"></div>
         <div><label>RAM (MB)</label><input data-q="memory_mib" type="number" min="0" step="256" value="${q.memory_mib}"></div></div>
         <div class="row qrow"><div><label>Disk (GB)</label><input data-q="disk_gb" type="number" min="0" value="${q.disk_gb}"></div>
-        <div style="grid-column:span 3"><label>New password <span class="muted">(optional)</span></label><input data-f="pw" type="password" minlength="10" autocomplete="new-password"></div></div>
+        <div><label>Websites</label><input data-q="sites" type="number" min="0" value="${q.sites || 0}"></div>
+        <div style="grid-column:span 2"><label>New password <span class="muted">(optional)</span></label><input data-f="pw" type="password" minlength="10" autocomplete="new-password"></div></div>
         <label class="check"><input data-q="lan" type="checkbox" ${q.lan ? "checked" : ""}> May use the home/LAN network</label>
         <label class="check"><input data-f="disabled" type="checkbox" ${u.disabled ? "checked" : ""}> Disabled (can't sign in)</label>
         ${u.two_factor ? '<label class="check"><input data-f="reset2fa" type="checkbox"> Turn off 2FA (lost phone)</label>' : ""}
@@ -1113,7 +1169,7 @@ async function openAccount(){
   $("#acOld").value = $("#acNew").value = $("#ac2Code").value = "";
   const q = me.quota, u = me.usage;
   $("#acPlan").innerHTML = isAdmin() ? "" : `<h3>My plan</h3><div class="sub">${u.vms} of ${q.vms} VMs · ${u.vcpus} of ${q.vcpus} CPUs ·
-    ${gb(u.memory_mib)} of ${gb(q.memory_mib)} RAM · ${u.disk_gb} of ${q.disk_gb} GB disk</div>`;
+    ${gb(u.memory_mib)} of ${gb(q.memory_mib)} RAM · ${u.disk_gb} of ${q.disk_gb} GB disk · ${u.sites || 0} of ${q.sites || 0} websites</div>`;
   $("#acKeys").value = (me.ssh_keys || []).join("\n");
   render2FA();
   $("#dlgAccount").showModal();

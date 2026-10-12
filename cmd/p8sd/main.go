@@ -15,6 +15,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -37,6 +38,7 @@ import (
 	"p8sos/internal/metrics"
 	"p8sos/internal/storage"
 	"p8sos/internal/tlsutil"
+	"p8sos/internal/tunnel"
 	"p8sos/internal/users"
 	"p8sos/internal/virt"
 	"p8sos/internal/vm"
@@ -137,6 +139,36 @@ func serve(args []string) error {
 		}
 	}
 
+	tun := &tunnel.Manager{
+		Dir:       cfg.DataDir,
+		Dashboard: localURL(cfg),
+		IPs: func(ctx context.Context) (map[string]string, error) {
+			vms, err := svc.List(ctx)
+			ips := map[string]string{}
+			for _, v := range vms {
+				ips[v.Name] = v.IP
+			}
+			return ips, err
+		},
+	}
+	go func() { // follow VM address changes (DHCP) and re-push routes
+		last := ""
+		for {
+			msg := ""
+			if err := tun.Sync(ctx); err != nil {
+				msg = err.Error()
+			}
+			if msg != last && msg != "" {
+				log.Error("public access (Cloudflare Tunnel) routes", "err", msg)
+			}
+			last = msg
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(time.Minute):
+			}
+		}
+	}()
 	sessions := &users.Sessions{Path: filepath.Join(cfg.DataDir, "sessions.json")}
 	go func() { // keep last-use times on disk, so idle sign-outs survive restarts
 		t := time.NewTicker(time.Minute)
@@ -165,6 +197,7 @@ func serve(args []string) error {
 			UI:       web.Handler(),
 			Users:    &users.Store{Path: filepath.Join(cfg.DataDir, "users.json")},
 			Sessions: sessions,
+			Tunnel:   tun,
 			Audit:    &audit.Log{Path: filepath.Join(cfg.DataDir, "audit.log")},
 			Issuer:   issuer(),
 		}).Handler(),
@@ -285,4 +318,20 @@ func runFirewalls(ctx context.Context, log *slog.Logger, svc *vm.Service) {
 		case <-time.After(5 * time.Minute):
 		}
 	}
+}
+
+// localURL is where cloudflared on this host reaches the dashboard.
+func localURL(cfg *config.Config) string {
+	host, port, err := net.SplitHostPort(cfg.Listen)
+	if err != nil {
+		host, port = "", "8006"
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+	scheme := "http"
+	if cfg.TLSAuto || cfg.TLSCert != "" {
+		scheme = "https"
+	}
+	return scheme + "://" + net.JoinHostPort(host, port)
 }

@@ -100,10 +100,18 @@ func (s *Server) audit(r *http.Request, user string, status int, detail string) 
 	}
 }
 
+// clientIP is the caller's address. Requests through the Cloudflare Tunnel
+// arrive from cloudflared on this host; for those, Cloudflare's header has the
+// real visitor (trusted only from loopback, where cloudflared runs).
 func clientIP(r *http.Request) string {
 	h, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		return r.RemoteAddr
+		h = r.RemoteAddr
+	}
+	if ip := net.ParseIP(h); ip != nil && ip.IsLoopback() {
+		if cf := net.ParseIP(strings.TrimSpace(r.Header.Get("Cf-Connecting-Ip"))); cf != nil {
+			return cf.String()
+		}
 	}
 	return h
 }
@@ -149,6 +157,18 @@ type Usage struct {
 	VCPUs     int `json:"vcpus"`
 	MemoryMiB int `json:"memory_mib"`
 	DiskGB    int `json:"disk_gb"`
+	Sites     int `json:"sites"`
+}
+
+// usage is what a user has now, websites included.
+func (s *Server) usage(vms []vm.VM, owner string) Usage {
+	u := usageOf(vms, owner)
+	if s.Tunnel != nil {
+		if l, err := s.Tunnel.Sites("", owner); err == nil {
+			u.Sites = len(l)
+		}
+	}
+	return u
 }
 
 func usageOf(vms []vm.VM, owner string) Usage {
@@ -179,6 +199,9 @@ func fits(q users.Quota, now Usage, d Usage) error {
 	if now.DiskGB+d.DiskGB > q.DiskGB {
 		over = append(over, fmt.Sprintf("disk %d of %d GB", now.DiskGB+d.DiskGB, q.DiskGB))
 	}
+	if d.Sites > 0 && now.Sites+d.Sites > q.Sites {
+		over = append(over, fmt.Sprintf("websites %d of %d", now.Sites+d.Sites, q.Sites))
+	}
 	if len(over) > 0 {
 		return fmt.Errorf("%w: that would go over your plan (%s)", errQuota, strings.Join(over, ", "))
 	}
@@ -205,7 +228,7 @@ func (s *Server) checkQuota(ctx context.Context, p principal, d Usage) error {
 	if err != nil {
 		return err
 	}
-	return fits(p.Quota, usageOf(all, p.Name), d)
+	return fits(p.Quota, s.usage(all, p.Name), d)
 }
 
 // --- sign in / out ---
@@ -286,7 +309,7 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := map[string]any{
-		"name": p.Name, "role": users.Customer, "quota": p.Quota, "usage": usageOf(all, p.Name),
+		"name": p.Name, "role": users.Customer, "quota": p.Quota, "usage": s.usage(all, p.Name),
 		"two_factor": false, "account": p.User, "lan": p.Admin || p.Quota.LAN,
 		"accounts_on": s.Users != nil && s.Sessions != nil && s.Users.Count() > 0,
 	}
@@ -418,7 +441,7 @@ func (s *Server) listUsers(w http.ResponseWriter, r *http.Request) {
 	}
 	out := []userView{}
 	for _, u := range list {
-		out = append(out, userView{u, usageOf(all, u.Name)})
+		out = append(out, userView{u, s.usage(all, u.Name)})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"users": out})
 }

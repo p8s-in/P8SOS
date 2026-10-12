@@ -34,6 +34,8 @@ Each phase ships something usable on its own.
       per-user SSH keys, sign-ins survive restarts
 - [x] Per-VM firewall (v0.4 part 1): allow-list of incoming tcp/udp/ping with optional source, nftables bridge table by MAC,
       dashboard Manage → Firewall, `p8 fw`
+- [x] Public access (v0.4 part 2): Cloudflare Tunnel set up by `p8 tunnel setup` (API: tunnel, routes, DNS), dashboard on
+      panel.<domain>, VM websites `p8 publish` / Manage → Websites, `sites` in customer plans, real visitor IP in the audit log
 - [x] Thin VM disks, `p8 storage grow`, file pool sized from free space
 
 Still to do: projects, scoped API tokens per user; per-tenant VLAN/bridge;

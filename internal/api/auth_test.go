@@ -15,6 +15,7 @@ import (
 
 	"p8sos/internal/audit"
 	"p8sos/internal/config"
+	"p8sos/internal/tunnel"
 	"p8sos/internal/users"
 	"p8sos/internal/vm"
 )
@@ -58,6 +59,15 @@ func (o *ownedVMs) ConsoleAddr(ctx context.Context, n string) (string, error) {
 	_, err := o.Get(ctx, n)
 	return "vnc", err
 }
+func (o *ownedVMs) Delete(ctx context.Context, n string) error {
+	if _, err := o.Get(ctx, n); err != nil {
+		return err
+	}
+	o.mu.Lock()
+	delete(o.vms, n)
+	o.mu.Unlock()
+	return nil
+}
 func (o *ownedVMs) Start(ctx context.Context, n string) (vm.VM, error) { return o.Get(ctx, n) }
 func (o *ownedVMs) SetOwner(ctx context.Context, n, owner string) (vm.VM, error) {
 	v, err := o.Get(ctx, n)
@@ -91,7 +101,9 @@ type mu struct {
 	log *audit.Log
 }
 
-func newMultiUser(t *testing.T) *mu {
+func newMultiUser(t *testing.T) *mu { return newMultiUserWith(t, nil) }
+
+func newMultiUserWith(t *testing.T, tun *tunnel.Manager) *mu {
 	dir := t.TempDir()
 	sum := sha256.Sum256([]byte(secret))
 	m := &mu{t: t, now: time.Unix(1_800_000_000, 0)}
@@ -103,7 +115,7 @@ func newMultiUser(t *testing.T) *mu {
 	m.log = &audit.Log{Path: filepath.Join(dir, "audit.log")}
 	s := &Server{VMs: m.vms, Version: "test", Tokens: []config.Token{{Name: "host", SHA256: hex.EncodeToString(sum[:])}},
 		Templates: []config.Template{{Name: "debian-13", MinDiskGB: 4}},
-		Users:     m.us, Sessions: &users.Sessions{}, Audit: m.log, Limiter: &users.Limiter{Max: 3}}
+		Users:     m.us, Sessions: &users.Sessions{}, Audit: m.log, Limiter: &users.Limiter{Max: 3}, Tunnel: tun}
 	m.srv = httptest.NewServer(s.Handler())
 	t.Cleanup(m.srv.Close)
 	return m

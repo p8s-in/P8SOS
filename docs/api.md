@@ -55,6 +55,17 @@ user's VM answers `404`, exactly like a VM that doesn't exist.
 Customer VMs never get the host's default SSH keys. Server errors show
 customers only a reference (`ref 1a2b3c4d`); the details are in p8sd's log.
 
+### Public websites (Cloudflare Tunnel) — see [public-access.md](public-access.md)
+
+| endpoint | who | what |
+|---|---|---|
+| `GET /tunnel` | signed in | `{"set_up","domain","dashboard"}` (+ tunnel id/name for admins) |
+| `POST /tunnel/setup` | admin | `{"api_token","domain","name"}` → `{"status","tunnel_token"}` (for `cloudflared service install`) |
+| `PUT /tunnel/dashboard` | admin | `{"name":"panel"}` publishes the dashboard as panel.<domain>; `""` removes it |
+| `GET /sites`, `GET /vms/{name}/sites` | signed in | published websites (customers: their own) |
+| `POST /vms/{name}/sites` | owner/admin | `{"name":"shop","port":80,"https":false}` → `201` site; counts against `quota.sites` |
+| `DELETE /sites/{host}` | owner/admin | takes it off (route and DNS record) |
+
 ### Per-VM firewall
 
 `GET /vms/{name}/firewall`, `PUT /vms/{name}/firewall` (owner or admin):

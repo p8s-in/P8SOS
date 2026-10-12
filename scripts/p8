@@ -55,10 +55,14 @@ p8 — manage P8S OS virtual machines
   p8 templates                     installed OS templates
   p8 templates available           OS images that can be added
   p8 templates add NAME            download and add one (e.g. ubuntu-24.04, rocky-9)
+  p8 tunnel setup                  put the dashboard and websites on the internet (Cloudflare Tunnel)
+  p8 tunnel [dashboard NAME|off]   status / publish the dashboard as NAME.yourdomain
+  p8 publish VM NAME PORT [--https]  website: https://NAME.yourdomain -> VM:PORT
+  p8 sites / p8 unpublish HOST     list / remove websites
   p8 fw NAME [on|off]              VM firewall: show, switch on/off
   p8 fw NAME allow tcp 22 [from 203.0.113.0/24] | allow ping | remove N
   p8 users                         user accounts (dashboard sign-in)
-  p8 user add NAME [--admin] [vms=2 cpus=4 ram=4096 disk=60 lan=no]
+  p8 user add NAME [--admin] [vms=2 cpus=4 ram=4096 disk=60 lan=no sites=3]
                                    new customer (or admin); asks for the password
   p8 user quota NAME vms=3 ram=8192 ...   change a customer's plan
   p8 user passwd|disable|enable|2fa-off|rm NAME
@@ -389,6 +393,7 @@ case $cmd in
           cpus=*) q=$(jq -c --argjson v "${kv#*=}" '.vcpus=$v' <<<"$q") ;;
           ram=*)  q=$(jq -c --argjson v "${kv#*=}" '.memory_mib=$v' <<<"$q") ;;
           disk=*) q=$(jq -c --argjson v "${kv#*=}" '.disk_gb=$v' <<<"$q") ;;
+          sites=*) q=$(jq -c --argjson v "${kv#*=}" '.sites=$v' <<<"$q") ;;
           lan=yes|lan=on|lan=true) q=$(jq -c '.lan=true' <<<"$q") ;;
           lan=no|lan=off|lan=false) q=$(jq -c '.lan=false' <<<"$q") ;;
           *) red "unknown setting '$kv' (use vms= cpus= ram=MB disk=GB lan=yes|no)"; exit 1 ;;
@@ -400,11 +405,11 @@ case $cmd in
       add)
         need "${1:-}"; n=$1; shift; role=customer; kv=()
         for a in "$@"; do case $a in --admin) role=admin ;; *) kv+=("$a") ;; esac; done
-        q=$(quota_json '{"vms":2,"vcpus":4,"memory_mib":4096,"disk_gb":60,"lan":false}' "${kv[@]}")
+        q=$(quota_json '{"vms":2,"vcpus":4,"memory_mib":4096,"disk_gb":60,"lan":false,"sites":3}' "${kv[@]}")
         pw=$(ask_password "password for $n" 10) || exit 1
         call POST /users "$(jq -nc --arg n "$n" --arg r "$role" --arg p "$pw" --argjson q "$q" '{name:$n, role:$r, password:$p, quota:$q}')" >/dev/null || exit 1
         green "✔ $n added ($role). They sign in at the dashboard with this name and password."
-        [[ $role == customer ]] && echo "  Plan: $(jq -r '"\(.vms) VMs, \(.vcpus) CPUs, \(.memory_mib) MB RAM, \(.disk_gb) GB disk"' <<<"$q"). Change: p8 user quota $n vms=3 ram=8192 ..."
+        [[ $role == customer ]] && echo "  Plan: $(jq -r '"\(.vms) VMs, \(.vcpus) CPUs, \(.memory_mib) MB RAM, \(.disk_gb) GB disk, \(.sites // 0) websites"' <<<"$q"). Change: p8 user quota $n vms=3 ram=8192 ..."
         true ;;
       passwd|password)
         need "${1:-}"; pw=$(ask_password "new password for $1" 10) || exit 1
@@ -416,7 +421,7 @@ case $cmd in
         [[ -n $cur ]] || { red "no user $n"; exit 1; }
         q=$(quota_json "$cur" "$@")
         call PATCH "/users/$n" "$(jq -nc --argjson q "$q" '{quota:$q}')" >/dev/null || exit 1
-        green "✔ plan of $n: $(jq -r '"\(.vms) VMs, \(.vcpus) CPUs, \(.memory_mib) MB RAM, \(.disk_gb) GB disk\(if .lan then ", LAN" else "" end)"' <<<"$q")" ;;
+        green "✔ plan of $n: $(jq -r '"\(.vms) VMs, \(.vcpus) CPUs, \(.memory_mib) MB RAM, \(.disk_gb) GB disk, \(.sites // 0) websites\(if .lan then ", LAN" else "" end)"' <<<"$q")" ;;
       admin|customer)
         need "${1:-}"; call PATCH "/users/$1" "{\"role\":\"$sub\"}" >/dev/null || exit 1; green "✔ $1 is now $sub" ;;
       disable|enable)
@@ -429,7 +434,7 @@ case $cmd in
         need "${1:-}"
         if [[ ${YES:-0} != 1 ]]; then read -r -p "Delete user $1? [y/N] " a; [[ $a == [yY]* ]] || { echo "cancelled"; exit 0; }; fi
         call DELETE "/users/$1" >/dev/null || exit 1; green "✔ user $1 deleted" ;;
-      *) echo "usage: p8 user add NAME [--admin] [vms=N cpus=N ram=MB disk=GB lan=yes]"
+      *) echo "usage: p8 user add NAME [--admin] [vms=N cpus=N ram=MB disk=GB lan=yes sites=N]"
          echo "       p8 user passwd|quota|admin|customer|disable|enable|2fa-off|rm NAME"; exit 1 ;;
     esac ;;
 
@@ -468,6 +473,80 @@ case $cmd in
     jq -r '.rules | to_entries[] | "  \(.key+1). \(if .value.proto=="icmp" then "ping" else "\(.value.proto) \(.value.ports)" end)\(if (.value.source // "") != "" then "  from \(.value.source)" else "" end)\(if (.value.comment // "") != "" then "  (\(.value.comment))" else "" end)"' <<<"$fw"
     [[ $(jq '.rules | length' <<<"$fw") == 0 ]] && echo "  (no rules)"
     true ;;
+
+  tunnel)
+    case ${1:-status} in
+      status)
+        st=$(call GET /tunnel) || exit 1
+        if [[ $(jq -r .set_up <<<"$st") != true ]]; then echo "Public access is not set up. Run: p8 tunnel setup"; exit 0; fi
+        echo "Domain:     $(jq -r .domain <<<"$st")"
+        echo "Tunnel:     $(jq -r '.tunnel_name + " (" + .tunnel_id + ")"' <<<"$st")"
+        echo "Dashboard:  $(jq -r 'if .dashboard then "https://" + .dashboard else "not on the internet (p8 tunnel dashboard panel)" end' <<<"$st")"
+        echo "cloudflared: $(systemctl is-active cloudflared 2>/dev/null || echo 'not installed')" ;;
+      setup)
+        cat <<'TXT'
+Public access with a Cloudflare Tunnel (free). You need:
+  1. A domain whose DNS is on Cloudflare (dash.cloudflare.com -> Add a domain).
+  2. An API token: dash.cloudflare.com -> My Profile -> API Tokens -> Create Token ->
+     Custom token with these permissions:
+        Account  | Cloudflare Tunnel | Edit
+        Zone     | DNS               | Edit     (Zone Resources: your domain)
+Nothing is opened on your router; this server connects out to Cloudflare.
+TXT
+        read -r -p "Domain (e.g. example.com): " dom
+        read -r -s -p "Cloudflare API token: " cft; echo
+        read -r -p "Put the dashboard on the internet as which name? [panel] (- = no): " dash
+        dash=${dash:-panel}
+        echo "Connecting to Cloudflare ..."
+        out=$(jq -nc --arg t "$cft" --arg d "$dom" '{api_token:$t, domain:$d}' |
+          curl -ks -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' --data-binary @- -w '\n%{http_code}' "$URL/tunnel/setup")
+        code=${out##*$'\n'}; body=${out%$'\n'*}
+        (( code == 200 )) || { red "error ($code): $(jq -r '.error.message // .' <<<"$body" 2>/dev/null)"; exit 1; }
+        ttok=$(jq -r .tunnel_token <<<"$body"); tid=$(jq -r .status.tunnel_id <<<"$body")
+        green "✔ tunnel $(jq -r .status.tunnel_name <<<"$body") ready for $(jq -r .status.domain <<<"$body")"
+        if ! command -v cloudflared >/dev/null; then
+          echo "Installing cloudflared (Cloudflare's package repository) ..."
+          sudo mkdir -p --mode=0755 /usr/share/keyrings
+          curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | sudo tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null
+          echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main' | sudo tee /etc/apt/sources.list.d/cloudflared.list >/dev/null
+          sudo apt-get update -qq && sudo apt-get install -y -qq cloudflared >/dev/null || { red "could not install cloudflared"; exit 1; }
+        fi
+        # (Re)install the service for this tunnel; an old one for another tunnel is replaced.
+        if systemctl list-unit-files cloudflared.service >/dev/null 2>&1 && systemctl cat cloudflared 2>/dev/null | grep -q -- '--token'; then
+          sudo cloudflared service uninstall >/dev/null 2>&1 || true
+        fi
+        sudo cloudflared service install "$ttok" >/dev/null 2>&1 || { red "cloudflared service install failed (see: sudo journalctl -u cloudflared)"; exit 1; }
+        sleep 3
+        systemctl is-active --quiet cloudflared && green "✔ cloudflared is running (connected out to Cloudflare)" || red "cloudflared isn't running yet: sudo journalctl -u cloudflared -n 30"
+        if [[ $dash != - ]]; then
+          b=$(call PUT /tunnel/dashboard "$(jq -nc --arg n "$dash" '{name:$n}')") || exit 1
+          green "✔ dashboard: https://$(jq -r .dashboard <<<"$b")  (give DNS a minute)"
+          echo "  Sign in there with a user name and password; turn on two-factor sign-in for every admin."
+        fi
+        echo "Publish a VM's website:  p8 publish web1 shop 80   ->  https://shop.$(jq -r .status.domain <<<"$body")" ;;
+      dashboard)
+        n=${2:-}; [[ -n $n ]] || { red "usage: p8 tunnel dashboard NAME|off"; exit 1; }
+        [[ $n == off ]] && n=""
+        b=$(call PUT /tunnel/dashboard "$(jq -nc --arg n "$n" '{name:$n}')") || exit 1
+        [[ -n $n ]] && green "✔ dashboard: https://$(jq -r .dashboard <<<"$b")" || green "✔ dashboard is no longer on the internet" ;;
+      *) red "usage: p8 tunnel [status|setup|dashboard NAME|off]"; exit 1 ;;
+    esac ;;
+
+  publish)
+    need "${1:-}"; [[ -n ${2:-} && ${3:-} =~ ^[0-9]+$ ]] || { red "usage: p8 publish VM NAME PORT [--https]   e.g. p8 publish web1 shop 80"; exit 1; }
+    https=false; [[ ${4:-} == --https ]] && https=true
+    b=$(call POST "/vms/$1/sites" "$(jq -nc --arg n "$2" --argjson p "$3" --argjson h "$https" '{name:$n, port:$p, https:$h}')") || exit 1
+    green "✔ https://$(jq -r .host <<<"$b")  ->  $1 port $3 ($(jq -r '.ip // "address not known yet"' <<<"$b"))"
+    echo "  If the VM's firewall is on, allow port $3 (p8 fw $1 allow tcp $3); traffic arrives from this server." ;;
+
+  sites)
+    b=$(call GET /sites) || exit 1
+    [[ $(jq '.sites | length' <<<"$b") == 0 ]] && { echo "No websites published. p8 publish VM NAME PORT"; exit 0; }
+    jq -r '.sites[] | [("https://" + .host), .vm, (.port|tostring), (if .https then "https" else "http" end), (.ip // "-"), (.owner // "-")] | @tsv' <<<"$b" |
+      while IFS=$'\t' read -r h v p sc ip o; do printf '%-36s %-14s %-6s %-6s %-16s %s\n' "$h" "$v" "$p" "$sc" "$ip" "$o"; done ;;
+
+  unpublish)
+    need "${1:-}"; call DELETE "/sites/$1" >/dev/null || exit 1; green "✔ $1 is off the internet" ;;
 
   jobs)
     body=$(call GET /jobs) || exit 1
