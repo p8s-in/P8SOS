@@ -47,7 +47,17 @@ func (z *ZFS) CloneDisk(ctx context.Context, snapshot, vm string, sizeGB int) (s
 		_ = z.DestroyDisk(ctx, vm)
 		return "", fmt.Errorf("resize disk: %w", err)
 	}
-	// Wait for udev to create /dev/zvol/... before libvirt tries to open it.
+	dev, err := z.WaitDevice(ctx, vm)
+	if err != nil {
+		_ = z.DestroyDisk(context.WithoutCancel(ctx), vm)
+		return "", err
+	}
+	return dev, nil
+}
+
+// WaitDevice waits for udev to create /dev/zvol/... for the VM's disk, so
+// libvirt can open it, and returns that path.
+func (z *ZFS) WaitDevice(ctx context.Context, vm string) (string, error) {
 	dev := z.DevicePath(vm)
 	limit := z.Wait
 	if limit == 0 {
@@ -55,7 +65,6 @@ func (z *ZFS) CloneDisk(ctx context.Context, snapshot, vm string, sizeGB int) (s
 	}
 	for deadline := time.Now().Add(limit); !z.exists(dev); {
 		if time.Now().After(deadline) || ctx.Err() != nil {
-			_ = z.DestroyDisk(context.WithoutCancel(ctx), vm)
 			return "", fmt.Errorf("disk device %s did not appear (udev)", dev)
 		}
 		_, _ = z.Run.Run(ctx, "udevadm", "trigger", "--subsystem-match=block", "--action=add")

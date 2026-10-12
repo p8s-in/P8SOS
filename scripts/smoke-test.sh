@@ -211,6 +211,56 @@ else
 fi
 api DELETE "/vms/$NAME/snapshots/nope"; expect "delete missing snapshot" 404
 
+step "6c. backup and restore"
+# wait_job ID TIMEOUT -> sets JOB (final job JSON)
+wait_job() {
+  local i
+  for ((i = 0; i < $2; i += 3)); do
+    api GET "/jobs/$1"; JOB=$BODY
+    [[ $(jq -r .state <<<"$JOB") != running ]] && return 0
+    sleep 3
+  done
+  return 1
+}
+BACKUP_TIMEOUT=${BACKUP_TIMEOUT:-$((300 * X))}
+api POST "/vms/$NAME/backups"; expect "start backup" 202
+jid=$(jq -r .id <<<"$BODY")
+api POST "/vms/$NAME/backups"; [[ $CODE == 409 || $CODE == 202 ]] && ok "second backup while one runs -> $CODE" || bad "second backup -> $CODE"
+if wait_job "$jid" "$BACKUP_TIMEOUT" && [[ $(jq -r .state <<<"$JOB") == done ]]; then
+  ok "backup finished: $(jq -r .message <<<"$JOB")"
+else
+  bad "backup job: $JOB"
+fi
+api GET "/vms/$NAME/backups"
+bid=$(jq -r '.backups[0].id // empty' <<<"$BODY")
+[[ -n $bid ]] && ok "backup $bid listed" || bad "no backup listed: $BODY"
+left=$(sudo zfs list -H -t snapshot -o name -r "$DATASET/$DOM-disk0" 2>/dev/null | grep -c p8s-backup- || true)
+[[ $left == 0 ]] && ok "zfs: no backup snapshot left behind" || bad "zfs: $left backup snapshot(s) left"
+if [[ -n $bid ]]; then
+  COPY=${NAME}r
+  api POST "/backups/$NAME/$bid/restore" '{"name":"'"$COPY"'"}'; expect "restore as new VM" 202
+  if wait_job "$(jq -r .id <<<"$BODY")" "$BACKUP_TIMEOUT" && [[ $(jq -r .state <<<"$JOB") == done ]]; then
+    ok "restore finished: $(jq -r .message <<<"$JOB")"
+  else
+    bad "restore job: $JOB"
+  fi
+  api GET "/vms/$COPY"
+  [[ $(jq -r .state <<<"$BODY") == running ]] && ok "restored copy $COPY is running" || bad "copy: $BODY"
+  if [[ ${MARKER:-0} == 1 ]]; then
+    cip=""
+    for ((i = 0; i < IP_TIMEOUT; i += 5)); do api GET "/vms/$COPY"; cip=$(jq -r '.ip // empty' <<<"$BODY"); [[ -n $cip ]] && break; sleep 5; done
+    m=""
+    for ((i = 0; i < SSH_TIMEOUT && ${#cip} > 0; i += 5)); do
+      m=$(ssh "${ssh_opts[@]}" "$LOGIN@$cip" 'cat /var/p8s-marker; hostname' 2>/dev/null) && [[ -n $m ]] && break; sleep 5
+    done
+    [[ $(head -1 <<<"$m") == one ]] && ok "copy has the backed-up files (marker=one)" || bad "copy marker: '$m'"
+    [[ $(tail -1 <<<"$m") == "$COPY" ]] && ok "copy got its own hostname ($COPY)" || bad "copy hostname: '$(tail -1 <<<"$m")'"
+  fi
+  api DELETE "/vms/$COPY"; expect "delete restored copy" 204
+  api DELETE "/backups/$NAME/$bid"; expect "delete backup" 204
+  api DELETE "/backups/$NAME/$bid"; expect "delete backup again" 404
+fi
+
 step "7. delete"
 if [[ ${KEEP:-0} == 1 ]]; then
   echo "  KEEP=1: leaving $NAME in place"

@@ -19,7 +19,10 @@ import (
 	"p8sos/internal/vm"
 )
 
-type fakeVMs struct{ created vm.CreateRequest }
+type fakeVMs struct {
+	created vm.CreateRequest
+	sched   vm.Schedule
+}
 
 func (f *fakeVMs) Create(_ context.Context, r vm.CreateRequest) (vm.VM, error) {
 	if r.Name == "dup" {
@@ -92,12 +95,42 @@ func (f *fakeVMs) SetPassword(ctx context.Context, n, user, pw string) error {
 	return err
 }
 
+func (f *fakeVMs) StartBackup(ctx context.Context, n string) (vm.Job, error) {
+	_, err := f.Get(ctx, n)
+	return vm.Job{ID: "j1", Kind: "backup", Target: n, State: "running"}, err
+}
+func (f *fakeVMs) ListBackups(n string) ([]vm.Backup, error) {
+	return []vm.Backup{{ID: "20261012-023000", VM: "web1"}}, nil
+}
+func (f *fakeVMs) DeleteBackup(n, id string) error {
+	if id != "20261012-023000" {
+		return fmt.Errorf("%w: backup", vm.ErrNotFound)
+	}
+	return nil
+}
+func (f *fakeVMs) StartRestore(ctx context.Context, n, id, newName string) (vm.Job, error) {
+	if newName == "" {
+		return vm.Job{}, fmt.Errorf("%w: stop vm first", vm.ErrConflict)
+	}
+	return vm.Job{ID: "j2", Kind: "restore", Target: newName}, nil
+}
+func (f *fakeVMs) GetSchedule(n string) (vm.Schedule, error) { return f.sched, nil }
+func (f *fakeVMs) SetSchedule(n string, s vm.Schedule) error {
+	if s.Keep > 365 {
+		return fmt.Errorf("%w: keep", vm.ErrInvalid)
+	}
+	f.sched = s
+	return nil
+}
+func (f *fakeVMs) Job(id string) (vm.Job, bool) { return vm.Job{ID: id, State: "done"}, id == "j1" }
+func (f *fakeVMs) ListJobs() []vm.Job           { return []vm.Job{{ID: "j1"}} }
+
 const secret = "p8s_testtoken"
 
 func newTestServer() (*httptest.Server, *fakeVMs) {
 	sum := sha256.Sum256([]byte(secret))
 	f := &fakeVMs{}
-	s := &Server{VMs: f, Version: "test",
+	s := &Server{VMs: f, Version: "test", BackupKeep: 7, BackupTime: "02:30",
 		Tokens:    []config.Token{{Name: "t", SHA256: hex.EncodeToString(sum[:])}},
 		Templates: []config.Template{{Name: "debian-13", MinDiskGB: 4}, {Name: "ubuntu-24.04", MinDiskGB: 4, Label: "Ubuntu 24.04 LTS", DefaultUser: "ubuntu"}}}
 	return httptest.NewServer(s.Handler()), f
@@ -169,6 +202,21 @@ func TestAPI(t *testing.T) {
 		{"POST", "/api/v1/vms/nope/console", secret, "", 404, "not_found"},
 		{"POST", "/api/v1/vms/web1/console", "", "", 401, "unauthorized"},
 		{"GET", "/api/v1/console?ticket=bogus", "", "", 401, "ticket"},
+		{"POST", "/api/v1/vms/web1/backups", secret, "", 202, `"kind":"backup"`},
+		{"POST", "/api/v1/vms/nope/backups", secret, "", 404, "not_found"},
+		{"GET", "/api/v1/vms/web1/backups", secret, "", 200, `"20261012-023000"`},
+		{"GET", "/api/v1/backups", secret, "", 200, `"vm":"web1"`},
+		{"DELETE", "/api/v1/backups/web1/20261012-023000", secret, "", 204, ""},
+		{"DELETE", "/api/v1/backups/web1/20990101-000000", secret, "", 404, "not_found"},
+		{"POST", "/api/v1/backups/web1/20261012-023000/restore", secret, "", 409, "stop vm"},
+		{"POST", "/api/v1/backups/web1/20261012-023000/restore", secret, `{"name":"web1-copy"}`, 202, `"target":"web1-copy"`},
+		{"GET", "/api/v1/vms/web1/backup-schedule", secret, "", 200, `"daily":false,"keep":7,"at":"02:30"`},
+		{"PUT", "/api/v1/vms/web1/backup-schedule", secret, `{"daily":true}`, 200, `"daily":true,"keep":7`},
+		{"PUT", "/api/v1/vms/web1/backup-schedule", secret, `{"daily":true,"keep":999}`, 400, "keep"},
+		{"PUT", "/api/v1/vms/nope/backup-schedule", secret, `{"daily":true}`, 404, "not_found"},
+		{"GET", "/api/v1/jobs", secret, "", 200, `"id":"j1"`},
+		{"GET", "/api/v1/jobs/j1", secret, "", 200, `"state":"done"`},
+		{"GET", "/api/v1/jobs/zz", secret, "", 404, "not_found"},
 	}
 	for _, c := range cases {
 		code, body := do(t, srv, c.method, c.path, c.tok, c.body)

@@ -155,6 +155,26 @@ deletes the newer ones — without `destroy_newer` that is a `409` listing them.
 
 `DELETE /vms/{name}/snapshots/{snap}` → `204`.
 
+### Backups (full copies in files) and jobs
+Backups are `zfs send` streams of the VM disk, compressed (zstd) into files under `backup_dir`
+(default `/var/lib/p8s/backups/<vm>/`), with a `.json` describing the VM. They outlive the VM.
+Backing up and restoring take minutes, so they run as **jobs**: the call returns `202` + a job;
+follow it with `GET /jobs/{id}` (`state`: `running` → `done` | `failed`, `message`, `error`).
+One job per VM at a time (`409` otherwise).
+
+| call | does |
+|---|---|
+| `POST /vms/{name}/backups` | back up now (running VMs are frozen for an instant: `consistent:true`) → `202` job |
+| `GET /vms/{name}/backups`, `GET /backups` | list (newest first; `/backups` includes deleted VMs) |
+| `DELETE /backups/{vm}/{id}` | delete one → `204` |
+| `POST /backups/{vm}/{id}/restore` `{}` | put the disk back; the VM must be stopped (`409`). If the VM was deleted, it is recreated |
+| `POST /backups/{vm}/{id}/restore` `{"name":"web1-copy"}` | new VM from the backup (new MAC, hostname, SSH host keys) → `202` job |
+| `GET/PUT /vms/{name}/backup-schedule` `{"daily":true,"keep":7}` | daily backup at `backup_time` (default 02:30), keeping the newest `keep` |
+| `GET /jobs`, `GET /jobs/{id}` | recent jobs / one job |
+
+Config: `backup_dir`, `backup_time` (`HH:MM`), `backup_keep` (default 7). Put `backup_dir` on a
+different disk than the VM pool (under `/mnt`, `/srv` or `/var/lib/p8s`) so a disk failure can't take both.
+
 ### Console (VM screen in the browser)
 `POST /vms/{name}/console` → `201 {"ticket":"…","path":"/api/v1/console?ticket=…","expires_in":30}`
 (`409` if the VM isn't running). Then open a WebSocket (subprotocol `binary`) to `path`:

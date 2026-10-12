@@ -14,8 +14,10 @@ import (
 	"sync"
 	"time"
 
+	"p8sos/internal/backup"
 	"p8sos/internal/cloudinit"
 	"p8sos/internal/config"
+	"p8sos/internal/jobs"
 	"p8sos/internal/virt"
 )
 
@@ -59,7 +61,12 @@ type Service struct {
 	AgentWait time.Duration
 	Log       *slog.Logger
 
-	locks sync.Map // name -> *sync.Mutex; serializes ops per VM
+	Backups      *backup.Store // nil = backups off
+	Jobs         *jobs.Manager // runs backups and restores in the background
+	ScheduleFile string        // daily-backup settings per VM (JSON); empty = in memory only
+
+	locks    sync.Map // name -> *sync.Mutex; serializes ops per VM
+	memSched sync.Map // backup schedules when ScheduleFile is empty (tests)
 }
 
 type Limits struct{ MaxVCPUs, MaxMemoryMiB, MaxDiskGB int }
@@ -428,6 +435,8 @@ func (s *Service) Delete(ctx context.Context, name string) error {
 		return err
 	}
 	s.logErr("remove seed", s.Seeds.Remove(dom))
+	// Backups are kept (a deleted VM can be restored); its daily schedule is not.
+	s.logErr("remove backup schedule", s.SetSchedule(name, Schedule{}))
 	if err := s.Disks.DestroyDisk(context.WithoutCancel(ctx), dom); err != nil {
 		return fmt.Errorf("domain removed but disk cleanup failed: %w", err)
 	}

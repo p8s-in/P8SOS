@@ -38,6 +38,14 @@ type VMService interface {
 	Rollback(ctx context.Context, name, snap string, destroyNewer bool) (vm.VM, error)
 	DeleteSnapshot(ctx context.Context, name, snap string) error
 	ConsoleAddr(ctx context.Context, name string) (string, error)
+	StartBackup(ctx context.Context, name string) (vm.Job, error)
+	ListBackups(name string) ([]vm.Backup, error)
+	DeleteBackup(name, id string) error
+	StartRestore(ctx context.Context, name, id, newName string) (vm.Job, error)
+	GetSchedule(name string) (vm.Schedule, error)
+	SetSchedule(name string, s vm.Schedule) error
+	Job(id string) (vm.Job, bool)
+	ListJobs() []vm.Job
 	SetPassword(ctx context.Context, name, user, password string) error
 }
 
@@ -50,6 +58,9 @@ type Server struct {
 	Host      func(ctx context.Context) any // host capacity for the dashboard; nil = 404
 	UI        http.Handler                  // web dashboard served at /; nil = none
 	Tickets   *console.Tickets              // console passes; nil = created on first use
+	// BackupKeep/BackupTime are the host defaults shown with backup schedules.
+	BackupKeep int
+	BackupTime string
 	// Dial connects to a VM's VNC port; nil = net.Dialer (tests replace it).
 	Dial func(ctx context.Context, addr string) (net.Conn, error)
 
@@ -87,6 +98,15 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("GET /api/v1/host", s.hostInfo)
 	auth.HandleFunc("POST /api/v1/vms/{name}/console", s.consoleTicket)
 	auth.HandleFunc("POST /api/v1/vms/{name}/password", s.setPassword)
+	auth.HandleFunc("GET /api/v1/backups", s.listBackups)
+	auth.HandleFunc("GET /api/v1/vms/{name}/backups", s.listBackups)
+	auth.HandleFunc("POST /api/v1/vms/{name}/backups", s.startBackup)
+	auth.HandleFunc("DELETE /api/v1/backups/{name}/{id}", s.deleteBackup)
+	auth.HandleFunc("POST /api/v1/backups/{name}/{id}/restore", s.restoreBackup)
+	auth.HandleFunc("GET /api/v1/vms/{name}/backup-schedule", s.getSchedule)
+	auth.HandleFunc("PUT /api/v1/vms/{name}/backup-schedule", s.putSchedule)
+	auth.HandleFunc("GET /api/v1/jobs", s.listJobs)
+	auth.HandleFunc("GET /api/v1/jobs/{id}", s.getJob)
 	mux.Handle("/api/v1/", s.requireToken(auth))
 	if s.UI != nil {
 		mux.Handle("/", s.UI) // the page itself is public; every API call it makes needs the token
@@ -310,6 +330,116 @@ func (s *Server) consoleSocket(w http.ResponseWriter, r *http.Request) {
 		s.Log.Info("console opened", "vm", name, "remote", r.RemoteAddr)
 	}
 	console.Proxy(ws, tcp)
+}
+
+func (s *Server) listBackups(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if name != "" {
+		if _, err := s.VMs.Get(r.Context(), name); err != nil && !errors.Is(err, vm.ErrNotFound) {
+			s.fail(w, err)
+			return
+		}
+	}
+	b, err := s.VMs.ListBackups(name)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"backups": b})
+}
+
+func (s *Server) startBackup(w http.ResponseWriter, r *http.Request) {
+	j, err := s.VMs.StartBackup(r.Context(), r.PathValue("name"))
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	w.Header().Set("Location", "/api/v1/jobs/"+j.ID)
+	writeJSON(w, http.StatusAccepted, j)
+}
+
+func (s *Server) deleteBackup(w http.ResponseWriter, r *http.Request) {
+	if err := s.VMs.DeleteBackup(r.PathValue("name"), r.PathValue("id")); err != nil {
+		s.fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) restoreBackup(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name string `json:"name"` // new VM name; empty = restore over the original VM
+	}
+	if r.ContentLength != 0 && !decode(w, r, &body) {
+		return
+	}
+	j, err := s.VMs.StartRestore(r.Context(), r.PathValue("name"), r.PathValue("id"), body.Name)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	w.Header().Set("Location", "/api/v1/jobs/"+j.ID)
+	writeJSON(w, http.StatusAccepted, j)
+}
+
+type scheduleView struct {
+	Daily bool   `json:"daily"`
+	Keep  int    `json:"keep"`
+	At    string `json:"at"` // host time of the daily run (informational)
+}
+
+func (s *Server) getSchedule(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if _, err := s.VMs.Get(r.Context(), name); err != nil {
+		s.fail(w, err)
+		return
+	}
+	sch, err := s.VMs.GetSchedule(name)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	keep := sch.Keep
+	if keep == 0 {
+		keep = s.BackupKeep
+	}
+	writeJSON(w, http.StatusOK, scheduleView{Daily: sch.Daily, Keep: keep, At: s.BackupTime})
+}
+
+func (s *Server) putSchedule(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	var body struct {
+		Daily bool `json:"daily"`
+		Keep  int  `json:"keep"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	if _, err := s.VMs.Get(r.Context(), name); err != nil {
+		s.fail(w, err)
+		return
+	}
+	if body.Daily && body.Keep == 0 {
+		body.Keep = s.BackupKeep
+	}
+	if err := s.VMs.SetSchedule(name, vm.Schedule{Daily: body.Daily, Keep: body.Keep}); err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, scheduleView{Daily: body.Daily, Keep: body.Keep, At: s.BackupTime})
+}
+
+func (s *Server) listJobs(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"jobs": s.VMs.ListJobs()})
+}
+
+func (s *Server) getJob(w http.ResponseWriter, r *http.Request) {
+	j, ok := s.VMs.Job(r.PathValue("id"))
+	if !ok {
+		writeErr(w, http.StatusNotFound, "not_found", "no such job")
+		return
+	}
+	writeJSON(w, http.StatusOK, j)
 }
 
 func (s *Server) setPassword(w http.ResponseWriter, r *http.Request) {

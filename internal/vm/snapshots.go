@@ -48,7 +48,17 @@ func (s *Service) Snapshots(ctx context.Context, name string) ([]Snapshot, error
 	if _, err := s.state(ctx, dom); err != nil {
 		return nil, err
 	}
-	return sd.Snapshots(ctx, dom)
+	all, err := sd.Snapshots(ctx, dom)
+	if err != nil {
+		return nil, err
+	}
+	out := all[:0]
+	for _, sn := range all { // backups use short-lived snapshots of their own; hide them
+		if !strings.HasPrefix(sn.Name, backupSnapPrefix) {
+			out = append(out, sn)
+		}
+	}
+	return out, nil
 }
 
 // CreateSnapshot snapshots the VM's disk. A running guest's filesystems are

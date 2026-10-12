@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 )
 
@@ -25,6 +26,9 @@ type Config struct {
 	MaxVCPUs     int        `json:"max_vcpus"`        // per-VM ceiling
 	MaxMemoryMiB int        `json:"max_memory_mib"`   // per-VM ceiling
 	MaxDiskGB    int        `json:"max_disk_gb"`      // per-VM ceiling
+	BackupDir    string     `json:"backup_dir"`       // backup files; default data_dir/backups (put it on another disk!)
+	BackupTime   string     `json:"backup_time"`      // daily backups at HH:MM host time; default 02:30
+	BackupKeep   int        `json:"backup_keep"`      // default number of daily backups kept per VM; default 7
 }
 
 // Token is an API credential. Only the SHA-256 hex of the secret is stored.
@@ -56,6 +60,7 @@ var (
 	reDataset = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:/-]*$`)
 	reSnap    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:/-]*@[A-Za-z0-9_.:-]+$`)
 	reHex64   = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	reClock   = regexp.MustCompile(`^([01][0-9]|2[0-3]):[0-5][0-9]$`)
 )
 
 func Load(path string) (*Config, error) {
@@ -74,6 +79,15 @@ func Load(path string) (*Config, error) {
 	}
 	if err := json.Unmarshal(b, c); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
+	}
+	if c.BackupDir == "" {
+		c.BackupDir = filepath.Join(c.DataDir, "backups")
+	}
+	if c.BackupTime == "" {
+		c.BackupTime = "02:30"
+	}
+	if c.BackupKeep == 0 {
+		c.BackupKeep = 7
 	}
 	return c, c.Validate()
 }
@@ -109,6 +123,12 @@ func (c *Config) Validate() error {
 		if t.MinDiskGB <= 0 {
 			errs = append(errs, fmt.Errorf("template %q: min_disk_gb must be > 0", t.Name))
 		}
+	}
+	if c.BackupTime != "" && !reClock.MatchString(c.BackupTime) {
+		errs = append(errs, fmt.Errorf("backup_time %q must be HH:MM (24h)", c.BackupTime))
+	}
+	if c.BackupKeep < 0 || c.BackupKeep > 365 {
+		errs = append(errs, errors.New("backup_keep must be 1-365"))
 	}
 	if (c.TLSCert == "") != (c.TLSKey == "") {
 		errs = append(errs, errors.New("tls_cert and tls_key must be set together"))

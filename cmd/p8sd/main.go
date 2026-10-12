@@ -23,10 +23,12 @@ import (
 	"time"
 
 	"p8sos/internal/api"
+	"p8sos/internal/backup"
 	"p8sos/internal/cloudinit"
 	"p8sos/internal/config"
 	"p8sos/internal/execx"
 	"p8sos/internal/hostinfo"
+	"p8sos/internal/jobs"
 	"p8sos/internal/storage"
 	"p8sos/internal/tlsutil"
 	"p8sos/internal/virt"
@@ -73,20 +75,24 @@ func serve(args []string) error {
 	run := execx.System{}
 	disks := &storage.ZFS{Run: run, Dataset: cfg.VMDataset}
 	svc := &vm.Service{
-		HV:        &virt.Virsh{Run: run, URI: cfg.LibvirtURI},
-		Disks:     disks,
-		Seeds:     &cloudinit.Builder{Run: run, Dir: filepath.Join(cfg.DataDir, "seeds")},
-		Templates: cfg.Templates,
-		Bridge:    cfg.Bridge,
-		LANBridge: cfg.LANBridge,
-		BridgeUp:  func(n string) bool { _, err := os.Stat("/sys/class/net/" + n + "/bridge"); return err == nil },
-		Limits:    vm.Limits{MaxVCPUs: cfg.MaxVCPUs, MaxMemoryMiB: cfg.MaxMemoryMiB, MaxDiskGB: cfg.MaxDiskGB},
-		SSHKeys:   cfg.SSHKeys,
-		Log:       log,
+		HV:           &virt.Virsh{Run: run, URI: cfg.LibvirtURI},
+		Disks:        disks,
+		Seeds:        &cloudinit.Builder{Run: run, Dir: filepath.Join(cfg.DataDir, "seeds")},
+		Templates:    cfg.Templates,
+		Bridge:       cfg.Bridge,
+		LANBridge:    cfg.LANBridge,
+		BridgeUp:     func(n string) bool { _, err := os.Stat("/sys/class/net/" + n + "/bridge"); return err == nil },
+		Limits:       vm.Limits{MaxVCPUs: cfg.MaxVCPUs, MaxMemoryMiB: cfg.MaxMemoryMiB, MaxDiskGB: cfg.MaxDiskGB},
+		SSHKeys:      cfg.SSHKeys,
+		Log:          log,
+		Backups:      &backup.Store{Dir: cfg.BackupDir, Dataset: cfg.VMDataset, Run: run},
+		Jobs:         &jobs.Manager{Log: log},
+		ScheduleFile: filepath.Join(cfg.DataDir, "backup-schedule.json"),
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	go svc.RunSchedule(ctx, cfg.BackupTime, nil)
 	for _, t := range cfg.Templates {
 		if !disks.SnapshotExists(ctx, t.Snapshot) {
 			log.Warn("template snapshot missing; creates from it will fail", "template", t.Name, "snapshot", t.Snapshot)
@@ -97,6 +103,7 @@ func serve(args []string) error {
 		Addr: cfg.Listen,
 		Handler: (&api.Server{
 			VMs: svc, Templates: cfg.Templates, Tokens: cfg.Tokens, Version: version, Log: log,
+			BackupKeep: cfg.BackupKeep, BackupTime: cfg.BackupTime,
 			Host: func(ctx context.Context) any {
 				in := hostinfo.Collect(ctx, run, cfg.VMDataset)
 				in.Networks = svc.Networks()

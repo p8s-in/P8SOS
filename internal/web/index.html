@@ -15,6 +15,7 @@
   --accent:#818cf8; --accent-ink:#0e1116; --bar:#21262d; --shadow:none;
 }}
 *{box-sizing:border-box}
+[hidden]{display:none !important}
 body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
 button,input,select,textarea{font:inherit;color:inherit}
 header{display:flex;align-items:center;gap:12px;padding:12px 20px;background:var(--panel);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
@@ -164,7 +165,24 @@ dialog.wide{width:min(620px,calc(100vw - 32px))}
   </div>
   <table class="snaps"><tbody id="mSnaps"></tbody></table>
 
+  <h3>Backups</h3>
+  <div class="sub">A backup is a full copy of the disk in a file. It survives even if the VM is deleted, and works while the VM runs.</div>
+  <div class="inline">
+    <label style="display:flex;gap:6px;align-items:center;font-weight:400;margin:0;white-space:nowrap"><input id="mAuto" type="checkbox" style="width:auto"> Every day at <span id="mAutoAt">02:30</span>, keep</label>
+    <input id="mKeep" type="number" min="1" max="365" value="7" style="flex:0 0 64px" aria-label="Backups to keep">
+    <span class="spacer"></span>
+    <button class="btn" id="mBackupGo">Back up now</button>
+  </div>
+  <table class="snaps"><tbody id="mBackups"></tbody></table>
+
   <div class="dlg-actions"><button class="btn" id="mClose">Close</button></div>
+</div></dialog>
+
+<dialog id="dlgBackups" class="wide"><div class="dlg-body">
+  <h2>All backups</h2>
+  <div class="sub">Every VM's backups, including VMs that were deleted. Recreate a deleted VM, or make a copy under a new name.</div>
+  <table class="snaps"><tbody id="gBackups"></tbody></table>
+  <div class="dlg-actions"><button class="btn" id="gClose">Close</button></div>
 </div></dialog>
 
 <script>
@@ -238,6 +256,7 @@ function renderShell(){
     <span class="sub" id="hName"></span>
     <span class="spacer"></span>
     <span class="sub" id="hVer"></span>
+    <button class="btn" id="bBackups">Backups</button>
     <button class="btn" id="bOut">Sign out</button>
   </header>
   <main>
@@ -250,6 +269,7 @@ function renderShell(){
     </section>
   </main>`;
   $("#bOut").onclick = () => { store.clear(); token = ""; render(); };
+  $("#bBackups").onclick = openAllBackups;
   $("#bNew").onclick = openCreate;
   startPolling();
 }
@@ -383,7 +403,8 @@ async function openManage(name){
   $("#mTitle").textContent = name; $("#mSnaps").dataset.key = ""; $("#mRzHint").dataset.st = "";
   renderManage();
   $("#dlgManage").showModal();
-  await loadSnaps();
+  $("#mBackups").innerHTML = `<tr><td class="muted">Loading…</td></tr>`;
+  await Promise.all([loadSnaps(), loadBackups()]);
 }
 async function loadSnaps(){
   try { snaps = (await call("GET", `/vms/${encodeURIComponent(mName)}/snapshots`)).snapshots; }
@@ -402,6 +423,7 @@ function renderManage(){
   $("#mPwHint").textContent = v.state === "running" ? "Sets a login password inside the VM (needs it fully booted)." : "Start the VM to change a password.";
   for (const id of ["#mCpu", "#mMem", "#mDisk", "#mRzGo"]) $(id).disabled = !stopped;
   if (mVM && mVM.disk_gb !== v.disk_gb) { $("#mDisk").value = v.disk_gb; $("#mDisk").min = v.disk_gb; }
+  if (mVM && mVM.state !== v.state) renderBackups();
   mVM = v;
   const key = v.state + "|" + JSON.stringify(snaps);
   if ($("#mSnaps").dataset.key === key) return; // unchanged: keep half-confirmed buttons as they are
@@ -474,6 +496,97 @@ $("#mPwGo").onclick = async () => {
   } catch (err) { toast(err.message, true); }
   go.disabled = false;
 };
+
+/* ---------- backups ---------- */
+let mBackups = [];
+async function loadBackups(){
+  const n = encodeURIComponent(mName);
+  try {
+    const [b, sch] = await Promise.all([call("GET", `/vms/${n}/backups`), call("GET", `/vms/${n}/backup-schedule`)]);
+    mBackups = b.backups;
+    $("#mAuto").checked = sch.daily; $("#mKeep").value = sch.keep; $("#mAutoAt").textContent = sch.at;
+  } catch (err) { toast(err.message, true); }
+  renderBackups();
+}
+function backupRow(b, opts){
+  const restore = opts.restore === "hide" ? "" :
+    `<button class="btn" data-b="restore" ${opts.restore === "off" ? 'disabled title="Stop the VM first"' : ""}>${opts.restoreLabel || "Restore"}</button>`;
+  return `<tr data-vm="${esc(b.vm)}" data-id="${esc(b.id)}">
+    <td><b>${esc(fmtTime(b.created_at))}</b><div class="sub">${opts.showVM ? esc(b.vm) + " · " : ""}${fmtBytes(b.bytes || 0)} · ${b.consistent ? "clean" : "crash-consistent"} · ${b.vcpus} CPU, ${gb(b.memory_mib)}</div>
+      <div class="inline" data-copyrow hidden><input data-copyname placeholder="name of the new VM" autocomplete="off"><button class="btn primary" data-b="copygo">Create copy</button></div></td>
+    <td>${restore}<button class="btn" data-b="copy" title="Make a new VM from this backup">Copy</button><button class="btn danger" data-b="del">Delete</button></td></tr>`;
+}
+function renderBackups(){
+  const v = vms.find(x => x.name === mName); if (!v) return;
+  $("#mBackups").innerHTML = mBackups.length
+    ? mBackups.map(b => backupRow(b, {restore: v.state === "stopped" ? "on" : "off"})).join("")
+    : `<tr><td class="muted">No backups yet.</td></tr>`;
+}
+async function openAllBackups(){
+  $("#gBackups").innerHTML = `<tr><td class="muted">Loading…</td></tr>`;
+  $("#dlgBackups").showModal();
+  await loadAllBackups();
+}
+async function loadAllBackups(){
+  try {
+    const all = (await call("GET", "/backups")).backups;
+    $("#gBackups").innerHTML = all.length ? all.map(b => {
+      const exists = vms.some(v => v.name === b.vm);
+      return backupRow(b, {showVM: true, restore: exists ? "hide" : "on", restoreLabel: "Recreate " + b.vm});
+    }).join("") : `<tr><td class="muted">No backups yet. Make one under Manage on a VM.</td></tr>`;
+  } catch (err) { toast(err.message, true); }
+}
+// Follow a background job; tell the user when it ends.
+async function trackJob(job, after){
+  toast(`${job.kind} of ${job.target} started — you can keep working`);
+  for (;;) {
+    await new Promise(r => setTimeout(r, 2000));
+    let j; try { j = await call("GET", `/jobs/${job.id}`); } catch { continue; }
+    if (j.state === "done") { toast(j.message); break; }
+    if (j.state === "failed") { toast(`${j.kind} of ${j.target} failed: ${j.error}`, true); break; }
+  }
+  refresh(); after?.();
+}
+async function backupAction(e, reload){
+  const btn = e.target.closest("button[data-b]"); if (!btn) return;
+  const row = btn.closest("tr"), vm = row.dataset.vm, id = row.dataset.id, a = btn.dataset.b;
+  const path = `/backups/${encodeURIComponent(vm)}/${encodeURIComponent(id)}`;
+  try {
+    if (a === "copy") { const r = row.querySelector("[data-copyrow]"); r.hidden = !r.hidden; if (!r.hidden) r.querySelector("input").focus(); return; }
+    if (a === "copygo") {
+      const name = row.querySelector("[data-copyname]").value.trim();
+      if (!/^[a-z][a-z0-9-]{0,47}[a-z0-9]$/.test(name)) return toast("Name: lowercase letters, digits and hyphens", true);
+      btn.disabled = true;
+      trackJob(await call("POST", path + "/restore", {name}), reload);
+      row.querySelector("[data-copyrow]").hidden = true;
+    } else if (a === "restore") {
+      if (!armed(btn, "Replace the disk — sure?")) return;
+      btn.disabled = true;
+      trackJob(await call("POST", path + "/restore", {}), reload);
+    } else if (a === "del") {
+      if (!armed(btn, "Delete — sure?")) return;
+      btn.disabled = true;
+      await call("DELETE", path); toast("backup deleted"); reload();
+    }
+  } catch (err) { toast(err.message, true); btn.disabled = false; }
+}
+$("#mBackups").addEventListener("click", e => backupAction(e, loadBackups));
+$("#gBackups").addEventListener("click", e => backupAction(e, loadAllBackups));
+$("#gClose").onclick = () => $("#dlgBackups").close();
+$("#mBackupGo").onclick = async () => {
+  const go = $("#mBackupGo"); go.disabled = true;
+  try { trackJob(await call("POST", `/vms/${encodeURIComponent(mName)}/backups`), () => { if ($("#dlgManage").open) loadBackups(); }); }
+  catch (err) { toast(err.message, true); }
+  go.disabled = false;
+};
+async function saveSchedule(){
+  try {
+    const s = await call("PUT", `/vms/${encodeURIComponent(mName)}/backup-schedule`, {daily: $("#mAuto").checked, keep: +$("#mKeep").value || 7});
+    toast(s.daily ? `${mName}: daily backup at ${s.at}, keeping ${s.keep}` : `${mName}: daily backup off`);
+  } catch (err) { toast(err.message, true); }
+}
+$("#mAuto").onchange = saveSchedule;
+$("#mKeep").onchange = () => { if ($("#mAuto").checked) saveSchedule(); };
 
 /* ---------- polling ---------- */
 let tick = 0;

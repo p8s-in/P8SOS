@@ -34,6 +34,12 @@ p8 — manage P8S OS virtual machines
   p8 snaps NAME                    list snapshots
   p8 rollback NAME SNAPNAME        undo everything since that snapshot (asks first)
   p8 unsnap NAME SNAPNAME          delete a snapshot
+  p8 backup NAME                   full backup to a file now (VM can keep running)
+  p8 backups [NAME]                list backups (also of deleted VMs)
+  p8 restore NAME ID [NEWNAME]     put a backup back (asks first); NEWNAME = as a new VM copy
+  p8 rmbackup NAME ID              delete a backup
+  p8 autobackup NAME on [KEEP]|off daily automatic backup, keeping the last KEEP (default 7)
+  p8 jobs                          recent background jobs (backups, restores)
   p8 passwd NAME [USER]            set/change a password inside the VM (default user root)
   p8 ip NAME                       the VM's IP address
   p8 ssh NAME                      log into the VM as user 'debian'
@@ -54,6 +60,7 @@ Examples:
   p8 create web2 2 2048 20 --lan
   p8 templates add ubuntu-24.04 && p8 create app1 2 2048 20 --os ubuntu-24.04
   p8 snap web1 before-upgrade
+  p8 backup web1 && p8 autobackup web1 on 7
   p8 resize web1 cpus=4 ram=4096 disk=40
   p8 ssh web1
 EOF
@@ -107,6 +114,21 @@ stop_for() {
   call POST "/vms/$1/stop" '{"force":true}' >/dev/null || exit 1
 }
 start_again() { [[ $WAS_RUNNING == 1 ]] && call POST "/vms/$1/start" >/dev/null && green "✔ $1 started again"; true; }
+
+# follow_job ID: show progress until the job ends; exit status = job result
+follow_job() {
+  local last="" j st msg
+  while :; do
+    j=$(call GET "/jobs/$1") || return 1
+    st=$(jq -r .state <<<"$j"); msg=$(jq -r .message <<<"$j")
+    [[ $msg != "$last" && $st == running ]] && { echo "  ... $msg"; last=$msg; }
+    case $st in
+      done)   green "✔ $msg"; return 0 ;;
+      failed) red "✘ $(jq -r .error <<<"$j")"; return 1 ;;
+    esac
+    sleep 2
+  done
+}
 
 human() { awk -v b="$1" 'BEGIN { if (b >= 2^30) printf "%.1f GB", b/2^30; else if (b >= 2^20) printf "%d MB", b/2^20; else print "<1 MB" }'; }
 
@@ -234,6 +256,62 @@ case $cmd in
     pw=$(ask_password "new password for $u on $1") || exit 1
     call POST "/vms/$1/password" "$(jq -nc --arg u "$u" --arg p "$pw" '{user:$u, password:$p}')" >/dev/null || exit 1
     green "✔ password for $u on $1 changed" ;;
+
+  backup)
+    need "${1:-}"
+    j=$(call POST "/vms/$1/backups") || exit 1
+    echo "Backing up $1 (job $(jq -r .id <<<"$j")). You can press Ctrl+C; it continues in the background."
+    follow_job "$(jq -r .id <<<"$j")" ;;
+
+  backups)
+    path=/backups; [[ -n ${1:-} ]] && path="/vms/$1/backups"
+    body=$(call GET "$path") || exit 1
+    [[ $(jq '.backups | length' <<<"$body") == 0 ]] && { echo "No backups yet. Make one: p8 backup ${1:-NAME}"; exit 0; }
+    printf '%-18s %-16s %-22s %-9s %s\n' VM ID CREATED SIZE CLEAN
+    jq -r '.backups[] | [.vm, .id, (.created_at | sub("T"; " ") | sub("Z"; " UTC")), .bytes, (if .consistent then "yes" else "crash" end)] | @tsv' <<<"$body" |
+      while IFS=$'\t' read -r v i c b k; do printf '%-18s %-16s %-22s %-9s %s\n' "$v" "$i" "$c" "$(human "$b")" "$k"; done ;;
+
+  restore)
+    need "${1:-}"; [[ -n ${2:-} ]] || { red "which backup?  p8 backups $1"; exit 1; }
+    n=$1; id=$2; new=${3:-}
+    WAS_RUNNING=0
+    if [[ -z $new || $new == "$n" ]]; then
+      new=""
+      if [[ -n $(vm_state "$n") ]]; then
+        echo "This puts $n's disk back to backup $id. Everything on it since then is lost (snapshots too)."
+        if [[ ${4:-} != -y && ${3:-} != -y ]]; then read -r -p "Continue? [y/N] " a; [[ $a == [yY]* ]] || { echo "cancelled"; exit 0; }; fi
+        YES=1 stop_for "$n" "restore it"
+      else
+        echo "$n doesn't exist any more; it will be recreated from backup $id."
+      fi
+    fi
+    req='{}'; [[ -n $new ]] && req=$(jq -nc --arg n "$new" '{name:$n}')
+    j=$(call POST "/backups/$n/$id/restore" "$req") || { start_again "$n"; exit 1; }
+    follow_job "$(jq -r .id <<<"$j")" || exit 1
+    start_again "$n" ;;
+
+  rmbackup)
+    need "${1:-}"; [[ -n ${2:-} ]] || { red "which backup?  p8 backups $1"; exit 1; }
+    call DELETE "/backups/$1/$2" >/dev/null || exit 1
+    green "✔ backup $2 of $1 deleted" ;;
+
+  autobackup)
+    need "${1:-}"
+    case ${2:-} in
+      on)  body=$(call PUT "/vms/$1/backup-schedule" "$(jq -nc --argjson k "${3:-0}" '{daily:true, keep:$k}')") || exit 1 ;;
+      off) body=$(call PUT "/vms/$1/backup-schedule" '{"daily":false}') || exit 1 ;;
+      "")  body=$(call GET "/vms/$1/backup-schedule") || exit 1 ;;
+      *)   red "use: p8 autobackup $1 on [KEEP]  |  p8 autobackup $1 off"; exit 1 ;;
+    esac
+    if [[ $(jq -r .daily <<<"$body") == true ]]; then
+      green "✔ $1 is backed up every day at $(jq -r .at <<<"$body"), keeping the last $(jq -r .keep <<<"$body")"
+    else echo "$1 has no automatic backup. Turn on: p8 autobackup $1 on"; fi ;;
+
+  jobs)
+    body=$(call GET /jobs) || exit 1
+    [[ $(jq '.jobs | length' <<<"$body") == 0 ]] && { echo "No jobs yet."; exit 0; }
+    jq -r '.jobs[] | [.id, .kind, .target, .state, (.started_at | sub("T"; " ") | sub("Z"; "")), (if .error != null and .error != "" then .error else .message end)] | @tsv' <<<"$body" |
+      while IFS=$'\t' read -r i k t s st m; do printf '%-13s %-8s %-14s %-8s %-20s %s\n' "$i" "$k" "$t" "$s" "$st" "$m"; done ;;
 
   ip)
     need "${1:-}"; ip=$(vm_ip "$1")

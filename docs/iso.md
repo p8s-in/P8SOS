@@ -105,6 +105,20 @@ When creating a VM you can set a **root password** (dashboard: *Root password* f
 allowed (`ssh root@<VM IP>`); untick the box for console-only. Change any password later:
 dashboard **Manage → Change password**, or `p8 passwd web3` (root) / `p8 passwd web3 debian`.
 
+## Backups
+
+A backup is a full copy of a VM's disk in a file — unlike a snapshot it survives deleting the VM.
+```
+p8 backup web1                       # now (the VM can keep running)
+p8 autobackup web1 on 7              # every day at 02:30, keep the last 7
+p8 backups                           # list (also of deleted VMs)
+p8 restore web1 20261012-023000      # put it back (asks, stops and restarts web1)
+p8 restore web1 20261012-023000 web1-copy   # or: a new VM from it
+```
+Dashboard: **Manage → Backups** on a VM, or the **Backups** button at the top for all of them.
+Backups live in `/var/lib/p8s/backups`. For real safety point `backup_dir` in `/etc/p8s/p8sd.json`
+at a second disk (e.g. `/mnt/backup`) and `sudo systemctl restart p8sd`.
+
 ## 8. Console (the VM's screen in your browser)
 
 Dashboard → **Console** on a running VM opens its screen in a new tab: you see it boot and can
