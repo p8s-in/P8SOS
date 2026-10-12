@@ -35,12 +35,13 @@ type Quota struct {
 	VCPUs     int  `json:"vcpus"`
 	MemoryMiB int  `json:"memory_mib"`
 	DiskGB    int  `json:"disk_gb"`
-	LAN       bool `json:"lan"`   // may put VMs on the home/LAN network
-	Sites     int  `json:"sites"` // websites published on the internet (Cloudflare Tunnel)
+	LAN       bool `json:"lan"`        // may put VMs on the home/LAN network
+	Sites     int  `json:"sites"`      // websites published on the internet (Cloudflare Tunnel)
+	PublicIPs int  `json:"public_ips"` // VMs with a public address from an IP pool
 }
 
 // DefaultQuota is what a new customer gets unless the admin says otherwise.
-var DefaultQuota = Quota{VMs: 2, VCPUs: 4, MemoryMiB: 4096, DiskGB: 60, Sites: 3}
+var DefaultQuota = Quota{VMs: 2, VCPUs: 4, MemoryMiB: 4096, DiskGB: 60, Sites: 3, PublicIPs: 2}
 
 // User is one account as stored.
 type User struct {
@@ -230,7 +231,7 @@ func (s *Store) Add(name, role, password string, q Quota) (Public, error) {
 }
 
 func checkQuota(q Quota) error {
-	if q.VMs < 0 || q.VCPUs < 0 || q.MemoryMiB < 0 || q.DiskGB < 0 || q.Sites < 0 {
+	if q.VMs < 0 || q.VCPUs < 0 || q.MemoryMiB < 0 || q.DiskGB < 0 || q.Sites < 0 || q.PublicIPs < 0 {
 		return fmt.Errorf("%w: quota values can't be negative", ErrInvalid)
 	}
 	return nil

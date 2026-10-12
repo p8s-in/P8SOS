@@ -55,6 +55,10 @@ p8 — manage P8S OS virtual machines
   p8 templates                     installed OS templates
   p8 templates available           OS images that can be added
   p8 templates add NAME            download and add one (e.g. ubuntu-24.04, rocky-9)
+  p8 ippools                       public IP pools and who has which address
+  p8 ippool add NAME NETWORK GATEWAY [bridge=br0] [customers=yes]
+                                   e.g. p8 ippool add dc1 203.0.113.8/29 203.0.113.9
+  p8 create NAME ... --ip POOL     VM with a public IP from POOL (static, set automatically)
   p8 tunnel setup                  put the dashboard and websites on the internet (Cloudflare Tunnel)
   p8 tunnel [dashboard NAME|off]   status / publish the dashboard as NAME.yourdomain
   p8 publish VM NAME PORT [--https]  website: https://NAME.yourdomain -> VM:PORT
@@ -62,7 +66,7 @@ p8 — manage P8S OS virtual machines
   p8 fw NAME [on|off]              VM firewall: show, switch on/off
   p8 fw NAME allow tcp 22 [from 203.0.113.0/24] | allow ping | remove N
   p8 users                         user accounts (dashboard sign-in)
-  p8 user add NAME [--admin] [vms=2 cpus=4 ram=4096 disk=60 lan=no sites=3]
+  p8 user add NAME [--admin] [vms=2 cpus=4 ram=4096 disk=60 lan=no sites=3 ips=2]
                                    new customer (or admin); asks for the password
   p8 user quota NAME vms=3 ram=8192 ...   change a customer's plan
   p8 user passwd|disable|enable|2fa-off|rm NAME
@@ -159,7 +163,7 @@ table() {
   jq -r '(["NAME","STATE","IP","NET","CPUS","RAM_MB","DISK_GB","OWNER","TEMPLATE"]),
          (.vms[] | [.name, .state, (if .ip == "" then "-" else .ip end), (.network // "nat"), .vcpus, .memory_mib,
                     .disk_gb, (.owner // "-"), .template]) | @tsv' |
-    awk -F'\t' '{printf "%-18s %-9s %-16s %-4s %-5s %-7s %-8s %-12s %s\n", $1,$2,$3,$4,$5,$6,$7,$8,$9}'
+    awk -F'\t' '{printf "%-18s %-9s %-16s %-6s %-5s %-7s %-8s %-12s %s\n", $1,$2,$3,$4,$5,$6,$7,$8,$9}'
 }
 
 cmd=${1:-help}; shift || true
@@ -170,9 +174,10 @@ case $cmd in
     table <<<"$body" ;;
 
   create|new)
-    net=nat; args=(); askpw=0; os=debian-13; next_os=0; iso=""; next_iso=0; ostype=linux; owner=""; next_for=0
+    net=nat; args=(); askpw=0; os=debian-13; next_os=0; iso=""; next_iso=0; ostype=linux; owner=""; next_for=0; ippool=""; next_ip=0
     for a in "$@"; do
       if (( next_for )); then owner=$a; next_for=0; continue; fi
+      if (( next_ip )); then ippool=$a; next_ip=0; continue; fi
       if (( next_os )); then os=$a; next_os=0; continue; fi
       if (( next_iso )); then iso=$a; next_iso=0; continue; fi
       case $a in
@@ -180,6 +185,7 @@ case $cmd in
         --os|--template) next_os=1 ;; --os=*|--template=*) os=${a#*=} ;;
         --iso) next_iso=1 ;; --iso=*) iso=${a#*=} ;; --windows) ostype=windows ;;
         --for) next_for=1 ;; --for=*) owner=${a#*=} ;;
+        --ip) next_ip=1 ;; --ip=*) ippool=${a#*=} ;;
         *) args+=("$a") ;;
       esac
     done
@@ -188,6 +194,7 @@ case $cmd in
       req=$(jq -nc --arg n "$1" --arg c "${2:-0}" --arg m "${3:-0}" --arg d "${4:-0}" --arg i "$iso" --arg t "$ostype" --arg net "$net" \
         '{name:$n, iso:$i, os_type:$t, vcpus:($c|tonumber), memory_mib:($m|tonumber), disk_gb:($d|tonumber), network:$net}')
       [[ -n $owner ]] && req=$(jq -c --arg o "$owner" '. + {owner: $o}' <<<"$req")
+      [[ -n $ippool ]] && req=$(jq -c --arg p "$ippool" 'del(.network) + {ip_pool: $p}' <<<"$req")
       body=$(call POST /vms "$req") || exit 1
       green "✔ $1 is booting $iso ($(jq -r '"\(.vcpus) CPU, \(.memory_mib) MB, \(.disk_gb) GB"' <<<"$body"))"
       echo "  Install it in the dashboard: Console on $1. Afterwards: p8 stop $1 && p8 eject $1"
@@ -202,6 +209,7 @@ case $cmd in
       --arg os "$os" \
       '{name:$n, template:$os, vcpus:($c|tonumber), memory_mib:($m|tonumber), disk_gb:($d|tonumber), ssh_keys:$k, network:$net}')
     [[ -n $owner ]] && req=$(jq -c --arg o "$owner" '. + {owner: $o}' <<<"$req")
+    [[ -n $ippool ]] && req=$(jq -c --arg p "$ippool" 'del(.network) + {ip_pool: $p}' <<<"$req")
     if (( askpw )); then
       pw=$(ask_password "root password for $1") || exit 1
       req=$(jq -c --arg p "$pw" '. + {root_password: $p, ssh_password_auth: true}' <<<"$req")
@@ -394,6 +402,7 @@ case $cmd in
           ram=*)  q=$(jq -c --argjson v "${kv#*=}" '.memory_mib=$v' <<<"$q") ;;
           disk=*) q=$(jq -c --argjson v "${kv#*=}" '.disk_gb=$v' <<<"$q") ;;
           sites=*) q=$(jq -c --argjson v "${kv#*=}" '.sites=$v' <<<"$q") ;;
+          ips=*|public_ips=*) q=$(jq -c --argjson v "${kv#*=}" '.public_ips=$v' <<<"$q") ;;
           lan=yes|lan=on|lan=true) q=$(jq -c '.lan=true' <<<"$q") ;;
           lan=no|lan=off|lan=false) q=$(jq -c '.lan=false' <<<"$q") ;;
           *) red "unknown setting '$kv' (use vms= cpus= ram=MB disk=GB lan=yes|no)"; exit 1 ;;
@@ -405,11 +414,11 @@ case $cmd in
       add)
         need "${1:-}"; n=$1; shift; role=customer; kv=()
         for a in "$@"; do case $a in --admin) role=admin ;; *) kv+=("$a") ;; esac; done
-        q=$(quota_json '{"vms":2,"vcpus":4,"memory_mib":4096,"disk_gb":60,"lan":false,"sites":3}' "${kv[@]}")
+        q=$(quota_json '{"vms":2,"vcpus":4,"memory_mib":4096,"disk_gb":60,"lan":false,"sites":3,"public_ips":2}' "${kv[@]}")
         pw=$(ask_password "password for $n" 10) || exit 1
         call POST /users "$(jq -nc --arg n "$n" --arg r "$role" --arg p "$pw" --argjson q "$q" '{name:$n, role:$r, password:$p, quota:$q}')" >/dev/null || exit 1
         green "✔ $n added ($role). They sign in at the dashboard with this name and password."
-        [[ $role == customer ]] && echo "  Plan: $(jq -r '"\(.vms) VMs, \(.vcpus) CPUs, \(.memory_mib) MB RAM, \(.disk_gb) GB disk, \(.sites // 0) websites"' <<<"$q"). Change: p8 user quota $n vms=3 ram=8192 ..."
+        [[ $role == customer ]] && echo "  Plan: $(jq -r '"\(.vms) VMs, \(.vcpus) CPUs, \(.memory_mib) MB RAM, \(.disk_gb) GB disk, \(.sites // 0) websites, \(.public_ips // 0) public IPs"' <<<"$q"). Change: p8 user quota $n vms=3 ram=8192 ..."
         true ;;
       passwd|password)
         need "${1:-}"; pw=$(ask_password "new password for $1" 10) || exit 1
@@ -421,7 +430,7 @@ case $cmd in
         [[ -n $cur ]] || { red "no user $n"; exit 1; }
         q=$(quota_json "$cur" "$@")
         call PATCH "/users/$n" "$(jq -nc --argjson q "$q" '{quota:$q}')" >/dev/null || exit 1
-        green "✔ plan of $n: $(jq -r '"\(.vms) VMs, \(.vcpus) CPUs, \(.memory_mib) MB RAM, \(.disk_gb) GB disk, \(.sites // 0) websites\(if .lan then ", LAN" else "" end)"' <<<"$q")" ;;
+        green "✔ plan of $n: $(jq -r '"\(.vms) VMs, \(.vcpus) CPUs, \(.memory_mib) MB RAM, \(.disk_gb) GB disk, \(.sites // 0) websites, \(.public_ips // 0) public IPs\(if .lan then ", LAN" else "" end)"' <<<"$q")" ;;
       admin|customer)
         need "${1:-}"; call PATCH "/users/$1" "{\"role\":\"$sub\"}" >/dev/null || exit 1; green "✔ $1 is now $sub" ;;
       disable|enable)
@@ -434,7 +443,7 @@ case $cmd in
         need "${1:-}"
         if [[ ${YES:-0} != 1 ]]; then read -r -p "Delete user $1? [y/N] " a; [[ $a == [yY]* ]] || { echo "cancelled"; exit 0; }; fi
         call DELETE "/users/$1" >/dev/null || exit 1; green "✔ user $1 deleted" ;;
-      *) echo "usage: p8 user add NAME [--admin] [vms=N cpus=N ram=MB disk=GB lan=yes sites=N]"
+      *) echo "usage: p8 user add NAME [--admin] [vms=N cpus=N ram=MB disk=GB lan=yes sites=N ips=N]"
          echo "       p8 user passwd|quota|admin|customer|disable|enable|2fa-off|rm NAME"; exit 1 ;;
     esac ;;
 
@@ -536,6 +545,33 @@ TXT
 
   unpublish)
     need "${1:-}"; call DELETE "/sites/$1" >/dev/null || exit 1; green "✔ $1 is off the internet" ;;
+
+  ippools|pools)
+    b=$(call GET /ippools) || exit 1
+    [[ $(jq '.pools | length' <<<"$b") == 0 ]] && { echo "No public IP pools. Add one: p8 ippool add dc1 203.0.113.8/29 203.0.113.9"; exit 0; }
+    jq -r '.pools[] | "\(.name)  \(.cidr)  gw \(.gateway)  bridge \(.bridge)  \(.size - .free)/\(.size) used\(if .customers then "  (customers)" else "" end)",
+      (.used // {} | to_entries | sort_by(.key)[] | "    \(.key)  \(.value)")' <<<"$b" ;;
+
+  ippool|pool)
+    sub=${1:-}; shift || true
+    case $sub in
+      add)
+        [[ -n ${1:-} && -n ${2:-} && -n ${3:-} ]] || { red "usage: p8 ippool add NAME NETWORK GATEWAY [bridge=br0] [dns=1.1.1.1,8.8.8.8] [exclude=IP,IP] [customers=yes]"; exit 1; }
+        n=$1 c=$2 g=$3; shift 3; br=br0 dns="" ex="" cu=false
+        for kv in "$@"; do case $kv in bridge=*) br=${kv#*=} ;; dns=*) dns=${kv#*=} ;; exclude=*) ex=${kv#*=} ;; customers=yes|customers=true) cu=true ;; *) red "unknown $kv"; exit 1 ;; esac; done
+        b=$(call POST /ippools "$(jq -nc --arg n "$n" --arg c "$c" --arg g "$g" --arg b "$br" --arg d "$dns" --arg e "$ex" --argjson cu "$cu" \
+          '{name:$n, cidr:$c, gateway:$g, bridge:$b, dns:($d|split(",")|map(select(.!=""))), exclude:($e|split(",")|map(select(.!=""))), customers:$cu}')") || exit 1
+        green "✔ pool $(jq -r '"\(.name): \(.cidr), \(.size) usable addresses, gateway \(.gateway), on \(.bridge)"' <<<"$b")"
+        echo "  New VM with one of them:  p8 create web1 --ip $n" ;;
+      open|close)
+        need "${1:-}"; cur=$(call GET /ippools | jq -c --arg n "$1" '.pools[] | select(.name==$n)')
+        [[ -n $cur ]] || { red "no pool $1"; exit 1; }
+        call PATCH "/ippools/$1" "$(jq -c --argjson c "$([[ $sub == open ]] && echo true || echo false)" '{dns, exclude:(.exclude // []), customers:$c}' <<<"$cur")" >/dev/null || exit 1
+        green "✔ pool $1 is $([[ $sub == open ]] && echo "open to customers" || echo "admins only")" ;;
+      rm|delete)
+        need "${1:-}"; call DELETE "/ippools/$1" >/dev/null || exit 1; green "✔ pool $1 deleted" ;;
+      *) red "usage: p8 ippool add|open|close|rm ..."; exit 1 ;;
+    esac ;;
 
   jobs)
     body=$(call GET /jobs) || exit 1

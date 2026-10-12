@@ -15,6 +15,7 @@ import (
 
 	"p8sos/internal/audit"
 	"p8sos/internal/config"
+	"p8sos/internal/ippool"
 	"p8sos/internal/tunnel"
 	"p8sos/internal/users"
 	"p8sos/internal/vm"
@@ -115,7 +116,7 @@ func newMultiUserWith(t *testing.T, tun *tunnel.Manager) *mu {
 	m.log = &audit.Log{Path: filepath.Join(dir, "audit.log")}
 	s := &Server{VMs: m.vms, Version: "test", Tokens: []config.Token{{Name: "host", SHA256: hex.EncodeToString(sum[:])}},
 		Templates: []config.Template{{Name: "debian-13", MinDiskGB: 4}},
-		Users:     m.us, Sessions: &users.Sessions{}, Audit: m.log, Limiter: &users.Limiter{Max: 3}, Tunnel: tun}
+		Users:     m.us, Sessions: &users.Sessions{}, Audit: m.log, Limiter: &users.Limiter{Max: 3}, Tunnel: tun, Pools: &ippool.Store{}}
 	m.srv = httptest.NewServer(s.Handler())
 	t.Cleanup(m.srv.Close)
 	return m

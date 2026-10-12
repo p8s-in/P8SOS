@@ -17,3 +17,21 @@ func TestParseVNCDisplay(t *testing.T) {
 		}
 	}
 }
+
+func TestParseIfList(t *testing.T) {
+	out := ` Interface   Type     Source   Model    MAC
+-------------------------------------------------------
+ vnet3       bridge   br0      virtio   52:54:00:12:34:56
+
+`
+	if p := ParseIfList(out); len(p) != 1 || p[0] != "vnet3" {
+		t.Fatalf("ports %v", p)
+	}
+	stopped := ` Interface   Type     Source   Model    MAC
+-------------------------------------------------------
+ -           bridge   br0      virtio   52:54:00:12:34:56
+`
+	if p := ParseIfList(stopped); len(p) != 0 {
+		t.Fatalf("stopped VM ports %v", p)
+	}
+}

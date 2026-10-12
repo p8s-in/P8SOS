@@ -19,6 +19,7 @@ import (
 	"p8sos/internal/cloudinit"
 	"p8sos/internal/config"
 	"p8sos/internal/firewall"
+	"p8sos/internal/ippool"
 	"p8sos/internal/isos"
 	"p8sos/internal/jobs"
 	"p8sos/internal/virt"
@@ -66,6 +67,7 @@ type Service struct {
 
 	Backups      *backup.Store // nil = backups off
 	ISOs         *isos.Library // installer images; nil = ISO installs off
+	Pools        *ippool.Store // public IP pools; nil = none
 	Jobs         *jobs.Manager // runs backups and restores in the background
 	ScheduleFile string        // daily-backup settings per VM (JSON); empty = in memory only
 	FirewallFile string        // per-VM firewall settings (JSON); empty = in memory only
@@ -96,6 +98,8 @@ type VM struct {
 	UUID      string     `json:"uuid"`
 	CreatedAt string     `json:"created_at"`
 	Owner     string     `json:"owner,omitempty"` // P8S user it belongs to; empty = admins only
+	// Public is the VM's address from an IP pool (network "public").
+	Public *ippool.Lease `json:"public,omitempty"`
 }
 
 type CreateRequest struct {
@@ -106,7 +110,9 @@ type CreateRequest struct {
 	DiskGB    int      `json:"disk_gb"`
 	SSHKeys   []string `json:"ssh_keys"`
 	UserData  string   `json:"user_data,omitempty"`
-	Network   string   `json:"network,omitempty"` // "nat" (default) or "lan"
+	Network   string   `json:"network,omitempty"` // "nat" (default), "lan", or "public" (with ip_pool)
+	// IPPool gives the VM a public address from this pool (static, via cloud-init).
+	IPPool string `json:"ip_pool,omitempty"`
 	// ISO installs by hand from an image in the ISO library instead of a
 	// template: empty disk of DiskGB, boots the CD, install via the console.
 	ISO    string `json:"iso,omitempty"`
@@ -207,6 +213,9 @@ func (s *Service) validate(r *CreateRequest) (config.Template, error) {
 			break
 		}
 	}
+	if msg := s.checkPool(r); msg != "" {
+		errs = append(errs, msg)
+	}
 	switch r.Network {
 	case "", NetNAT:
 		r.Network = NetNAT
@@ -214,8 +223,9 @@ func (s *Service) validate(r *CreateRequest) (config.Template, error) {
 		if !s.LANAvailable() {
 			errs = append(errs, "network \"lan\" is not set up on this host (run: sudo p8 lan-setup)")
 		}
+	case NetPublic:
 	default:
-		errs = append(errs, `network must be "nat" or "lan"`)
+		errs = append(errs, `network must be "nat", "lan" or "public"`)
 	}
 	if r.RootPassword != "" {
 		if len(r.RootPassword) < 8 || len(r.RootPassword) > 128 || strings.ContainsAny(r.RootPassword, "\n\r\x00") {
@@ -289,6 +299,16 @@ func (s *Service) Create(ctx context.Context, r CreateRequest) (VM, error) {
 		ci.RootPasswordHash = cloudinit.HashPassword(r.RootPassword)
 		ci.RootSSHPassword = r.SSHPasswordAuth == nil || *r.SSHPasswordAuth
 	}
+	mac, bridge := virt.RandomMAC(), s.bridgeFor(r.Network)
+	if r.IPPool != "" {
+		l, release, err := s.lease(r.IPPool, r.Name, "")
+		if err != nil {
+			rollback()
+			return VM{}, err
+		}
+		undo = append(undo, release)
+		ci.Static, bridge = static(l, mac), l.Bridge
+	}
 	seed, err := s.Seeds.Build(ctx, dom, ci)
 	if err != nil {
 		rollback()
@@ -298,7 +318,7 @@ func (s *Service) Create(ctx context.Context, r CreateRequest) (VM, error) {
 
 	spec := virt.Spec{
 		Name: dom, UUID: uuid, VCPUs: r.VCPUs, MemoryMiB: r.MemoryMiB, DiskGB: r.DiskGB,
-		DiskPath: disk, SeedISO: seed, Bridge: s.bridgeFor(r.Network), MAC: virt.RandomMAC(),
+		DiskPath: disk, SeedISO: seed, Bridge: bridge, MAC: mac,
 		Template: t.Name, CreatedAt: time.Now().UTC().Format(time.RFC3339), Owner: r.Owner,
 	}
 	xml, err := virt.DomainXML(spec)
@@ -322,6 +342,7 @@ func (s *Service) Create(ctx context.Context, r CreateRequest) (VM, error) {
 			rollback()
 			return VM{}, err
 		}
+		s.afterStart(ctx, r.Name)
 	}
 	return s.get(ctx, dom)
 }
@@ -353,6 +374,11 @@ func (s *Service) get(ctx context.Context, dom string) (VM, error) {
 		Owner: spec.Owner,
 		User:  "debian",
 	}
+	if s.Pools != nil {
+		if l, ok := s.Pools.Lookup(v.Name); ok {
+			v.Public, v.Network = &l, NetPublic
+		}
+	}
 	if t, ok := s.template(spec.Template); ok {
 		v.User = t.User()
 	} else if strings.HasPrefix(spec.Template, "iso:") {
@@ -365,7 +391,9 @@ func (s *Service) get(ctx context.Context, dom string) (VM, error) {
 	// Best effort: these must never make GET/list fail.
 	v.Autostart, _ = s.HV.Autostart(ctx, dom)
 	if st == virt.Running {
-		if ips, _ := s.HV.Addresses(ctx, dom); len(ips) > 0 {
+		if v.Public != nil {
+			v.IP = v.Public.IP // fixed address; no lookup needed
+		} else if ips, _ := s.HV.Addresses(ctx, dom); len(ips) > 0 {
 			v.IP = ips[0]
 		}
 	}
@@ -406,8 +434,20 @@ func (s *Service) Start(ctx context.Context, name string) (VM, error) {
 		if err := s.HV.Start(ctx, dom); err != nil {
 			return VM{}, err
 		}
+		s.afterStart(ctx, name)
 	}
 	return s.get(ctx, dom)
+}
+
+// afterStart re-applies firewall rules that depend on the VM's host port
+// (public-address pinning); the port name changes on every start.
+func (s *Service) afterStart(ctx context.Context, name string) {
+	if s.Pools == nil {
+		return
+	}
+	if _, ok := s.Pools.Lookup(name); ok {
+		s.logErr("firewall after start of "+name, s.ApplyFirewalls(context.WithoutCancel(ctx)))
+	}
 }
 
 // Reboot asks a running guest to restart via ACPI.
@@ -468,6 +508,7 @@ func (s *Service) Delete(ctx context.Context, name string) error {
 	// Backups are kept (a deleted VM can be restored); its daily schedule is not.
 	s.logErr("remove backup schedule", s.SetSchedule(name, Schedule{}))
 	s.logErr("remove firewall", s.dropFirewall(context.WithoutCancel(ctx), name))
+	s.releaseIP(context.WithoutCancel(ctx), name)
 	if err := s.Disks.DestroyDisk(context.WithoutCancel(ctx), dom); err != nil {
 		return fmt.Errorf("domain removed but disk cleanup failed: %w", err)
 	}

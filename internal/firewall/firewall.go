@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"os"
 	"regexp"
 	"sort"
@@ -44,6 +45,10 @@ type VM struct {
 	Name string
 	MAC  string
 	FW   Settings
+	// LockIP pins a VM with a public address: frames from its ports must
+	// carry its own MAC and this IPv4 (no taking a neighbour's address).
+	LockIP string
+	Ports  []string // the VM's ports on the host (vnetN) while it runs
 }
 
 // ErrInvalid wraps every validation problem.
@@ -53,6 +58,7 @@ const MaxRules = 32
 
 var (
 	reMAC     = regexp.MustCompile(`^[0-9a-f]{2}(:[0-9a-f]{2}){5}$`)
+	rePort    = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,15}$`)
 	reComment = regexp.MustCompile(`^[\pL\pN .,:;()_/+-]{0,60}$`)
 )
 
@@ -148,15 +154,30 @@ func Rules(vms []VM) (string, error) {
 	sort.Slice(vms, func(i, j int) bool { return vms[i].Name < vms[j].Name })
 	var b strings.Builder
 	fmt.Fprintf(&b, "table bridge %[1]s\ndelete table bridge %[1]s\ntable bridge %[1]s {\n", Table)
-	var jumps []string
+	var jumps, locks []string
 	n := 0
 	for _, v := range vms {
+		mac := strings.ToLower(v.MAC)
+		if (v.FW.Enabled || v.LockIP != "") && !reMAC.MatchString(mac) {
+			return "", fmt.Errorf("firewall: vm %q has a bad MAC %q", v.Name, v.MAC)
+		}
+		if v.LockIP != "" {
+			ip, err := netip.ParseAddr(v.LockIP)
+			if err != nil || !ip.Is4() {
+				return "", fmt.Errorf("firewall: vm %q: bad address %q", v.Name, v.LockIP)
+			}
+			for _, p := range v.Ports {
+				if !rePort.MatchString(p) {
+					return "", fmt.Errorf("firewall: vm %q: bad port name %q", v.Name, p)
+				}
+				locks = append(locks,
+					fmt.Sprintf("\t\tiifname %q ether saddr != %s counter drop comment %q\n", p, mac, v.Name+": not its MAC"),
+					fmt.Sprintf("\t\tiifname %q ether type ip ip saddr != %s counter drop comment %q\n", p, ip, v.Name+": not its IP"),
+					fmt.Sprintf("\t\tiifname %q ether type arp arp saddr ip != %s counter drop comment %q\n", p, ip, v.Name+": ARP for another IP"))
+			}
+		}
 		if !v.FW.Enabled {
 			continue
-		}
-		mac := strings.ToLower(v.MAC)
-		if !reMAC.MatchString(mac) {
-			return "", fmt.Errorf("firewall: vm %q has a bad MAC %q", v.Name, v.MAC)
 		}
 		fw, err := Validate(v.FW)
 		if err != nil {
@@ -193,6 +214,12 @@ func Rules(vms []VM) (string, error) {
 		b.WriteString("\t}\n")
 		jumps = append(jumps, fmt.Sprintf("\t\tether daddr %s jump %s\n", mac, chain))
 	}
+	// Anti-spoofing for VMs with public addresses, before anything else.
+	b.WriteString("\tchain spoof {\n\t\ttype filter hook prerouting priority -200; policy accept;\n")
+	for _, l := range locks {
+		b.WriteString(l)
+	}
+	b.WriteString("\t}\n")
 	for _, hook := range []string{"forward", "output"} {
 		fmt.Fprintf(&b, "\tchain %s {\n\t\ttype filter hook %s priority 0; policy accept;\n", hook, hook)
 		for _, j := range jumps {

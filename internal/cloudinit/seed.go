@@ -20,6 +20,38 @@ type Spec struct {
 	RootPasswordHash string
 	// RootSSHPassword also allows SSH logins as root with that password.
 	RootSSHPassword bool
+	// Static sets a fixed address (public IP from a pool) instead of DHCP.
+	Static *Static
+}
+
+// Static is a fixed IPv4 configuration for the VM's network card.
+type Static struct {
+	MAC     string   // the VM's NIC, e.g. 52:54:00:12:34:56
+	IP      string   // e.g. 203.0.113.10
+	Prefix  int      // e.g. 29
+	Gateway string   // e.g. 203.0.113.9
+	DNS     []string // name servers
+	OnLink  bool     // gateway outside the network (routed /32): on-link route
+}
+
+// NetworkConfig renders cloud-init network config v2 for a static address.
+func NetworkConfig(st Static) string {
+	var b strings.Builder
+	b.WriteString("version: 2\nethernets:\n  eth0:\n")
+	fmt.Fprintf(&b, "    match:\n      macaddress: %q\n    set-name: eth0\n", strings.ToLower(st.MAC))
+	fmt.Fprintf(&b, "    addresses: [\"%s/%d\"]\n", st.IP, st.Prefix)
+	fmt.Fprintf(&b, "    routes:\n      - to: 0.0.0.0/0\n        via: %s\n", st.Gateway)
+	if st.OnLink {
+		b.WriteString("        on-link: true\n")
+	}
+	if len(st.DNS) > 0 {
+		q := make([]string, len(st.DNS))
+		for i, d := range st.DNS {
+			q[i] = fmt.Sprintf("%q", d)
+		}
+		fmt.Fprintf(&b, "    nameservers:\n      addresses: [%s]\n", strings.Join(q, ", "))
+	}
+	return b.String()
 }
 
 type Builder struct {
@@ -58,7 +90,15 @@ func (b *Builder) Build(ctx context.Context, vm string, s Spec) (string, error) 
 		return "", err
 	}
 	out := b.Path(vm)
-	if _, err := b.Run.Run(ctx, "cloud-localds", out, udPath, mdPath); err != nil {
+	args := []string{out, udPath, mdPath}
+	if s.Static != nil {
+		ncPath := filepath.Join(tmp, "network-config")
+		if err := os.WriteFile(ncPath, []byte(NetworkConfig(*s.Static)), 0o600); err != nil {
+			return "", err
+		}
+		args = append([]string{"--network-config=" + ncPath}, args...)
+	}
+	if _, err := b.Run.Run(ctx, "cloud-localds", args...); err != nil {
 		return "", fmt.Errorf("build seed: %w", err)
 	}
 	return out, nil

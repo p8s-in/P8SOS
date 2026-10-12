@@ -106,6 +106,7 @@ func (s *Service) runBackup(ctx context.Context, name string, keep int, p jobs.P
 	m, err := s.Backups.Save(ctx, dom, snap, Backup{
 		ID: id, VM: name, Template: v.Template, User: v.User, Network: v.Network, OSType: v.OSType,
 		VCPUs: v.VCPUs, MemoryMiB: v.MemoryMiB, DiskGB: v.DiskGB, Consistent: consistent, Owner: v.Owner,
+		Pool: poolOf(v), PublicIP: publicIPOf(v),
 	})
 	if err != nil {
 		return "", err
@@ -261,18 +262,33 @@ func (s *Service) restoreAsNew(ctx context.Context, name string, m Backup, p job
 	uuid := newUUID()
 	// A new instance-id makes cloud-init treat it as a new machine: new hostname,
 	// new SSH host keys. Users, passwords and data come from the backup.
-	seed, err := s.Seeds.Build(ctx, dom, cloudinit.Spec{InstanceID: uuid, Hostname: name, SSHKeys: s.defaultKeys(m.Owner)})
+	ci := cloudinit.Spec{InstanceID: uuid, Hostname: name, SSHKeys: s.defaultKeys(m.Owner)}
+	network := m.Network
+	if network == NetLAN && !s.LANAvailable() || network == NetPublic {
+		network = NetNAT
+	}
+	mac, note, bridge := virt.RandomMAC(), "", s.bridgeFor(network)
+	// A deleted VM recreated under its own name gets its public address back
+	// (or another one from the pool); copies under a new name stay private.
+	if m.Pool != "" && name == m.VM && s.Pools != nil {
+		if l, release, err := s.lease(m.Pool, name, m.PublicIP); err == nil {
+			undo = append(undo, release)
+			ci.Static, bridge = static(l, mac), l.Bridge
+			if l.IP != m.PublicIP {
+				note = fmt.Sprintf(" (new public IP %s; %s was taken)", l.IP, m.PublicIP)
+			}
+		} else {
+			note = fmt.Sprintf(" (no public IP: %v; it is on the private network)", err)
+		}
+	}
+	seed, err := s.Seeds.Build(ctx, dom, ci)
 	if err != nil {
 		return fail(err)
 	}
 	undo = append(undo, func() { s.logErr("rollback seed", s.Seeds.Remove(dom)) })
-	network := m.Network
-	if network == NetLAN && !s.LANAvailable() {
-		network = NetNAT
-	}
 	spec := virt.Spec{
 		Name: dom, UUID: uuid, VCPUs: max(m.VCPUs, 1), MemoryMiB: max(m.MemoryMiB, 256), DiskGB: diskGB,
-		DiskPath: disk, SeedISO: seed, Bridge: s.bridgeFor(network), MAC: virt.RandomMAC(),
+		DiskPath: disk, SeedISO: seed, Bridge: bridge, MAC: mac,
 		Template: m.Template, OSType: m.OSType, CreatedAt: time.Now().UTC().Format(time.RFC3339), Owner: m.Owner,
 	}
 	x, err := virt.DomainXML(spec)
@@ -290,7 +306,8 @@ func (s *Service) restoreAsNew(ctx context.Context, name string, m Backup, p job
 	if err := s.HV.Start(ctx, dom); err != nil {
 		return fail(err)
 	}
-	return fmt.Sprintf("%s created from backup %s of %s and started", name, m.ID, m.VM), nil
+	s.afterStart(ctx, name)
+	return fmt.Sprintf("%s created from backup %s of %s and started%s", name, m.ID, m.VM, note), nil
 }
 
 // --- daily schedule ---
@@ -431,4 +448,18 @@ func (s *Service) defaultKeys(owner string) []string {
 		return nil
 	}
 	return s.SSHKeys
+}
+
+func poolOf(v VM) string {
+	if v.Public != nil {
+		return v.Public.Pool
+	}
+	return ""
+}
+
+func publicIPOf(v VM) string {
+	if v.Public != nil {
+		return v.Public.IP
+	}
+	return ""
 }

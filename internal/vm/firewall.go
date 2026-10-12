@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"p8sos/internal/firewall"
+	"p8sos/internal/virt"
 )
 
 // Firewall settings live in one JSON file (VM name -> settings), like backup
@@ -124,8 +125,15 @@ func (s *Service) applyFirewalls(ctx context.Context, m map[string]firewall.Sett
 	}
 	list := []firewall.VM{}
 	for _, v := range vms {
-		if fw, ok := m[v.Name]; ok && fw.Enabled {
-			list = append(list, firewall.VM{Name: v.Name, MAC: v.MAC, FW: fw})
+		e := firewall.VM{Name: v.Name, MAC: v.MAC, FW: m[v.Name]}
+		if v.Public != nil && v.State == virt.Running {
+			// Pin the public address to this VM's port (ports change on every start).
+			if ports, err := s.HV.Ports(ctx, Prefix+v.Name); err == nil && len(ports) > 0 {
+				e.LockIP, e.Ports = v.Public.IP, ports
+			}
+		}
+		if e.FW.Enabled || e.LockIP != "" {
+			list = append(list, e)
 		}
 	}
 	return s.Firewall(ctx, list)

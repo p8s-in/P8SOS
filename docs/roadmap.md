@@ -36,6 +36,9 @@ Each phase ships something usable on its own.
       dashboard Manage → Firewall, `p8 fw`
 - [x] Public access (v0.4 part 2): Cloudflare Tunnel set up by `p8 tunnel setup` (API: tunnel, routes, DNS), dashboard on
       panel.<domain>, VM websites `p8 publish` / Manage → Websites, `sites` in customer plans, real visitor IP in the audit log
+- [x] Public IP pools (v0.4): address blocks per bridge (bridged or routed), static config via cloud-init network-config,
+      anti-spoofing (MAC + IPv4 pinned to the VM's port), `public_ips` in plans, address kept for recreated VMs;
+      Settings → Public IP pools, New VM → Public IP, `p8 ippool` / `p8 create --ip`
 - [x] Thin VM disks, `p8 storage grow`, file pool sized from free space
 
 Still to do: projects, scoped API tokens per user; per-tenant VLAN/bridge;

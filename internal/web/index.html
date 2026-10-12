@@ -99,6 +99,8 @@ dialog form.uform{padding:0}
 .fw td{padding:4px 4px 4px 0}
 .fw select,.fw input{padding:5px 7px}
 .fw select{width:86px}.fw td:nth-child(2){width:24%}.fw td:last-child{width:1%}
+#pList td:first-child,#tSites td,#mSites td:first-child,#mPub{white-space:normal;overflow-wrap:anywhere}
+#pList td:last-child{white-space:nowrap;vertical-align:top}
 .steps{margin:8px 0 4px;padding-left:20px}.steps li{margin:3px 0}
 .state.connected .dot{background:var(--ok)} .state.starting .dot{background:var(--warn)} .state.error .dot,.state.not_installed .dot{background:var(--bad)}
 .btn.confirm{background:var(--bad);border-color:var(--bad);color:#fff}
@@ -183,6 +185,9 @@ dialog form.uform{padding:0}
   <div id="mOwnerBox" hidden><h3>Owner</h3>
     <div class="inline"><select id="mOwner"></select><button class="btn" id="mOwnerGo">Give</button></div>
     <div class="hint">The owner sees and manages this VM. Admins always can.</div></div>
+
+  <div id="mPubBox" hidden><h3>Public IP</h3>
+    <div class="sub" id="mPub"></div></div>
 
   <div id="mCD" hidden><h3>Installer CD</h3>
     <div class="inline"><span class="sub" id="mCDTxt"></span><span class="spacer"></span><button class="btn" id="mEject">Eject</button></div></div>
@@ -284,7 +289,8 @@ dialog form.uform{padding:0}
       <div><label>RAM (MB)</label><input data-q="memory_mib" type="number" min="0" step="256" value="4096"></div>
       <div><label>Disk (GB)</label><input data-q="disk_gb" type="number" min="0" value="60"></div>
     </div>
-    <div class="row qrow"><div><label>Websites</label><input data-q="sites" type="number" min="0" value="3"></div></div>
+    <div class="row qrow"><div><label>Websites</label><input data-q="sites" type="number" min="0" value="3"></div>
+      <div><label>Public IPs</label><input data-q="public_ips" type="number" min="0" value="2"></div></div>
     <label class="check"><input data-q="lan" type="checkbox"> May use the home/LAN network</label>
     <div class="dlg-actions"><button class="btn primary">Add user</button></div>
   </form>
@@ -326,6 +332,27 @@ dialog form.uform{padding:0}
     <div class="hint">Add websites under Manage on a VM.</div>
     <div class="dlg-actions"><button class="btn danger" id="tOffGo">Disconnect public access</button></div>
   </div>
+  <h3>Public IP pools</h3>
+  <div class="sub">Blocks of public addresses from your datacenter or server provider. A VM created with
+    "Public IP" gets the next free address, set inside the VM automatically (no DHCP), and can only use that address.</div>
+  <table class="snaps"><tbody id="pList"></tbody></table>
+  <details class="uedit" id="pAddBox"><summary><b>Add a pool</b></summary>
+    <div class="row">
+      <div><label for="pName">Name</label><input id="pName" placeholder="dc1" autocomplete="off"></div>
+      <div><label for="pCidr">Network</label><input id="pCidr" placeholder="203.0.113.8/29" autocomplete="off"></div>
+      <div><label for="pGw">Gateway</label><input id="pGw" placeholder="203.0.113.9" autocomplete="off"></div>
+    </div>
+    <div class="row">
+      <div><label for="pBridge">Bridge</label><input id="pBridge" value="br0" autocomplete="off"></div>
+      <div><label for="pDns">DNS servers</label><input id="pDns" value="1.1.1.1, 8.8.8.8" autocomplete="off"></div>
+      <div><label for="pEx">Don't use</label><input id="pEx" placeholder="e.g. 203.0.113.10" autocomplete="off"></div>
+    </div>
+    <label class="check"><input id="pCust" type="checkbox"> Customers may use this pool</label>
+    <div class="hint">Bridge: the host bridge on the network cable these addresses arrive on (br0 after "p8 lan-setup").
+      If your provider routes the block to the server's own IP instead (e.g. Hetzner), use a routed bridge — see docs/public-ips.md.</div>
+    <div class="dlg-actions"><button class="btn primary" id="pGo">Add pool</button></div>
+  </details>
+
   <div class="dlg-actions"><button class="btn" id="tClose">Close</button></div>
 </div></dialog>
 
@@ -600,7 +627,7 @@ function renderVMs(){
     const ip = v.ip ? `<span class="mono copy" data-copy="ssh ${esc(v.user || "debian")}@${esc(v.ip)}" title="Click to copy the SSH command">${esc(v.ip)}</span>` : `<span class="muted">${v.state !== "running" ? "—" : v.iso ? "installing? open Console" : "booting…"}</span>`;
     return `<tr data-n="${esc(v.name)}">
       <td data-k="State"><span class="state ${esc(v.state)}"><span class="dot"></span>${b ? "working…" : esc(v.state)}</span></td>
-      <td data-k="Name"><b>${esc(v.name)}</b><div class="sub">${esc(templates.find(t => t.name === v.template)?.label || v.template.replace(/^iso:/, "from "))}${v.os_type === "windows" ? " · Windows" : ""}${v.network === "lan" ? " · home network" : ""}${v.iso ? " · CD in drive" : ""}${isAdmin() && v.owner ? ` · <b>${esc(v.owner)}</b>` : ""}</div></td>
+      <td data-k="Name"><b>${esc(v.name)}</b><div class="sub">${esc(templates.find(t => t.name === v.template)?.label || v.template.replace(/^iso:/, "from "))}${v.os_type === "windows" ? " · Windows" : ""}${v.network === "lan" ? " · home network" : ""}${v.public ? " · public IP" : ""}${v.iso ? " · CD in drive" : ""}${isAdmin() && v.owner ? ` · <b>${esc(v.owner)}</b>` : ""}</div></td>
       <td data-k="IP">${ip}</td>
       <td data-k="CPU">${v.vcpus}</td><td data-k="RAM">${gb(v.memory_mib)}</td><td data-k="Disk">${v.disk_gb} GB</td>
       <td data-k="Autostart">${v.autostart ? "yes" : "no"}</td>
@@ -653,12 +680,24 @@ async function openCreate(){
       userList.filter(u => u.role === "customer").map(u => `<option value="${esc(u.name)}">${esc(u.name)}</option>`).join("");
   }
   $("#cNet").querySelector('[value="lan"]').disabled = !lan;
-  if (!lan) $("#cNet").value = "nat";
+  for (const o of $("#cNet").querySelectorAll("option[data-pool]")) o.remove();
+  const pools = (await call("GET", "/ippools").catch(() => ({pools: []}))).pools;
+  for (const p of pools) {
+    const o = document.createElement("option");
+    o.value = "pool:" + p.name; o.dataset.pool = p.name; o.disabled = !p.free;
+    o.textContent = `Public IP — ${p.name} (${p.free} free)`;
+    $("#cNet").append(o);
+  }
+  if (!lan && $("#cNet").value === "lan") $("#cNet").value = "nat";
   netHint();
   $("#dlgCreate").showModal(); $("#cName").focus();
 }
 function netHint(){
   const lan = isAdmin() ? !!host?.networks?.includes("lan") : !!me?.lan;
+  if ($("#cNet").value.startsWith("pool:")) {
+    $("#cNetHint").textContent = "Gets its own public IP address: reachable from the whole internet. Consider turning on its firewall (Manage).";
+    return;
+  }
   if (!isAdmin()) { $("#cNetHint").textContent = lan ? "" : "Your VMs get a private address; ask your provider about public access."; return; }
   $("#cNetHint").innerHTML = !lan
     ? `Home network is off. To turn it on (Ethernet cable needed), run once on the host: <span class="mono">sudo p8 lan-setup</span>`
@@ -687,7 +726,9 @@ $("#fCreate").onsubmit = async e => {
   const go = $("#cGo"); go.disabled = true; go.textContent = "Creating…";
   const tpl = $("#cTpl").value, iso = tpl.startsWith("iso:") ? tpl.slice(4) : "";
   try {
-    const common = {name, vcpus: +$("#cCpu").value, memory_mib: +$("#cMem").value, disk_gb: +$("#cDisk").value, network: $("#cNet").value,
+    const net = $("#cNet").value, pool = net.startsWith("pool:") ? net.slice(5) : "";
+    const common = {name, vcpus: +$("#cCpu").value, memory_mib: +$("#cMem").value, disk_gb: +$("#cDisk").value,
+      ...(pool ? {ip_pool: pool} : {network: net}),
       ...(!$("#cOwnerBox").hidden && $("#cOwner").value ? {owner: $("#cOwner").value} : {})};
     if (iso) {
       await call("POST", "/vms", {...common, iso, os_type: $("#cOS").value});
@@ -758,6 +799,12 @@ function renderManage(){
     : `Stop the VM first to resize it. <button class="btn" data-m="stop">Stop ${esc(v.name)}</button>`;
   $("#mRzHint").dataset.st = v.state + mName;
   $("#mPwGo").disabled = !(v.state === "running");
+  $("#mPubBox").hidden = !v.public;
+  if (v.public) {
+    const p = v.public;
+    $("#mPub").innerHTML = `<b class="mono">${esc(p.ip)}/${p.prefix}</b> · gateway <span class="mono">${esc(p.gateway)}</span> · DNS <span class="mono">${esc((p.dns || []).join(", "))}</span> · pool ${esc(p.pool)}` +
+      (v.iso ? `<div class="hint">Installing from an ISO: enter these in the installer's network settings (static/manual IPv4).</div>` : "");
+  }
   $("#mCD").hidden = !v.iso;
   if (v.iso) {
     $("#mCDTxt").textContent = stopped ? `${v.iso} is in the drive. Eject it once the system is installed.`
@@ -1168,7 +1215,7 @@ async function loadUsers(){
   $("#uList").innerHTML = userList.length ? userList.map(u => {
     const q = u.quota, us = u.usage;
     const plan = u.role === "admin" ? "no limits" :
-      `${us.vms}/${q.vms} VMs · ${us.vcpus}/${q.vcpus} CPU · ${gb(us.memory_mib)}/${gb(q.memory_mib)} · ${us.disk_gb}/${q.disk_gb} GB · ${us.sites || 0}/${q.sites || 0} sites${q.lan ? " · LAN" : ""}`;
+      `${us.vms}/${q.vms} VMs · ${us.vcpus}/${q.vcpus} CPU · ${gb(us.memory_mib)}/${gb(q.memory_mib)} · ${us.disk_gb}/${q.disk_gb} GB · ${us.sites || 0}/${q.sites || 0} sites · ${us.public_ips || 0}/${q.public_ips || 0} IPs${q.lan ? " · LAN" : ""}`;
     return `<tr data-u="${esc(u.name)}"><td><b>${esc(u.name)}</b><span class="pill ${u.role === "admin" ? "on" : ""}">${u.role}</span>
       ${u.two_factor ? '<span class="pill">2FA</span>' : ""}${u.disabled ? '<span class="pill">disabled</span>' : ""}
       <div class="sub">${plan}</div><div class="uedit" hidden></div></td>
@@ -1202,7 +1249,8 @@ $("#uList").addEventListener("click", async e => {
         <div><label>RAM (MB)</label><input data-q="memory_mib" type="number" min="0" step="256" value="${q.memory_mib}"></div></div>
         <div class="row qrow"><div><label>Disk (GB)</label><input data-q="disk_gb" type="number" min="0" value="${q.disk_gb}"></div>
         <div><label>Websites</label><input data-q="sites" type="number" min="0" value="${q.sites || 0}"></div>
-        <div style="grid-column:span 2"><label>New password <span class="muted">(optional)</span></label><input data-f="pw" type="password" minlength="10" autocomplete="new-password"></div></div>
+        <div><label>Public IPs</label><input data-q="public_ips" type="number" min="0" value="${q.public_ips || 0}"></div>
+        <div><label>New password <span class="muted">(optional)</span></label><input data-f="pw" type="password" minlength="10" autocomplete="new-password"></div></div>
         <label class="check"><input data-q="lan" type="checkbox" ${q.lan ? "checked" : ""}> May use the home/LAN network</label>
         <label class="check"><input data-f="disabled" type="checkbox" ${u.disabled ? "checked" : ""}> Disabled (can't sign in)</label>
         ${u.two_factor ? '<label class="check"><input data-f="reset2fa" type="checkbox"> Turn off 2FA (lost phone)</label>' : ""}
@@ -1229,7 +1277,7 @@ let tTimer = null;
 async function openSettings(){
   $("#tToken").value = "";
   $("#dlgSettings").showModal();
-  await loadTunnel();
+  await Promise.all([loadTunnel(), loadPools()]);
   clearInterval(tTimer);
   tTimer = setInterval(() => { if ($("#dlgSettings").open) loadTunnel(true); else clearInterval(tTimer); }, 3000);
 }
@@ -1285,6 +1333,43 @@ $("#tOffGo").onclick = async e => {
 };
 $("#tClose").onclick = () => $("#dlgSettings").close();
 
+/* ---------- settings: public IP pools ---------- */
+async function loadPools(){
+  let l = [];
+  try { l = (await call("GET", "/ippools")).pools; } catch (err) { return toast(err.message, true); }
+  $("#pList").innerHTML = l.length ? l.map(p => {
+    const used = Object.entries(p.used || {}).sort((a, b) => a[0].localeCompare(b[0], undefined, {numeric: true}));
+    return `<tr data-pool="${esc(p.name)}"><td><b>${esc(p.name)}</b>${p.customers ? '<span class="pill on">customers</span>' : ""}
+      <div class="sub mono">${esc(p.cidr)} · gw ${esc(p.gateway)} · ${esc(p.bridge)} · DNS ${esc((p.dns || []).join(", "))}</div>
+      <div class="sub">${p.size - p.free} of ${p.size} used${used.length ? ": " + used.map(([ip, vm]) => `${esc(ip)} ${esc(vm)}`).join(" · ") : ""}</div></td>
+      <td><button class="btn" data-p="cust">${p.customers ? "Admins only" : "Open to customers"}</button><button class="btn danger" data-p="del">Delete</button></td></tr>`;
+  }).join("") : `<tr><td class="muted">No pools yet.</td></tr>`;
+  $("#pList").dataset.pools = JSON.stringify(l);
+}
+const csv = v => v.split(/[,\s]+/).map(x => x.trim()).filter(Boolean);
+$("#pGo").onclick = async () => {
+  const body = {name: $("#pName").value.trim(), cidr: $("#pCidr").value.trim(), gateway: $("#pGw").value.trim(),
+    bridge: $("#pBridge").value.trim(), dns: csv($("#pDns").value), exclude: csv($("#pEx").value), customers: $("#pCust").checked};
+  try {
+    const p = await call("POST", "/ippools", body);
+    toast(`Pool ${p.name}: ${p.size} addresses`); $("#pName").value = $("#pCidr").value = $("#pGw").value = $("#pEx").value = "";
+    $("#pAddBox").open = false; loadPools();
+  } catch (err) { toast(err.message, true); }
+};
+$("#pList").addEventListener("click", async e => {
+  const b = e.target.closest("[data-p]"); if (!b) return;
+  const name = b.closest("tr").dataset.pool, p = JSON.parse($("#pList").dataset.pools).find(x => x.name === name);
+  try {
+    if (b.dataset.p === "del") {
+      if (!armed(b, "Delete — sure?")) return;
+      await call("DELETE", `/ippools/${encodeURIComponent(name)}`); toast(`Pool ${name} deleted`);
+    } else {
+      await call("PATCH", `/ippools/${encodeURIComponent(name)}`, {dns: p.dns, exclude: p.exclude || [], customers: !p.customers});
+    }
+    loadPools();
+  } catch (err) { toast(err.message, true); }
+});
+
 /* ---------- activity ---------- */
 async function openAudit(){
   $("#aSub").textContent = isAdmin() ? "Every change and sign-in on this host, newest first." : "Your changes and sign-ins, newest first.";
@@ -1310,7 +1395,7 @@ async function openAccount(){
   $("#acOld").value = $("#acNew").value = $("#ac2Code").value = "";
   const q = me.quota, u = me.usage;
   $("#acPlan").innerHTML = isAdmin() ? "" : `<h3>My plan</h3><div class="sub">${u.vms} of ${q.vms} VMs · ${u.vcpus} of ${q.vcpus} CPUs ·
-    ${gb(u.memory_mib)} of ${gb(q.memory_mib)} RAM · ${u.disk_gb} of ${q.disk_gb} GB disk · ${u.sites || 0} of ${q.sites || 0} websites</div>`;
+    ${gb(u.memory_mib)} of ${gb(q.memory_mib)} RAM · ${u.disk_gb} of ${q.disk_gb} GB disk · ${u.sites || 0} of ${q.sites || 0} websites · ${u.public_ips || 0} of ${q.public_ips || 0} public IPs</div>`;
   $("#acKeys").value = (me.ssh_keys || []).join("\n");
   render2FA();
   $("#dlgAccount").showModal();

@@ -74,3 +74,31 @@ func TestRules(t *testing.T) {
 		t.Errorf("empty table: %s", s)
 	}
 }
+
+func TestSpoofLock(t *testing.T) {
+	s, err := Rules([]VM{{Name: "pub1", MAC: "52:54:00:AA:00:01", LockIP: "203.0.113.10", Ports: []string{"vnet4"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"type filter hook prerouting priority -200",
+		`iifname "vnet4" ether saddr != 52:54:00:aa:00:01 counter drop`,
+		`iifname "vnet4" ether type ip ip saddr != 203.0.113.10 counter drop`,
+		`iifname "vnet4" ether type arp arp saddr ip != 203.0.113.10 counter drop`,
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("missing %q in\n%s", want, s)
+		}
+	}
+	if strings.Contains(s, "jump") {
+		t.Error("firewall off: no inbound filtering for this VM")
+	}
+	for _, bad := range []VM{
+		{Name: "x", MAC: "52:54:00:aa:00:01", LockIP: "nope", Ports: []string{"vnet1"}},
+		{Name: "x", MAC: "52:54:00:aa:00:01", LockIP: "203.0.113.10", Ports: []string{`vnet1" accept`}},
+	} {
+		if _, err := Rules([]VM{bad}); err == nil {
+			t.Errorf("accepted %+v", bad)
+		}
+	}
+}

@@ -32,7 +32,9 @@ type Meta struct {
 	User        string `json:"user"`
 	Network     string `json:"network"`
 	OSType      string `json:"os_type,omitempty"`
-	Owner       string `json:"owner,omitempty"` // P8S user the VM belonged to
+	Owner       string `json:"owner,omitempty"`     // P8S user the VM belonged to
+	Pool        string `json:"ip_pool,omitempty"`   // public IP pool, if it had an address
+	PublicIP    string `json:"public_ip,omitempty"` // that address (given back when the VM is recreated)
 	VCPUs       int    `json:"vcpus"`
 	MemoryMiB   int    `json:"memory_mib"`
 	DiskGB      int    `json:"disk_gb"`

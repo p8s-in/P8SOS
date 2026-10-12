@@ -33,6 +33,7 @@ import (
 	"p8sos/internal/firewall"
 	"p8sos/internal/guard"
 	"p8sos/internal/hostinfo"
+	"p8sos/internal/ippool"
 	"p8sos/internal/isos"
 	"p8sos/internal/jobs"
 	"p8sos/internal/metrics"
@@ -83,6 +84,7 @@ func serve(args []string) error {
 
 	run := execx.System{}
 	disks := &storage.ZFS{Run: run, Dataset: cfg.VMDataset}
+	pools := &ippool.Store{Path: filepath.Join(cfg.DataDir, "ippools.json")}
 	svc := &vm.Service{
 		HV:           &virt.Virsh{Run: run, URI: cfg.LibvirtURI},
 		Disks:        disks,
@@ -97,6 +99,7 @@ func serve(args []string) error {
 		Backups:      &backup.Store{Dir: cfg.BackupDir, Dataset: cfg.VMDataset, Run: run},
 		Jobs:         &jobs.Manager{Log: log},
 		ISOs:         &isos.Library{Dir: cfg.ISODir},
+		Pools:        pools,
 		ScheduleFile: filepath.Join(cfg.DataDir, "backup-schedule.json"),
 		FirewallFile: filepath.Join(cfg.DataDir, "firewall.json"),
 		Firewall: func(ctx context.Context, vms []firewall.VM) error {
@@ -201,6 +204,7 @@ func serve(args []string) error {
 			Users:    &users.Store{Path: filepath.Join(cfg.DataDir, "users.json")},
 			Sessions: sessions,
 			Tunnel:   tun,
+			Pools:    pools,
 			Audit:    &audit.Log{Path: filepath.Join(cfg.DataDir, "audit.log")},
 			Issuer:   issuer(),
 		}).Handler(),

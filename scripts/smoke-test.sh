@@ -352,6 +352,31 @@ api DELETE "/users/$CU"; expect "delete customer" 204
 api GET "/audit?limit=50"
 jq -e --arg u "$CU" '[.entries[] | select(.user == $u)] | length > 0' <<<"$BODY" >/dev/null && ok "activity log records the customer's actions" || bad "audit: $BODY"
 
+step "6f. public IP pool (only with the home-network bridge)"
+api GET /host
+if jq -e '.networks | index("lan")' <<<"$BODY" >/dev/null 2>&1; then
+  PN=smoketest; PV=${NAME}p
+  api DELETE "/ippools/$PN"   # leftover
+  # TEST-NET-1 addresses (never used on real networks): the VM gets no internet, which is fine here.
+  api POST /ippools '{"name":"'"$PN"'","bridge":"br0","cidr":"192.0.2.0/30","gateway":"192.0.2.1"}'; expect "add IP pool" 201
+  [[ $(jq -r .size <<<"$BODY") == 1 ]] && ok "pool has 1 usable address (/30 minus network, broadcast, gateway)" || bad "pool: $BODY"
+  api POST /vms '{"name":"'"$PV"'","template":"debian-13","ip_pool":"'"$PN"'","memory_mib":512}'; expect "create VM with a public IP" 201
+  [[ $(jq -r .network <<<"$BODY") == public && $(jq -r .public.ip <<<"$BODY") == 192.0.2.2 && $(jq -r .ip <<<"$BODY") == 192.0.2.2 ]] && ok "VM got 192.0.2.2" || bad "public VM: $BODY"
+  pmac=$(jq -r .mac <<<"$BODY")
+  api POST /vms '{"name":"'"${PV}x"'","template":"debian-13","ip_pool":"'"$PN"'","start":false}'; expect "pool full" 400
+  port=$(sudo virsh -q domiflist "p8s-$PV" | awk '{print $1; exit}')
+  [[ $(sudo virsh -q domiflist "p8s-$PV" | awk '{print $3; exit}') == br0 ]] && ok "VM is on br0" || bad "VM bridge: $(sudo virsh -q domiflist "p8s-$PV")"
+  r=$(sudo nft list chain bridge p8s_fw spoof 2>/dev/null)
+  grep -q "iifname \"$port\" ether saddr != $pmac" <<<"$r" && grep -q "ip saddr != 192.0.2.2" <<<"$r" && ok "address pinned to the VM's port $port (anti-spoofing)" || bad "no spoof rules for $port: $r"
+  api DELETE "/ippools/$PN"; expect "pool in use can't be deleted" 409
+  api DELETE "/vms/$PV"; expect "delete public VM" 204
+  api GET /ippools; [[ $(jq -r --arg n "$PN" '.pools[] | select(.name==$n) | .free' <<<"$BODY") == 1 ]] && ok "address returned to the pool" || bad "pool after delete: $BODY"
+  sudo nft list chain bridge p8s_fw spoof 2>/dev/null | grep -q "192.0.2.2" && bad "spoof rules left" || ok "spoof rules removed"
+  api DELETE "/ippools/$PN"; expect "delete pool" 204
+else
+  echo "  skipped (no home-network bridge; run: sudo p8 lan-setup)"
+fi
+
 step "7. delete"
 if [[ ${KEEP:-0} == 1 ]]; then
   echo "  KEEP=1: leaving $NAME in place"

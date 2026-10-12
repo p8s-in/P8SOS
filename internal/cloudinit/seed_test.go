@@ -34,3 +34,26 @@ func TestUserDataRootPassword(t *testing.T) {
 		t.Fatalf("no password -> root untouched:\n%s", ud)
 	}
 }
+
+func TestNetworkConfig(t *testing.T) {
+	nc := NetworkConfig(Static{MAC: "52:54:00:AB:CD:EF", IP: "203.0.113.10", Prefix: 29, Gateway: "203.0.113.9", DNS: []string{"1.1.1.1", "8.8.8.8"}})
+	want := `version: 2
+ethernets:
+  eth0:
+    match:
+      macaddress: "52:54:00:ab:cd:ef"
+    set-name: eth0
+    addresses: ["203.0.113.10/29"]
+    routes:
+      - to: 0.0.0.0/0
+        via: 203.0.113.9
+    nameservers:
+      addresses: ["1.1.1.1", "8.8.8.8"]
+`
+	if nc != want {
+		t.Fatalf("got\n%s\nwant\n%s", nc, want)
+	}
+	if nc := NetworkConfig(Static{MAC: "52:54:00:00:00:01", IP: "198.51.100.7", Prefix: 32, Gateway: "172.31.1.1", OnLink: true}); !strings.Contains(nc, "on-link: true") {
+		t.Fatalf("routed /32 needs an on-link route:\n%s", nc)
+	}
+}

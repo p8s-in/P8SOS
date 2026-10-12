@@ -67,6 +67,16 @@ customers only a reference (`ref 1a2b3c4d`); the details are in p8sd's log.
 | `POST /vms/{name}/sites` | owner/admin | `{"name":"shop","port":80,"https":false}` → `201` site; counts against `quota.sites` |
 | `DELETE /sites/{host}` | owner/admin | takes it off (route and DNS record) |
 
+### Public IP pools — see [public-ips.md](public-ips.md)
+
+| endpoint | who | what |
+|---|---|---|
+| `GET /ippools` | signed in | admins: pools with `used` (address → VM), size, free; customers: name/free/size of pools open to them |
+| `POST /ippools` | admin | `{"name","bridge","cidr","gateway","dns":[],"exclude":[],"customers":false}` |
+| `PATCH /ippools/{pool}` | admin | `{"dns","exclude","customers"}` |
+| `DELETE /ippools/{pool}` | admin | only when no VM uses it |
+| `POST /vms` with `"ip_pool":"dc1"` | admin, customer (open pool, `quota.public_ips`) | VM on the pool's bridge with the next free address (cloud-init static); the VM object gets `"network":"public"` and `"public":{"pool","ip","prefix","gateway","dns","bridge"}` |
+
 ### Per-VM firewall
 
 `GET /vms/{name}/firewall`, `PUT /vms/{name}/firewall` (owner or admin):

@@ -55,6 +55,8 @@ type Hypervisor interface {
 	// SetLiveMetadata replaces the P8S metadata of a running domain (the saved
 	// definition is updated separately with Define).
 	SetLiveMetadata(ctx context.Context, name, xml string) error
+	// Ports returns a running domain's network ports on the host (e.g. vnet3).
+	Ports(ctx context.Context, name string) ([]string, error)
 }
 
 type Virsh struct {
@@ -286,3 +288,25 @@ func ParseState(s string) State {
 func (s State) String() string { return string(s) }
 
 var _ fmt.Stringer = State("")
+
+func (v *Virsh) Ports(ctx context.Context, name string) ([]string, error) {
+	out, err := v.virsh(ctx, "domiflist", name)
+	if err != nil {
+		return nil, err
+	}
+	return ParseIfList(string(out)), nil
+}
+
+// ParseIfList takes the interface names from `virsh domiflist` output
+// ("-" means none: the domain isn't running).
+func ParseIfList(out string) []string {
+	var ports []string
+	for _, l := range strings.Split(out, "\n") {
+		f := strings.Fields(l)
+		if len(f) < 2 || f[0] == "Interface" || strings.HasPrefix(f[0], "---") || f[0] == "-" {
+			continue
+		}
+		ports = append(ports, f[0])
+	}
+	return ports
+}

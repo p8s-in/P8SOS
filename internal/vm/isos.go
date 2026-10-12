@@ -82,6 +82,9 @@ func (s *Service) createFromISO(ctx context.Context, r CreateRequest) (VM, error
 	default:
 		errs = append(errs, `os_type must be "linux" or "windows"`)
 	}
+	if msg := s.checkPool(&r); msg != "" {
+		errs = append(errs, msg)
+	}
 	switch r.Network {
 	case "", NetNAT:
 		r.Network = NetNAT
@@ -89,8 +92,9 @@ func (s *Service) createFromISO(ctx context.Context, r CreateRequest) (VM, error
 		if !s.LANAvailable() {
 			errs = append(errs, "network \"lan\" is not set up on this host (run: sudo p8 lan-setup)")
 		}
+	case NetPublic:
 	default:
-		errs = append(errs, `network must be "nat" or "lan"`)
+		errs = append(errs, `network must be "nat", "lan" or "public"`)
 	}
 	if len(errs) > 0 {
 		return VM{}, fmt.Errorf("%w: %s", ErrInvalid, strings.Join(errs, "; "))
@@ -114,16 +118,27 @@ func (s *Service) createFromISO(ctx context.Context, r CreateRequest) (VM, error
 	if err != nil {
 		return VM{}, err
 	}
+	bridge := s.bridgeFor(r.Network)
+	release := func() {}
+	if r.IPPool != "" { // the address is typed into the installer (shown in Manage)
+		l, rel, err := s.lease(r.IPPool, r.Name, "")
+		if err != nil {
+			s.logErr("rollback disk", s.Disks.DestroyDisk(bg, dom))
+			return VM{}, err
+		}
+		bridge, release = l.Bridge, rel
+	}
 	fail := func(err error, undefine bool) (VM, error) {
 		if undefine {
 			s.logErr("rollback define", s.HV.Undefine(bg, dom))
 		}
 		s.logErr("rollback disk", s.Disks.DestroyDisk(bg, dom))
+		release()
 		return VM{}, err
 	}
 	spec := virt.Spec{
 		Name: dom, UUID: newUUID(), VCPUs: r.VCPUs, MemoryMiB: r.MemoryMiB, DiskGB: r.DiskGB,
-		DiskPath: disk, InstallISO: isoPath, OSType: r.OSType, Bridge: s.bridgeFor(r.Network), MAC: virt.RandomMAC(),
+		DiskPath: disk, InstallISO: isoPath, OSType: r.OSType, Bridge: bridge, MAC: virt.RandomMAC(),
 		Template: "iso:" + r.ISO, CreatedAt: time.Now().UTC().Format(time.RFC3339), Owner: r.Owner,
 	}
 	x, err := virt.DomainXML(spec)
@@ -140,6 +155,7 @@ func (s *Service) createFromISO(ctx context.Context, r CreateRequest) (VM, error
 		if err := s.HV.Start(ctx, dom); err != nil {
 			return fail(err, true)
 		}
+		s.afterStart(ctx, r.Name)
 	}
 	return s.get(ctx, dom)
 }

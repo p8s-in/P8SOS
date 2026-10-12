@@ -158,6 +158,7 @@ type Usage struct {
 	MemoryMiB int `json:"memory_mib"`
 	DiskGB    int `json:"disk_gb"`
 	Sites     int `json:"sites"`
+	PublicIPs int `json:"public_ips"`
 }
 
 // usage is what a user has now, websites included.
@@ -179,6 +180,9 @@ func usageOf(vms []vm.VM, owner string) Usage {
 			u.VCPUs += v.VCPUs
 			u.MemoryMiB += v.MemoryMiB
 			u.DiskGB += v.DiskGB
+			if v.Public != nil {
+				u.PublicIPs++
+			}
 		}
 	}
 	return u
@@ -198,6 +202,9 @@ func fits(q users.Quota, now Usage, d Usage) error {
 	}
 	if now.DiskGB+d.DiskGB > q.DiskGB {
 		over = append(over, fmt.Sprintf("disk %d of %d GB", now.DiskGB+d.DiskGB, q.DiskGB))
+	}
+	if d.PublicIPs > 0 && now.PublicIPs+d.PublicIPs > q.PublicIPs {
+		over = append(over, fmt.Sprintf("public IPs %d of %d", now.PublicIPs+d.PublicIPs, q.PublicIPs))
 	}
 	if d.Sites > 0 && now.Sites+d.Sites > q.Sites {
 		over = append(over, fmt.Sprintf("websites %d of %d", now.Sites+d.Sites, q.Sites))

@@ -20,6 +20,7 @@ import (
 	"p8sos/internal/config"
 	"p8sos/internal/console"
 	"p8sos/internal/firewall"
+	"p8sos/internal/ippool"
 	"p8sos/internal/metrics"
 	"p8sos/internal/tunnel"
 	"p8sos/internal/users"
@@ -88,6 +89,7 @@ type Server struct {
 	Audit    *audit.Log      // who changed what; nil = not kept
 	Issuer   string          // name shown in authenticator apps
 	Tunnel   *tunnel.Manager // public websites via Cloudflare Tunnel; nil = off
+	Pools    *ippool.Store   // public IP pools; nil = none
 
 	once      sync.Once
 	lmOnce    sync.Once
@@ -157,6 +159,10 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("PATCH /api/v1/users/{user}", s.updateUser)
 	auth.HandleFunc("DELETE /api/v1/users/{user}", s.deleteUser)
 	auth.HandleFunc("PUT /api/v1/vms/{name}/owner", s.setOwner)
+	auth.HandleFunc("GET /api/v1/ippools", s.listPools)
+	auth.HandleFunc("POST /api/v1/ippools", s.addPool)
+	auth.HandleFunc("PATCH /api/v1/ippools/{pool}", s.updatePool)
+	auth.HandleFunc("DELETE /api/v1/ippools/{pool}", s.deletePool)
 	auth.HandleFunc("GET /api/v1/tunnel", s.getTunnel)
 	auth.HandleFunc("POST /api/v1/tunnel/setup", s.setupTunnel)
 	auth.HandleFunc("DELETE /api/v1/tunnel", s.disconnectTunnel)
@@ -239,8 +245,16 @@ func (s *Server) createVM(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusForbidden, "forbidden", "your plan doesn't include the LAN network; use nat")
 			return
 		}
+		d := Usage{VMs: 1, VCPUs: max(req.VCPUs, 1), MemoryMiB: max(req.MemoryMiB, 1024), DiskGB: s.diskFor(req)}
+		if req.IPPool != "" {
+			if !s.customerPool(req.IPPool) {
+				writeErr(w, http.StatusNotFound, "not_found", fmt.Sprintf("no ip pool %q for customers", req.IPPool))
+				return
+			}
+			d.PublicIPs = 1
+		}
 		defer s.quotaLock(p.Name)()
-		if err := s.checkQuota(r.Context(), p, Usage{VMs: 1, VCPUs: max(req.VCPUs, 1), MemoryMiB: max(req.MemoryMiB, 1024), DiskGB: s.diskFor(req)}); err != nil {
+		if err := s.checkQuota(r.Context(), p, d); err != nil {
 			s.fail(w, r, err)
 			return
 		}
@@ -555,7 +569,11 @@ func (s *Server) restoreBackup(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusConflict, "exists", fmt.Sprintf("the name %q is taken; restore under another name", target))
 			return
 		case errors.Is(err, vm.ErrNotFound): // becomes a new VM: must fit the plan
-			if err := s.checkQuota(r.Context(), p, Usage{VMs: 1, VCPUs: m.VCPUs, MemoryMiB: m.MemoryMiB, DiskGB: m.DiskGB}); err != nil {
+			d := Usage{VMs: 1, VCPUs: m.VCPUs, MemoryMiB: m.MemoryMiB, DiskGB: m.DiskGB}
+			if m.Pool != "" && target == m.VM {
+				d.PublicIPs = 1 // a recreated VM gets its public address back
+			}
+			if err := s.checkQuota(r.Context(), p, d); err != nil {
 				s.fail(w, r, err)
 				return
 			}
