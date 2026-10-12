@@ -45,6 +45,10 @@ document.body.insertAdjacentHTML("beforeend", `
   <h3>Snapshots</h3>
   <div class="inline"><input id="cmSnapName" placeholder="name (optional)" style="flex:1"><button class="btn" id="cmSnap">Take snapshot</button></div>
   <table class="snaps"><tbody id="cmSnaps"></tbody></table>
+  <h3>SSH</h3>
+  <div class="inline"><span class="sub" style="flex:1" id="cmSSHHint">The SSH server is installed by itself on the first start (needs internet). If SSH doesn't answer, install or repair it here.</span>
+    <button class="btn" id="cmSSH">Install / repair SSH</button></div>
+  <pre id="cmSSHOut" class="mono" hidden style="max-height:180px;overflow:auto;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px;font-size:12px;white-space:pre-wrap"></pre>
   <h3>Password</h3>
   <div class="inline"><input id="cmUser" value="root" style="flex:0 0 120px" aria-label="User"><input id="cmPw" type="password" minlength="8" placeholder="new password" autocomplete="new-password" style="flex:1"><button class="btn" id="cmPwGo">Set</button></div>
   <div id="cmOwnerBox" hidden><h3>Owner</h3><div class="inline"><select id="cmOwner" style="flex:1"></select><button class="btn" id="cmOwnerGo">Change</button></div></div>
@@ -206,6 +210,7 @@ $("#fCT").addEventListener("submit", async e => {
 /* ---------- manage ---------- */
 async function openCTManage(name){
   ctCur = name;
+  $("#cmSSHOut").hidden = true;
   if (!ctTpls.length) { try { ctTpls = (await call("GET", "/ct-templates")).templates; } catch {} }
   renderCTManage();
   $("#dlgCTM").showModal();
@@ -273,6 +278,17 @@ $("#cmPwGo").onclick = async () => {
 $("#cmOwnerGo").onclick = async () => {
   try { await call("PUT", `/containers/${encodeURIComponent(ctCur)}/owner`, {owner: $("#cmOwner").value}); toast("Owner changed"); await loadCTs(); renderCTs(); }
   catch (err) { toast(err.message, true); }
+};
+$("#cmSSH").onclick = async () => {
+  const b = $("#cmSSH"), out = $("#cmSSHOut");
+  b.disabled = true; b.textContent = "Installing… (up to a few minutes)"; out.hidden = true;
+  try {
+    const r = await fetch(API + `/containers/${encodeURIComponent(ctCur)}/setup-ssh`, {method: "POST", headers: {"Authorization": "Bearer " + token}});
+    const j = await r.json().catch(() => ({}));
+    out.textContent = (j.output || "").trim().split("\n").slice(-25).join("\n"); out.hidden = !out.textContent;
+    if (r.ok) toast("SSH server is ready"); else toast(j?.error?.message || "HTTP " + r.status, true);
+  } catch (err) { toast(err.message, true); }
+  finally { b.disabled = false; b.textContent = "Install / repair SSH"; }
 };
 $("#cmDel").onclick = () => ctDelete(ctCur);
 $("#cmClose").onclick = () => $("#dlgCTM").close();

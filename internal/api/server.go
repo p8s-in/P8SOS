@@ -242,6 +242,7 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("POST /api/v1/containers/{name}/{action}", s.ctPower)
 	auth.HandleFunc("POST /api/v1/containers/{name}/console", s.ctConsole)
 	auth.HandleFunc("POST /api/v1/containers/{name}/password", s.ctPassword)
+	auth.HandleFunc("POST /api/v1/containers/{name}/setup-ssh", s.ctSetupSSH)
 	auth.HandleFunc("PUT /api/v1/containers/{name}/owner", s.ctOwner)
 	auth.HandleFunc("GET /api/v1/containers/{name}/snapshots", s.ctSnapshots)
 	auth.HandleFunc("POST /api/v1/containers/{name}/snapshots", s.ctSnapshot)

@@ -26,7 +26,11 @@ func newSvc(t *testing.T) (*Service, *testfake.Runner) {
 		MetaFile: filepath.Join(dir, "containers.json"), Bridge: "virbr0", Limits: Limits{MaxVCPUs: 8, MaxMemoryMiB: 16384, MaxDiskGB: 200},
 		Chown: func(p string, u, g int) error { chowns = append(chowns, p); return nil },
 		Now:   func() time.Time { return time.Date(2026, 10, 12, 10, 0, 0, 0, time.UTC) }}
-	_ = os.MkdirAll(filepath.Join(s.MountDir, "web"), 0o755) // what "zfs clone" would mount
+	root := filepath.Join(s.MountDir, "web") // what "zfs clone" would mount
+	_ = os.MkdirAll(filepath.Join(root, "etc"), 0o755)
+	_ = os.WriteFile(filepath.Join(root, "etc/shadow"), []byte("root:*:19000:0:99999:7:::\nbin:*:19000:0:99999:7:::\n"), 0o640)
+	_ = os.WriteFile(filepath.Join(root, "etc/hosts"), []byte("127.0.0.1 localhost\n127.0.1.1 LXC_NAME\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(root, "etc/hostname"), []byte("LXC_NAME\n"), 0o644)
 	return s, run
 }
 
@@ -86,6 +90,25 @@ func TestCreateAndManage(t *testing.T) {
 	ud, _ := os.ReadFile(filepath.Join(s.MountDir, "web", "var/lib/cloud/seed/nocloud/user-data"))
 	if !strings.Contains(string(ud), "ssh-ed25519 AAAAkey me") || !strings.Contains(string(ud), "$6$") || strings.Contains(string(ud), "secret-pass-1") {
 		t.Fatalf("user-data:\n%s", ud)
+	}
+	root := filepath.Join(s.MountDir, "web")
+	sh, _ := os.ReadFile(filepath.Join(root, "etc/shadow"))
+	hn, _ := os.ReadFile(filepath.Join(root, "etc/hostname"))
+	hosts, _ := os.ReadFile(filepath.Join(root, "etc/hosts"))
+	ak, _ := os.ReadFile(filepath.Join(root, "root/.ssh/authorized_keys"))
+	if !strings.HasPrefix(string(sh), "root:$6$") || !strings.Contains(string(sh), "\nbin:*:") || string(hn) != "web\n" ||
+		!strings.Contains(string(hosts), "127.0.1.1 web") || string(ak) != "ssh-ed25519 AAAAkey me\n" {
+		t.Fatalf("prepared files:\n%s\n%s\n%s\n%s", sh, hn, hosts, ak)
+	}
+	if st, _ := os.Stat(filepath.Join(root, "etc/shadow")); st.Mode().Perm() != 0o640 {
+		t.Fatalf("shadow mode %v", st.Mode())
+	}
+	// first boot installs SSH (in the background)
+	for i := 0; i < 100 && last(run, "lxc-attach") == ""; i++ {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if l := last(run, "lxc-attach -n web"); !strings.Contains(l, "ROOT_LOGIN=1") || !strings.Contains(l, "openssh") {
+		t.Fatalf("ssh setup: %q", l)
 	}
 	if _, err := s.Create(ctx, CreateRequest{Name: "web", Template: "debian-13"}); !errors.Is(err, vm.ErrExists) {
 		t.Fatalf("dup: %v", err)

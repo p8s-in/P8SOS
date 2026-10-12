@@ -411,3 +411,20 @@ func (s *Server) terminalSocket(w http.ResponseWriter, r *http.Request) {
 	}
 	stop()
 }
+
+// ctSetupSSH installs (or repairs) the SSH server inside a container.
+func (s *Server) ctSetupSSH(w http.ResponseWriter, r *http.Request) {
+	c, ok := s.ctFor(w, r)
+	if !ok {
+		return
+	}
+	out, err := s.CTs.SetupSSH(r.Context(), c.Name)
+	if len(out) > 8000 {
+		out = out[len(out)-8000:]
+	}
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": map[string]string{"code": "setup_failed", "message": err.Error()}, "output": out})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"output": out})
+}

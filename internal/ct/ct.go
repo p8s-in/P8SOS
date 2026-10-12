@@ -105,6 +105,9 @@ type meta struct {
 	Owner     string `json:"owner,omitempty"`
 	Autostart bool   `json:"autostart"`
 	Created   string `json:"created"`
+	// NeedsSSH: the SSH server still has to be installed (first start).
+	NeedsSSH  bool `json:"needs_ssh,omitempty"`
+	RootLogin bool `json:"root_login,omitempty"` // a root password was set: allow root SSH logins
 }
 
 // Stdin runs a command with input (for chpasswd); tests replace it.
@@ -350,6 +353,14 @@ func (s *Service) Create(ctx context.Context, r CreateRequest) (Container, error
 		undo()
 		return Container{}, fmt.Errorf("cloud-init seed: %w", err)
 	}
+	// Set up what we can by writing files (works for every distro, also
+	// without cloud-init): hostname, root password, SSH keys. The SSH server
+	// itself is installed on the first start.
+	if err := s.prepare(r.Name, keys, r.RootPassword); err != nil {
+		undo()
+		return Container{}, fmt.Errorf("prepare the container: %w", err)
+	}
+	m.NeedsSSH, m.RootLogin = true, r.RootPassword != ""
 	if err := s.writeConfig(r.Name, m, br); err != nil {
 		undo()
 		return Container{}, err
@@ -362,6 +373,7 @@ func (s *Service) Create(ctx context.Context, r CreateRequest) (Container, error
 		if err := s.start(ctx, r.Name); err != nil {
 			return s.view(ctx, r.Name, *m), fmt.Errorf("the container was made but didn't start: %w", err)
 		}
+		s.firstBoot(r.Name)
 	}
 	return s.view(ctx, r.Name, *m), nil
 }
@@ -591,6 +603,9 @@ func (s *Service) Start(ctx context.Context, name string) (Container, error) {
 	}
 	if err := s.start(ctx, name); err != nil {
 		return Container{}, err
+	}
+	if m.NeedsSSH {
+		s.firstBoot(name)
 	}
 	return s.view(ctx, name, m), nil
 }
