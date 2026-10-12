@@ -20,6 +20,13 @@ p8 — manage P8S OS virtual machines
   p8 create NAME [CPUS] [RAM_MB] [DISK_GB] [--os TEMPLATE] [--lan] [--root-password]
                                    make a VM (default 1 CPU, 1024 MB, template size, debian-13)
                                    --os: which OS, see  p8 templates
+  p8 create NAME CPUS RAM_MB DISK_GB --iso FILE.iso [--windows]
+                                   empty VM booting an installer ISO (install in the console)
+  p8 isos                          ISO library
+  p8 iso-upload PATH.iso           copy an ISO from this machine into the library
+  p8 iso-download URL [SHA256]     download an ISO straight into the library
+  p8 rmiso NAME.iso                delete an ISO
+  p8 eject NAME                    take the installer CD out (VM stopped)
                                    --lan: on your home network, IP from your router
                                    --root-password: asks for a root password (SSH login allowed)
   p8 show NAME                     details of one VM
@@ -147,15 +154,26 @@ case $cmd in
     table <<<"$body" ;;
 
   create|new)
-    net=nat; args=(); askpw=0; os=debian-13; next_os=0
+    net=nat; args=(); askpw=0; os=debian-13; next_os=0; iso=""; next_iso=0; ostype=linux
     for a in "$@"; do
       if (( next_os )); then os=$a; next_os=0; continue; fi
+      if (( next_iso )); then iso=$a; next_iso=0; continue; fi
       case $a in
         --lan) net=lan ;; --nat) net=nat ;; --root-password|--password) askpw=1 ;;
         --os|--template) next_os=1 ;; --os=*|--template=*) os=${a#*=} ;;
+        --iso) next_iso=1 ;; --iso=*) iso=${a#*=} ;; --windows) ostype=windows ;;
         *) args+=("$a") ;;
       esac
     done
+    if [[ -n $iso ]]; then
+      set -- "${args[@]}"; need "${1:-}"
+      req=$(jq -nc --arg n "$1" --arg c "${2:-0}" --arg m "${3:-0}" --arg d "${4:-0}" --arg i "$iso" --arg t "$ostype" --arg net "$net" \
+        '{name:$n, iso:$i, os_type:$t, vcpus:($c|tonumber), memory_mib:($m|tonumber), disk_gb:($d|tonumber), network:$net}')
+      body=$(call POST /vms "$req") || exit 1
+      green "✔ $1 is booting $iso ($(jq -r '"\(.vcpus) CPU, \(.memory_mib) MB, \(.disk_gb) GB"' <<<"$body"))"
+      echo "  Install it in the dashboard: Console on $1. Afterwards: p8 stop $1 && p8 eject $1"
+      exit 0
+    fi
     set -- "${args[@]}"
     need "${1:-}"
     keys='[]'
@@ -306,6 +324,34 @@ case $cmd in
     if [[ $(jq -r .daily <<<"$body") == true ]]; then
       green "✔ $1 is backed up every day at $(jq -r .at <<<"$body"), keeping the last $(jq -r .keep <<<"$body")"
     else echo "$1 has no automatic backup. Turn on: p8 autobackup $1 on"; fi ;;
+
+  isos)
+    body=$(call GET /isos) || exit 1
+    [[ $(jq '.isos | length' <<<"$body") == 0 ]] && { echo "No ISOs yet. Add one: p8 iso-upload FILE.iso  or  p8 iso-download URL"; exit 0; }
+    jq -r '.isos[] | [.name, .bytes] | @tsv' <<<"$body" | while IFS=$'\t' read -r n b; do printf '%-50s %s\n' "$n" "$(human "$b")"; done ;;
+
+  iso-upload)
+    [[ -f ${1:-} ]] || { red "usage: p8 iso-upload PATH.iso"; exit 1; }
+    n=$(basename "$1" | tr -c 'A-Za-z0-9._+\n-' '-')
+    echo "Uploading $n ..."
+    out=$(curl -k --progress-bar -X PUT -H "Authorization: Bearer $TOKEN" -T "$1" -w '\n%{http_code}' "$URL/isos/$n") || { red "upload failed"; exit 1; }
+    code=${out##*$'\n'}; body=${out%$'\n'*}
+    (( code == 201 )) && green "✔ $n added" || { red "error ($code): $(jq -r '.error.message // .' <<<"$body" 2>/dev/null)"; exit 1; } ;;
+
+  iso-download)
+    [[ -n ${1:-} ]] || { red "usage: p8 iso-download URL [SHA256]"; exit 1; }
+    j=$(call POST /isos/download "$(jq -nc --arg u "$1" --arg s "${2:-}" '{url:$u, sha256:$s}')") || exit 1
+    echo "Downloading (job $(jq -r .id <<<"$j")). Ctrl+C is fine; it continues in the background."
+    follow_job "$(jq -r .id <<<"$j")" ;;
+
+  rmiso)
+    [[ -n ${1:-} ]] || { red "usage: p8 rmiso NAME.iso"; exit 1; }
+    call DELETE "/isos/$1" >/dev/null || exit 1
+    green "✔ $1 deleted" ;;
+
+  eject)
+    need "${1:-}"; call POST "/vms/$1/eject" >/dev/null || exit 1
+    green "✔ CD ejected from $1" ;;
 
   jobs)
     body=$(call GET /jobs) || exit 1

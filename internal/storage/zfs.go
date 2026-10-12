@@ -55,6 +55,19 @@ func (z *ZFS) CloneDisk(ctx context.Context, snapshot, vm string, sizeGB int) (s
 	return dev, nil
 }
 
+// CreateDisk makes an empty disk for a VM installed from an ISO.
+func (z *ZFS) CreateDisk(ctx context.Context, vm string, sizeGB int) (string, error) {
+	if _, err := z.Run.Run(ctx, "zfs", "create", "-p", "-V", fmt.Sprintf("%dG", sizeGB), "-o", "volmode=dev", z.diskDataset(vm)); err != nil {
+		return "", fmt.Errorf("create disk: %w", err)
+	}
+	dev, err := z.WaitDevice(ctx, vm)
+	if err != nil {
+		_ = z.DestroyDisk(context.WithoutCancel(ctx), vm)
+		return "", err
+	}
+	return dev, nil
+}
+
 // WaitDevice waits for udev to create /dev/zvol/... for the VM's disk, so
 // libvirt can open it, and returns that path.
 func (z *ZFS) WaitDevice(ctx context.Context, vm string) (string, error) {

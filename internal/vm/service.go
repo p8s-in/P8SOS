@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"p8sos/internal/backup"
 	"p8sos/internal/cloudinit"
 	"p8sos/internal/config"
+	"p8sos/internal/isos"
 	"p8sos/internal/jobs"
 	"p8sos/internal/virt"
 )
@@ -62,6 +64,7 @@ type Service struct {
 	Log       *slog.Logger
 
 	Backups      *backup.Store // nil = backups off
+	ISOs         *isos.Library // installer images; nil = ISO installs off
 	Jobs         *jobs.Manager // runs backups and restores in the background
 	ScheduleFile string        // daily-backup settings per VM (JSON); empty = in memory only
 
@@ -75,7 +78,9 @@ type VM struct {
 	Name      string     `json:"name"`
 	State     virt.State `json:"state"`
 	Template  string     `json:"template"`
-	User      string     `json:"user"` // login user with the SSH keys (debian, ubuntu, rocky, ...)
+	User      string     `json:"user"`              // login user with the SSH keys (debian, ubuntu, rocky, ...)
+	ISO       string     `json:"iso,omitempty"`     // installer CD still in the drive
+	OSType    string     `json:"os_type,omitempty"` // "windows" for Windows VMs (SATA/e1000e devices)
 	VCPUs     int        `json:"vcpus"`
 	MemoryMiB int        `json:"memory_mib"`
 	DiskGB    int        `json:"disk_gb"`
@@ -96,6 +101,10 @@ type CreateRequest struct {
 	SSHKeys   []string `json:"ssh_keys"`
 	UserData  string   `json:"user_data,omitempty"`
 	Network   string   `json:"network,omitempty"` // "nat" (default) or "lan"
+	// ISO installs by hand from an image in the ISO library instead of a
+	// template: empty disk of DiskGB, boots the CD, install via the console.
+	ISO    string `json:"iso,omitempty"`
+	OSType string `json:"os_type,omitempty"` // with ISO: "linux" (default, virtio) or "windows"
 	// RootPassword sets root's password (8-128 chars). It is stored only as a
 	// SHA-512 crypt hash inside the VM's seed and never returned by the API.
 	RootPassword string `json:"root_password,omitempty"`
@@ -219,6 +228,9 @@ func (s *Service) validate(r *CreateRequest) (config.Template, error) {
 // Create clones the template disk, builds the cloud-init seed, defines the
 // domain and (by default) starts it. Any failure rolls back what was created.
 func (s *Service) Create(ctx context.Context, r CreateRequest) (VM, error) {
+	if r.ISO != "" {
+		return s.createFromISO(ctx, r)
+	}
 	t, err := s.validate(&r)
 	if err != nil {
 		return VM{}, err
@@ -331,7 +343,13 @@ func (s *Service) get(ctx context.Context, dom string) (VM, error) {
 	}
 	if t, ok := s.template(spec.Template); ok {
 		v.User = t.User()
+	} else if strings.HasPrefix(spec.Template, "iso:") {
+		v.User = "" // installed by hand: whatever the user set up
 	}
+	if spec.InstallISO != "" {
+		v.ISO = filepath.Base(spec.InstallISO)
+	}
+	v.OSType = spec.OSType
 	// Best effort: these must never make GET/list fail.
 	v.Autostart, _ = s.HV.Autostart(ctx, dom)
 	if st == virt.Running {

@@ -126,6 +126,25 @@ func (f *fakeVMs) SetSchedule(n string, s vm.Schedule) error {
 func (f *fakeVMs) Job(id string) (vm.Job, bool) { return vm.Job{ID: id, State: "done"}, id == "j1" }
 func (f *fakeVMs) ListJobs() []vm.Job           { return []vm.Job{{ID: "j1"}} }
 
+func (f *fakeVMs) ListISOs() ([]vm.ISO, error) { return []vm.ISO{{Name: "debian.iso", Bytes: 5}}, nil }
+func (f *fakeVMs) SaveISO(name string, r io.Reader) (vm.ISO, error) {
+	b, _ := io.ReadAll(r)
+	if string(b) != "ISODATA" {
+		return vm.ISO{}, fmt.Errorf("%w: not an iso", vm.ErrInvalid)
+	}
+	return vm.ISO{Name: name, Bytes: int64(len(b))}, nil
+}
+func (f *fakeVMs) StartISODownload(ctx context.Context, url, name, sum string) (vm.Job, error) {
+	return vm.Job{ID: "j3", Kind: "download", Target: "iso:" + name}, nil
+}
+func (f *fakeVMs) DeleteISO(ctx context.Context, name string) error {
+	if name == "inuse.iso" {
+		return fmt.Errorf("%w: in use", vm.ErrConflict)
+	}
+	return nil
+}
+func (f *fakeVMs) EjectISO(ctx context.Context, n string) (vm.VM, error) { return f.Get(ctx, n) }
+
 type fakeMetrics struct{}
 
 func (fakeMetrics) VM(string) []metrics.Point { return []metrics.Point{{T: 1, CPU: 12.5}} }
@@ -228,6 +247,14 @@ func TestAPI(t *testing.T) {
 		{"GET", "/api/v1/vms/web1/metrics", secret, "", 200, `"points":[{"t":1,"cpu":12.5`},
 		{"GET", "/api/v1/vms/nope/metrics", secret, "", 404, "not_found"},
 		{"GET", "/api/v1/host/metrics", secret, "", 200, `"mem_total_mib":8000`},
+		{"GET", "/api/v1/isos", secret, "", 200, `"name":"debian.iso"`},
+		{"PUT", "/api/v1/isos/new.iso", secret, "ISODATA", 201, `"bytes":7`},
+		{"PUT", "/api/v1/isos/new.iso", secret, "junk", 400, "not an iso"},
+		{"PUT", "/api/v1/isos/new.iso", "", "ISODATA", 401, "unauthorized"},
+		{"POST", "/api/v1/isos/download", secret, `{"url":"https://example.org/a.iso","name":"a.iso"}`, 202, `"kind":"download"`},
+		{"DELETE", "/api/v1/isos/inuse.iso", secret, "", 409, "in use"},
+		{"DELETE", "/api/v1/isos/old.iso", secret, "", 204, ""},
+		{"POST", "/api/v1/vms/web1/eject", secret, "", 200, "web1"},
 	}
 	for _, c := range cases {
 		code, body := do(t, srv, c.method, c.path, c.tok, c.body)

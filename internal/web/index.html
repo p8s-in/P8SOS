@@ -111,6 +111,11 @@ dialog.wide{width:min(620px,calc(100vw - 32px))}
   <div class="hint">Lowercase letters, digits and hyphens.</div>
   <label for="cTpl">Operating system</label><select id="cTpl"></select>
   <div class="hint" id="cTplHint"></div>
+  <div id="cIsoOnly" hidden>
+    <label for="cOS">Kind of system</label>
+    <select id="cOS"><option value="linux">Linux or other</option><option value="windows">Windows</option></select>
+    <div class="hint">Windows gets devices its installer knows (SATA disk, Intel network card).</div>
+  </div>
   <label for="cNet">Network</label>
   <select id="cNet">
     <option value="nat">Private — reachable from the host (NAT)</option>
@@ -124,6 +129,7 @@ dialog.wide{width:min(620px,calc(100vw - 32px))}
       <option value="4096">4 GB</option><option value="8192">8 GB</option><option value="16384">16 GB</option></select></div>
     <div><label for="cDisk">Disk (GB)</label><input id="cDisk" type="number" min="1" value="10"></div>
   </div>
+  <div id="cCloudOnly">
   <label for="cPw">Root password <span class="muted">(optional)</span></label>
   <div class="row" style="grid-template-columns:1fr 1fr">
     <input id="cPw" type="password" minlength="8" maxlength="128" placeholder="8+ characters" autocomplete="new-password">
@@ -133,6 +139,7 @@ dialog.wide{width:min(620px,calc(100vw - 32px))}
   <div class="hint">Leave empty to log in with SSH keys only (safest). You can set or change passwords later under Manage.</div>
   <label for="cKeys">SSH public key <span class="muted">(optional)</span></label>
   <textarea id="cKeys" placeholder="ssh-ed25519 AAAA… — leave empty to use the host's default key"></textarea>
+  </div>
   <div class="dlg-actions">
     <button class="btn" value="cancel" formnovalidate>Cancel</button>
     <button class="btn primary" id="cGo" value="ok">Create</button>
@@ -156,6 +163,9 @@ dialog.wide{width:min(620px,calc(100vw - 32px))}
 
   <h3>Usage <span class="sub" style="font-weight:400">last hour</span></h3>
   <div class="charts" id="mCharts"></div>
+
+  <div id="mCD" hidden><h3>Installer CD</h3>
+    <div class="inline"><span class="sub" id="mCDTxt"></span><span class="spacer"></span><button class="btn" id="mEject">Eject</button></div></div>
 
   <h3>Resize</h3>
   <div class="sub" id="mRzHint"></div>
@@ -195,6 +205,21 @@ dialog.wide{width:min(620px,calc(100vw - 32px))}
   <table class="snaps"><tbody id="mBackups"></tbody></table>
 
   <div class="dlg-actions"><button class="btn" id="mClose">Close</button></div>
+</div></dialog>
+
+<dialog id="dlgIsos" class="wide"><div class="dlg-body">
+  <h2>ISO images</h2>
+  <div class="sub">Installer CDs. Create a VM from one under <b>+ New VM → Operating system</b> and install it in the console —
+    any Linux, Windows, BSD…</div>
+  <h3>Upload from this computer</h3>
+  <div class="inline"><input id="iFile" type="file" accept=".iso"><button class="btn primary" id="iUp">Upload</button></div>
+  <div class="meter" id="iBar" hidden><i></i></div><div class="hint" id="iUpTxt"></div>
+  <h3>Or download from the internet <span class="sub" style="font-weight:400">(straight to the server)</span></h3>
+  <div class="inline"><input id="iUrl" placeholder="https://…/something.iso" autocomplete="off"></div>
+  <div class="inline"><input id="iSum" placeholder="SHA-256 checksum (optional, recommended)" autocomplete="off"><button class="btn" id="iDl">Download</button></div>
+  <h3>On the server</h3>
+  <table class="snaps"><tbody id="iList"></tbody></table>
+  <div class="dlg-actions"><button class="btn" id="iClose">Close</button></div>
 </div></dialog>
 
 <dialog id="dlgBackups" class="wide"><div class="dlg-body">
@@ -275,6 +300,7 @@ function renderShell(){
     <span class="sub" id="hName"></span>
     <span class="spacer"></span>
     <span class="sub" id="hVer"></span>
+    <button class="btn" id="bIsos">ISOs</button>
     <button class="btn" id="bBackups">Backups</button>
     <button class="btn" id="bOut">Sign out</button>
   </header>
@@ -289,6 +315,7 @@ function renderShell(){
   </main>`;
   $("#bOut").onclick = () => { store.clear(); token = ""; render(); };
   $("#bBackups").onclick = openAllBackups;
+  $("#bIsos").onclick = openIsos;
   $("#bNew").onclick = openCreate;
   startPolling();
 }
@@ -337,7 +364,7 @@ function renderVMs(){
     const ip = v.ip ? `<span class="mono copy" data-copy="ssh ${esc(v.user || "debian")}@${esc(v.ip)}" title="Click to copy the SSH command">${esc(v.ip)}</span>` : `<span class="muted">${v.state === "running" ? "booting…" : "—"}</span>`;
     return `<tr data-n="${esc(v.name)}">
       <td data-k="State"><span class="state ${esc(v.state)}"><span class="dot"></span>${b ? "working…" : esc(v.state)}</span></td>
-      <td data-k="Name"><b>${esc(v.name)}</b><div class="sub">${esc(templates.find(t => t.name === v.template)?.label || v.template)}${v.network === "lan" ? " · home network" : ""}</div></td>
+      <td data-k="Name"><b>${esc(v.name)}</b><div class="sub">${esc(templates.find(t => t.name === v.template)?.label || v.template.replace(/^iso:/, "from "))}${v.os_type === "windows" ? " · Windows" : ""}${v.network === "lan" ? " · home network" : ""}${v.iso ? " · CD in drive" : ""}</div></td>
       <td data-k="IP">${ip}</td>
       <td data-k="CPU">${v.vcpus}</td><td data-k="RAM">${gb(v.memory_mib)}</td><td data-k="Disk">${v.disk_gb} GB</td>
       <td data-k="Autostart">${v.autostart ? "yes" : "no"}</td>
@@ -364,8 +391,17 @@ document.addEventListener("click", async e => {
 });
 
 async function openCreate(){
-  try { templates = (await call("GET", "/templates")).templates; } catch (err) { return toast(err.message, true); }
-  $("#cTpl").innerHTML = templates.map(t => `<option value="${esc(t.name)}" data-min="${t.min_disk_gb}" data-user="${esc(t.default_user)}">${esc(t.label || t.name)}</option>`).join("");
+  let isoList = [];
+  try {
+    templates = (await call("GET", "/templates")).templates;
+    isoList = (await call("GET", "/isos").catch(() => ({isos: []}))).isos;
+  } catch (err) { return toast(err.message, true); }
+  $("#cTpl").innerHTML = `<optgroup label="Ready to use (cloud images)">` +
+    templates.map(t => `<option value="${esc(t.name)}" data-min="${t.min_disk_gb}" data-user="${esc(t.default_user)}">${esc(t.label || t.name)}</option>`).join("") +
+    `</optgroup><optgroup label="Install from ISO (in the console)">` +
+    (isoList.length ? isoList.map(i => `<option value="iso:${esc(i.name)}" data-min="1">${esc(i.name)}</option>`).join("")
+      : `<option value="" disabled>No ISOs yet — add one with the ISOs button</option>`) + `</optgroup>`;
+  $("#cOS").value = "linux";
   const min = templates[0]?.min_disk_gb || 1;
   $("#cDisk").min = min; if (+$("#cDisk").value < min) $("#cDisk").value = Math.max(10, min);
   tplHint();
@@ -386,8 +422,14 @@ function netHint(){
 }
 $("#cNet").onchange = netHint;
 function tplHint(){
-  const o = $("#cTpl").selectedOptions[0];
-  $("#cTplHint").innerHTML = o ? `SSH keys go to user <b>${esc(o.dataset.user)}</b>. More systems: <span class="mono">p8 templates available</span> on the host.` : "";
+  const o = $("#cTpl").selectedOptions[0], iso = !!o?.value.startsWith("iso:");
+  $("#cIsoOnly").hidden = !iso; $("#cCloudOnly").hidden = iso;
+  if (iso && +$("#cDisk").value < 32) $("#cDisk").value = 32;
+  if (iso && +$("#cCpu").value < 2) $("#cCpu").value = 2;
+  if (iso && +$("#cMem").value < 2048) $("#cMem").value = "2048";
+  $("#cTplHint").innerHTML = !o ? "" : iso
+    ? "Starts with an empty disk and boots the ISO. The console opens so you can install; the VM boots from its disk afterwards."
+    : `Ready in a minute. SSH keys go to user <b>${esc(o.dataset.user)}</b>. More systems: <span class="mono">p8 templates available</span> on the host.`;
 }
 $("#cTpl").onchange = e => { const min = +e.target.selectedOptions[0].dataset.min; $("#cDisk").min = min; if (+$("#cDisk").value < min) $("#cDisk").value = min; tplHint(); };
 $("#fCreate").onsubmit = async e => {
@@ -398,11 +440,19 @@ $("#fCreate").onsubmit = async e => {
   const pw = $("#cPw").value;
   if (pw !== $("#cPw2").value) return toast("The root passwords don't match", true);
   const go = $("#cGo"); go.disabled = true; go.textContent = "Creating…";
+  const tpl = $("#cTpl").value, iso = tpl.startsWith("iso:") ? tpl.slice(4) : "";
   try {
-    await call("POST", "/vms", {name, template: $("#cTpl").value, vcpus: +$("#cCpu").value,
-      memory_mib: +$("#cMem").value, disk_gb: +$("#cDisk").value, ssh_keys: keys, network: $("#cNet").value,
-      ...(pw ? {root_password: pw, ssh_password_auth: $("#cPwSSH").checked} : {})});
-    $("#dlgCreate").close(); toast(`${name} created — it gets an IP in ~30-60 s`); refresh();
+    const common = {name, vcpus: +$("#cCpu").value, memory_mib: +$("#cMem").value, disk_gb: +$("#cDisk").value, network: $("#cNet").value};
+    if (iso) {
+      await call("POST", "/vms", {...common, iso, os_type: $("#cOS").value});
+      $("#dlgCreate").close(); toast(`${name} created and booting ${iso} — install it in the console`);
+      window.open(`/console?vm=${encodeURIComponent(name)}`, `p8s-console-${name}`);
+    } else {
+      await call("POST", "/vms", {...common, template: tpl, ssh_keys: keys,
+        ...(pw ? {root_password: pw, ssh_password_auth: $("#cPwSSH").checked} : {})});
+      $("#dlgCreate").close(); toast(`${name} created — it gets an IP in ~30-60 s`);
+    }
+    refresh();
   } catch (err) { toast(err.message, true); }
   go.disabled = false; go.textContent = "Create";
 };
@@ -453,6 +503,12 @@ function renderManage(){
     : `Stop the VM first to resize it. <button class="btn" data-m="stop">Stop ${esc(v.name)}</button>`;
   $("#mRzHint").dataset.st = v.state + mName;
   $("#mPwGo").disabled = !(v.state === "running");
+  $("#mCD").hidden = !v.iso;
+  if (v.iso) {
+    $("#mCDTxt").textContent = stopped ? `${v.iso} is in the drive. Eject it once the system is installed.`
+      : `${v.iso} is in the drive. The VM boots from its disk first, so it's harmless; stop the VM to eject it.`;
+    $("#mEject").disabled = !stopped;
+  }
   $("#mPwHint").textContent = v.state === "running" ? "Sets a login password inside the VM (needs it fully booted)." : "Start the VM to change a password.";
   for (const id of ["#mCpu", "#mMem", "#mDisk", "#mRzGo"]) $(id).disabled = !stopped;
   if (mVM && mVM.disk_gb !== v.disk_gb) { $("#mDisk").value = v.disk_gb; $("#mDisk").min = v.disk_gb; }
@@ -519,6 +575,10 @@ $("#mRzGo").onclick = async () => {
   await refresh();
 };
 $("#mClose").onclick = () => $("#dlgManage").close();
+$("#mEject").onclick = async () => {
+  try { await call("POST", `/vms/${encodeURIComponent(mName)}/eject`); toast("CD ejected"); refresh(); }
+  catch (err) { toast(err.message, true); }
+};
 $("#mPwGo").onclick = async () => {
   const user = $("#mPwUser").value.trim(), password = $("#mPw").value, go = $("#mPwGo");
   if (password.length < 8) return toast("Passwords need at least 8 characters", true);
@@ -601,6 +661,58 @@ let hostPts = [];
 async function loadHostMetrics(){
   try { hostPts = (await call("GET", "/host/metrics")).points; } catch { hostPts = []; }
 }
+
+/* ---------- ISO library ---------- */
+async function openIsos(){
+  $("#iFile").value = ""; $("#iUrl").value = ""; $("#iSum").value = ""; $("#iBar").hidden = true; $("#iUpTxt").textContent = "";
+  $("#dlgIsos").showModal(); await loadIsos();
+}
+async function loadIsos(){
+  try {
+    const l = (await call("GET", "/isos")).isos;
+    $("#iList").innerHTML = l.length ? l.map(i => `<tr data-iso="${esc(i.name)}"><td><b class="mono">${esc(i.name)}</b>
+      <div class="sub">${fmtBytes(i.bytes)} · added ${esc(fmtTime(i.added_at))}</div></td>
+      <td><button class="btn danger" data-i="del">Delete</button></td></tr>`).join("")
+      : `<tr><td class="muted">No ISOs yet.</td></tr>`;
+  } catch (err) { toast(err.message, true); }
+}
+$("#iList").addEventListener("click", async e => {
+  const btn = e.target.closest("button[data-i]"); if (!btn) return;
+  const name = btn.closest("tr").dataset.iso;
+  if (!armed(btn, "Delete — sure?")) return;
+  try { await call("DELETE", `/isos/${encodeURIComponent(name)}`); toast(`${name} deleted`); loadIsos(); }
+  catch (err) { toast(err.message, true); }
+});
+$("#iUp").onclick = () => {
+  const f = $("#iFile").files[0];
+  if (!f) return toast("Choose an .iso file first", true);
+  const name = f.name.replace(/[^A-Za-z0-9._+-]/g, "-");
+  if (!/\.iso$/i.test(name)) return toast("The file must end in .iso", true);
+  // XMLHttpRequest, because fetch() can't report upload progress.
+  const x = new XMLHttpRequest(), bar = $("#iBar"), txt = $("#iUpTxt"), up = $("#iUp");
+  x.open("PUT", API + "/isos/" + encodeURIComponent(name));
+  x.setRequestHeader("Authorization", "Bearer " + token);
+  x.upload.onprogress = ev => { if (ev.lengthComputable) {
+    bar.firstElementChild.style.width = (ev.loaded / ev.total * 100).toFixed(1) + "%";
+    txt.textContent = `Uploading ${name}: ${fmtBytes(ev.loaded)} of ${fmtBytes(ev.total)}`; } };
+  x.onload = () => {
+    up.disabled = false; bar.hidden = true;
+    if (x.status === 201) { txt.textContent = ""; toast(`${name} uploaded`); loadIsos(); }
+    else { let m = "upload failed"; try { m = JSON.parse(x.responseText).error.message; } catch {} txt.textContent = m; toast(m, true); }
+  };
+  x.onerror = () => { up.disabled = false; bar.hidden = true; toast("Upload failed (connection lost)", true); };
+  bar.hidden = false; bar.firstElementChild.style.width = "0"; up.disabled = true;
+  x.send(f);
+};
+$("#iDl").onclick = async () => {
+  const url = $("#iUrl").value.trim(); if (!url) return toast("Paste the link to an .iso file", true);
+  try {
+    const j = await call("POST", "/isos/download", {url, sha256: $("#iSum").value.trim()});
+    $("#iUrl").value = ""; $("#iSum").value = "";
+    trackJob(j, () => { if ($("#dlgIsos").open) loadIsos(); });
+  } catch (err) { toast(err.message, true); }
+};
+$("#iClose").onclick = () => $("#dlgIsos").close();
 
 /* ---------- backups ---------- */
 let mBackups = [];

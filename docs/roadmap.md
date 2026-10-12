@@ -38,6 +38,7 @@ config); containers via Incus. Replaces Proxmox on the home lab.
 - [x] Browser console (noVNC over a ticketed WebSocket proxy in p8sd), set guest password, type text
 - [x] More OS templates: Debian 12/13, Ubuntu 22.04/24.04, Rocky 9, AlmaLinux 9 (`p8 templates add`, checksum-verified)
 - [x] Backups + restore: compressed zfs-send files, restore in place / as new VM / recreate deleted VM, daily schedule with retention, background jobs
+- [x] Install from any ISO: ISO library (upload / download with checksum), empty-disk VMs booting the CD, Windows device profile, eject
 - [x] Usage graphs: CPU, memory, disk and network per VM (last hour, 10 s), host CPU/memory sparklines
 
 Admin + customer panels, noVNC console proxied through p8sd auth, metrics,

@@ -31,6 +31,7 @@ type Meta struct {
 	Template    string `json:"template"`
 	User        string `json:"user"`
 	Network     string `json:"network"`
+	OSType      string `json:"os_type,omitempty"`
 	VCPUs       int    `json:"vcpus"`
 	MemoryMiB   int    `json:"memory_mib"`
 	DiskGB      int    `json:"disk_gb"`

@@ -47,6 +47,11 @@ type VMService interface {
 	SetSchedule(name string, s vm.Schedule) error
 	Job(id string) (vm.Job, bool)
 	ListJobs() []vm.Job
+	ListISOs() ([]vm.ISO, error)
+	SaveISO(name string, r io.Reader) (vm.ISO, error)
+	StartISODownload(ctx context.Context, url, name, sha256 string) (vm.Job, error)
+	DeleteISO(ctx context.Context, name string) error
+	EjectISO(ctx context.Context, name string) (vm.VM, error)
 	SetPassword(ctx context.Context, name, user, password string) error
 }
 
@@ -113,6 +118,11 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("PUT /api/v1/vms/{name}/backup-schedule", s.putSchedule)
 	auth.HandleFunc("GET /api/v1/vms/{name}/metrics", s.vmMetrics)
 	auth.HandleFunc("GET /api/v1/host/metrics", s.hostMetrics)
+	auth.HandleFunc("GET /api/v1/isos", s.listISOs)
+	auth.HandleFunc("PUT /api/v1/isos/{name}", s.uploadISO)
+	auth.HandleFunc("POST /api/v1/isos/download", s.downloadISO)
+	auth.HandleFunc("DELETE /api/v1/isos/{name}", s.deleteISO)
+	auth.HandleFunc("POST /api/v1/vms/{name}/eject", s.ejectISO)
 	auth.HandleFunc("GET /api/v1/jobs", s.listJobs)
 	auth.HandleFunc("GET /api/v1/jobs/{id}", s.getJob)
 	mux.Handle("/api/v1/", s.requireToken(auth))
@@ -456,6 +466,64 @@ func (s *Server) hostMetrics(w http.ResponseWriter, r *http.Request) {
 		pts = s.Metrics.Host()
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"interval": 10, "points": pts})
+}
+
+func (s *Server) listISOs(w http.ResponseWriter, r *http.Request) {
+	l, err := s.VMs.ListISOs()
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"isos": l})
+}
+
+// uploadISO takes the raw image as the request body (PUT, any size up to the
+// library's limit). Uploads can take long, so this request gets hours, not minutes.
+func (s *Server) uploadISO(w http.ResponseWriter, r *http.Request) {
+	rc := http.NewResponseController(w)
+	_ = rc.SetReadDeadline(time.Now().Add(6 * time.Hour))
+	_ = rc.SetWriteDeadline(time.Now().Add(6 * time.Hour))
+	iso, err := s.VMs.SaveISO(r.PathValue("name"), r.Body)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, iso)
+}
+
+func (s *Server) downloadISO(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		URL    string `json:"url"`
+		Name   string `json:"name"`
+		SHA256 string `json:"sha256"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	j, err := s.VMs.StartISODownload(r.Context(), body.URL, body.Name, body.SHA256)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	w.Header().Set("Location", "/api/v1/jobs/"+j.ID)
+	writeJSON(w, http.StatusAccepted, j)
+}
+
+func (s *Server) deleteISO(w http.ResponseWriter, r *http.Request) {
+	if err := s.VMs.DeleteISO(r.Context(), r.PathValue("name")); err != nil {
+		s.fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) ejectISO(w http.ResponseWriter, r *http.Request) {
+	v, err := s.VMs.EjectISO(r.Context(), r.PathValue("name"))
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
 }
 
 func (s *Server) listJobs(w http.ResponseWriter, r *http.Request) {

@@ -269,6 +269,33 @@ if [[ -n $bid ]]; then
   api DELETE "/backups/$NAME/$bid"; expect "delete backup again" 404
 fi
 
+step "6d. install from ISO"
+ISOF=$(mktemp -d)/p8s-smoke.iso
+printf '#cloud-config\n' > "${ISOF%.iso}.ud"; printf 'instance-id: x\n' > "${ISOF%.iso}.md"
+if cloud-localds "$ISOF" "${ISOF%.iso}.ud" "${ISOF%.iso}.md" 2>/dev/null; then
+  code=$(curl -ks -o /dev/null -w '%{http_code}' -X PUT -H "Authorization: Bearer $TOK" -T "$ISOF" "$URL/isos/p8s-smoke.iso")
+  [[ $code == 201 ]] && ok "ISO upload -> 201" || bad "ISO upload -> $code"
+fi
+if [[ ${code:-} == 201 ]]; then
+  api GET /isos; [[ $(jq -r '[.isos[].name] | index("p8s-smoke.iso") != null' <<<"$BODY") == true ]] && ok "ISO listed" || bad "ISO not listed: $BODY"
+  for os in linux windows; do
+    ISONAME=${NAME}i${os:0:1}
+    api POST /vms '{"name":"'"$ISONAME"'","iso":"p8s-smoke.iso","os_type":"'"$os"'","vcpus":1,"memory_mib":512,"disk_gb":2}'
+    expect "create $os VM from ISO" 201
+    [[ $(jq -r .state <<<"$BODY") == running && $(jq -r .iso <<<"$BODY") == p8s-smoke.iso ]] && ok "$os VM boots with the CD inserted" || bad "$os ISO VM: $BODY"
+    api POST "/vms/$ISONAME/console"; expect "console for the ISO VM" 201
+    api DELETE /isos/p8s-smoke.iso; expect "ISO in use can't be deleted" 409
+    api POST "/vms/$ISONAME/stop" '{"force":true}'
+    api POST "/vms/$ISONAME/eject"; expect "eject CD" 200
+    [[ $(jq -r '.iso // ""' <<<"$BODY") == "" ]] && ok "CD gone after eject" || bad "eject: $BODY"
+    api DELETE "/vms/$ISONAME"; expect "delete ISO VM" 204
+  done
+  api DELETE /isos/p8s-smoke.iso; expect "delete ISO" 204
+else
+  echo "  skipped the rest (no test ISO)"
+fi
+rm -rf "$(dirname "$ISOF")"
+
 step "7. delete"
 if [[ ${KEEP:-0} == 1 ]]; then
   echo "  KEEP=1: leaving $NAME in place"

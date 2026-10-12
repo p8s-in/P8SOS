@@ -20,6 +20,12 @@ type Spec struct {
 	DiskGB    int
 	DiskPath  string // block device, e.g. /dev/zvol/tank/p8s/vms/web1-disk0
 	SeedISO   string // cloud-init NoCloud ISO; empty to omit
+	// InstallISO is an installer CD (VMs installed by hand from an ISO). The VM
+	// boots from its disk first and falls back to the CD while the disk is empty.
+	InstallISO string
+	// OSType "windows" uses devices Windows has drivers for (SATA disk, e1000e
+	// NIC) and Hyper-V enlightenments; anything else uses virtio.
+	OSType    string
 	Bridge    string
 	MAC       string
 	Template  string
@@ -45,14 +51,18 @@ type domainXML struct {
 			Machine string `xml:"machine,attr"`
 			Value   string `xml:",chardata"`
 		} `xml:"type"`
-		Boot struct {
+		Boot []struct {
 			Dev string `xml:"dev,attr"`
 		} `xml:"boot"`
 	} `xml:"os"`
 	Features struct {
-		ACPI *struct{} `xml:"acpi"`
-		APIC *struct{} `xml:"apic"`
+		ACPI   *struct{}  `xml:"acpi"`
+		APIC   *struct{}  `xml:"apic"`
+		HyperV *hypervXML `xml:"hyperv"`
 	} `xml:"features"`
+	Clock *struct {
+		Offset string `xml:"offset,attr"`
+	} `xml:"clock"`
 	CPU struct {
 		Mode string `xml:"mode,attr"`
 	} `xml:"cpu"`
@@ -62,7 +72,21 @@ type domainXML struct {
 	Devices    devicesXML `xml:"devices"`
 }
 
+type hypervXML struct {
+	Relaxed struct {
+		State string `xml:"state,attr"`
+	} `xml:"relaxed"`
+	VAPIC struct {
+		State string `xml:"state,attr"`
+	} `xml:"vapic"`
+	Spinlocks struct {
+		State   string `xml:"state,attr"`
+		Retries string `xml:"retries,attr"`
+	} `xml:"spinlocks"`
+}
+
 type metaXML struct {
+	OSType    string `xml:"os_type,omitempty"`
 	Template  string `xml:"template"`
 	DiskGB    int    `xml:"disk_gb"`
 	CreatedAt string `xml:"created_at"`
@@ -71,7 +95,11 @@ type metaXML struct {
 type devicesXML struct {
 	Disks      []diskXML  `xml:"disk"`
 	Interfaces []ifaceXML `xml:"interface"`
-	Serial     struct {
+	Inputs     []struct {
+		Type string `xml:"type,attr"`
+		Bus  string `xml:"bus,attr"`
+	} `xml:"input"`
+	Serial struct {
 		Type string `xml:"type,attr"`
 		Log  *struct {
 			File   string `xml:"file,attr"`
@@ -146,12 +174,29 @@ func DomainXML(s Spec) ([]byte, error) {
 	d.Type = "kvm"
 	d.Name = s.Name
 	d.UUID = s.UUID
-	d.Metadata.VM = metaXML{Template: s.Template, DiskGB: s.DiskGB, CreatedAt: s.CreatedAt}
+	d.Metadata.VM = metaXML{OSType: s.OSType, Template: s.Template, DiskGB: s.DiskGB, CreatedAt: s.CreatedAt}
+	win := s.OSType == "windows"
 	d.Memory.Unit, d.Memory.Value = "MiB", s.MemoryMiB
 	d.VCPU = s.VCPUs
 	d.OS.Type.Arch, d.OS.Type.Machine, d.OS.Type.Value = "x86_64", "q35", "hvm"
-	d.OS.Boot.Dev = "hd"
+	d.OS.Boot = append(d.OS.Boot, struct {
+		Dev string `xml:"dev,attr"`
+	}{"hd"})
+	if s.InstallISO != "" {
+		d.OS.Boot = append(d.OS.Boot, struct {
+			Dev string `xml:"dev,attr"`
+		}{"cdrom"})
+	}
 	d.Features.ACPI, d.Features.APIC = &struct{}{}, &struct{}{}
+	if win {
+		h := &hypervXML{}
+		h.Relaxed.State, h.VAPIC.State = "on", "on"
+		h.Spinlocks.State, h.Spinlocks.Retries = "on", "8191"
+		d.Features.HyperV = h
+		d.Clock = &struct {
+			Offset string `xml:"offset,attr"`
+		}{"localtime"}
+	}
 	d.CPU.Mode = "host-passthrough"
 	d.OnPoweroff, d.OnReboot, d.OnCrash = "destroy", "restart", "restart"
 
@@ -159,6 +204,9 @@ func DomainXML(s Spec) ([]byte, error) {
 	root.Driver.Name, root.Driver.Type, root.Driver.Cache, root.Driver.Discard = "qemu", "raw", "none", "unmap"
 	root.Source.Dev = s.DiskPath
 	root.Target.Dev, root.Target.Bus = "vda", "virtio"
+	if win { // the Windows installer has no virtio driver
+		root.Target.Dev, root.Target.Bus = "sdc", "sata"
+	}
 	d.Devices.Disks = append(d.Devices.Disks, root)
 
 	if s.SeedISO != "" {
@@ -168,14 +216,29 @@ func DomainXML(s Spec) ([]byte, error) {
 		seed.Target.Dev, seed.Target.Bus = "sda", "sata"
 		d.Devices.Disks = append(d.Devices.Disks, seed)
 	}
+	if s.InstallISO != "" {
+		cd := diskXML{Type: "file", Device: "cdrom", ReadOnly: &struct{}{}}
+		cd.Driver.Name, cd.Driver.Type = "qemu", "raw"
+		cd.Source.File = s.InstallISO
+		cd.Target.Dev, cd.Target.Bus = "sdb", "sata"
+		d.Devices.Disks = append(d.Devices.Disks, cd)
+	}
 
 	var nic ifaceXML
 	nic.Type = "bridge"
 	nic.MAC.Address = s.MAC
 	nic.Source.Bridge = s.Bridge
 	nic.Model.Type = "virtio"
+	if win {
+		nic.Model.Type = "e1000e"
+	}
 	d.Devices.Interfaces = []ifaceXML{nic}
 
+	// A tablet makes the mouse follow the pointer exactly in the browser console.
+	d.Devices.Inputs = append(d.Devices.Inputs, struct {
+		Type string `xml:"type,attr"`
+		Bus  string `xml:"bus,attr"`
+	}{"tablet", "usb"})
 	d.Devices.Serial.Type = "pty"
 	// Everything the guest prints on its serial console (kernel, cloud-init) is
 	// also kept in a file, so failed boots can be diagnosed without a console.
@@ -208,6 +271,7 @@ func ParseDomainXML(b []byte) (Spec, error) {
 		Template:  d.Metadata.VM.Template,
 		DiskGB:    d.Metadata.VM.DiskGB,
 		CreatedAt: d.Metadata.VM.CreatedAt,
+		OSType:    d.Metadata.VM.OSType,
 	}
 	for _, disk := range d.Devices.Disks {
 		switch disk.Device {
@@ -216,7 +280,11 @@ func ParseDomainXML(b []byte) (Spec, error) {
 				s.DiskPath = disk.Source.Dev
 			}
 		case "cdrom":
-			s.SeedISO = disk.Source.File
+			if disk.Target.Dev == "sdb" {
+				s.InstallISO = disk.Source.File
+			} else {
+				s.SeedISO = disk.Source.File
+			}
 		}
 	}
 	if len(d.Devices.Interfaces) > 0 {

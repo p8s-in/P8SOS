@@ -80,3 +80,32 @@ func TestParseIfAddr(t *testing.T) {
 		t.Fatal("empty output should give no IPs")
 	}
 }
+
+func TestDomainXMLInstallISO(t *testing.T) {
+	for _, os := range []string{"linux", "windows"} {
+		in := Spec{Name: "p8s-win1", UUID: "4b1c2d3e-0000-4000-8000-000000000002", VCPUs: 2, MemoryMiB: 4096, DiskGB: 64,
+			DiskPath: "/dev/zvol/tank/vms/p8s-win1-disk0", InstallISO: "/var/lib/p8s/isos/install.iso", OSType: os,
+			Bridge: "virbr0", MAC: "52:54:00:aa:bb:dd", Template: "iso:install.iso", CreatedAt: "2026-10-12T12:00:00Z"}
+		b, err := DomainXML(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		x := string(b)
+		want := []string{`<boot dev="hd"></boot>`, `<boot dev="cdrom"></boot>`, `<source file="/var/lib/p8s/isos/install.iso">`,
+			`<target dev="sdb" bus="sata">`, `<input type="tablet" bus="usb">`}
+		if os == "windows" {
+			want = append(want, `<target dev="sdc" bus="sata">`, `<model type="e1000e">`, `<hyperv>`, `<clock offset="localtime">`)
+		} else {
+			want = append(want, `<target dev="vda" bus="virtio">`, `<model type="virtio">`)
+		}
+		for _, w := range want {
+			if !strings.Contains(x, w) {
+				t.Errorf("%s: missing %s\n%s", os, w, x)
+			}
+		}
+		out, err := ParseDomainXML(b)
+		if err != nil || out != in {
+			t.Fatalf("%s round trip\n in=%+v\nout=%+v (%v)", os, in, out, err)
+		}
+	}
+}

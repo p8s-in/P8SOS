@@ -105,6 +105,17 @@ When creating a VM you can set a **root password** (dashboard: *Root password* f
 allowed (`ssh root@<VM IP>`); untick the box for console-only. Change any password later:
 dashboard **Manage → Change password**, or `p8 passwd web3` (root) / `p8 passwd web3 debian`.
 
+## Installing any system from an ISO (Windows, other Linux, BSD…)
+
+1. Dashboard → **ISOs** → upload the `.iso` from your PC, or paste a download link (the server fetches it).
+   Command line: `p8 iso-upload ~/Downloads/x.iso` or `p8 iso-download https://…/x.iso`.
+2. **+ New VM** → Operating system → pick the ISO under *Install from ISO*; for Windows choose
+   *Kind of system: Windows*. The console opens: install as on a real PC.
+3. When installed: stop the VM, **Manage → Eject** the CD (`p8 eject NAME`), start it.
+
+Windows 10 / Server 2016–2025 install as-is (SATA disk, Intel network card). Windows 11 needs UEFI and
+TPM, which come later.
+
 ## Backups
 
 A backup is a full copy of a VM's disk in a file — unlike a snapshot it survives deleting the VM.

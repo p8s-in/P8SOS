@@ -191,6 +191,14 @@ func (d *fakeDisks) ResizeDisk(_ context.Context, vm string, gb int) error {
 	d.size[vm] = gb
 	return nil
 }
+func (d *fakeDisks) CreateDisk(_ context.Context, vm string, gb int) (string, error) {
+	if d.live[vm] {
+		return "", errors.New("zfs create: dataset already exists")
+	}
+	d.live[vm] = true
+	_ = d.ResizeDisk(context.Background(), vm, gb)
+	return "/dev/zvol/tank/vms/" + vm + "-disk0", nil
+}
 func (d *fakeDisks) DiskSizeGB(_ context.Context, vm string) (int, error) { return d.size[vm], nil }
 
 func (d *fakeDisks) CloneDisk(_ context.Context, _, vm string, sizeGB int) (string, error) {

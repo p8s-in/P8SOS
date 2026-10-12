@@ -29,6 +29,7 @@ import (
 	"p8sos/internal/config"
 	"p8sos/internal/execx"
 	"p8sos/internal/hostinfo"
+	"p8sos/internal/isos"
 	"p8sos/internal/jobs"
 	"p8sos/internal/metrics"
 	"p8sos/internal/storage"
@@ -89,6 +90,7 @@ func serve(args []string) error {
 		Log:          log,
 		Backups:      &backup.Store{Dir: cfg.BackupDir, Dataset: cfg.VMDataset, Run: run},
 		Jobs:         &jobs.Manager{Log: log},
+		ISOs:         &isos.Library{Dir: cfg.ISODir},
 		ScheduleFile: filepath.Join(cfg.DataDir, "backup-schedule.json"),
 	}
 

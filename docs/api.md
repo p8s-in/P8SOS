@@ -155,6 +155,19 @@ deletes the newer ones — without `destroy_newer` that is a `409` listing them.
 
 `DELETE /vms/{name}/snapshots/{snap}` → `204`.
 
+### ISO library and installing from an ISO
+| call | does |
+|---|---|
+| `GET /isos` | `{"isos":[{"name","bytes","added_at"}]}` |
+| `PUT /isos/{name}` (raw body) | upload; name ends in `.iso`; must be an ISO 9660/UDF image; up to 16 GB → `201` |
+| `POST /isos/download` `{"url","name"?,"sha256"?}` | fetch on the server → `202` job; checked against `sha256` if given |
+| `DELETE /isos/{name}` | `409` while a VM still has it in its CD drive |
+| `POST /vms` `{"name","iso":"x.iso","os_type":"linux"\|"windows","vcpus","memory_mib","disk_gb","network"}` | empty disk + CD; boots the CD until the disk has a system. `windows` = SATA disk, e1000e NIC, Hyper-V enlightenments, local-time clock |
+| `POST /vms/{name}/eject` | remove the CD (VM stopped) |
+
+ISO VMs have `template: "iso:<name>"`, `user: ""`, and `iso` while the CD is inserted. No cloud-init:
+users and passwords are set in the installer. Windows 11 (needs UEFI + TPM) is not supported yet.
+
 ### Usage metrics
 `GET /vms/{name}/metrics` → `{"interval":10,"points":[{"t":…,"cpu":25.5,"mem_mib":736,"disk_read_bps":…,
 "disk_write_bps":…,"net_rx_bps":…,"net_tx_bps":…}]}` — one point per 10 s for the last hour, oldest first.

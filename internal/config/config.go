@@ -27,6 +27,7 @@ type Config struct {
 	MaxMemoryMiB int        `json:"max_memory_mib"`   // per-VM ceiling
 	MaxDiskGB    int        `json:"max_disk_gb"`      // per-VM ceiling
 	BackupDir    string     `json:"backup_dir"`       // backup files; default data_dir/backups (put it on another disk!)
+	ISODir       string     `json:"iso_dir"`          // installer ISO library; default data_dir/isos
 	BackupTime   string     `json:"backup_time"`      // daily backups at HH:MM host time; default 02:30
 	BackupKeep   int        `json:"backup_keep"`      // default number of daily backups kept per VM; default 7
 }
@@ -82,6 +83,9 @@ func Load(path string) (*Config, error) {
 	}
 	if c.BackupDir == "" {
 		c.BackupDir = filepath.Join(c.DataDir, "backups")
+	}
+	if c.ISODir == "" {
+		c.ISODir = filepath.Join(c.DataDir, "isos")
 	}
 	if c.BackupTime == "" {
 		c.BackupTime = "02:30"
