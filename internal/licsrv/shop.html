@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>P8S OS Subscriptions</title>
+<style>
+:root{--bg:#0f1720;--panel:#16212d;--line:#24364a;--text:#e6edf3;--muted:#8fa3b8;--accent:#3fa7ff;--ok:#3fbf7f;--bad:#ff6b6b}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+main{max-width:1080px;margin:0 auto;padding:32px 16px 64px}
+h1{font-size:30px;margin:0 0 6px}h2{font-size:20px;margin:36px 0 12px}
+p.lead{color:var(--muted);margin:0 0 24px;max-width:720px}
+.tiers{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px}
+.tier{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px;display:flex;flex-direction:column}
+.tier.pick{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+.tier h3{margin:0;font-size:18px}.tier .for{color:var(--muted);font-size:13px;min-height:38px}
+.price{font-size:24px;font-weight:700;margin:10px 0 2px}.per{color:var(--muted);font-size:13px}
+.tier ul{padding-left:18px;margin:12px 0;flex:1}.tier li{margin:4px 0}
+button,.btn{background:var(--accent);color:#04121f;border:0;border-radius:8px;padding:10px 14px;font-weight:600;cursor:pointer;font-size:14px}
+button.ghost{background:transparent;color:var(--text);border:1px solid var(--line)}
+button:disabled{opacity:.5;cursor:default}
+form{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px;display:grid;grid-template-columns:1fr 1fr;gap:12px}
+label{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted)}
+label.full{grid-column:1/-1}
+input,select,textarea{background:#0b121a;color:var(--text);border:1px solid var(--line);border-radius:8px;padding:9px;font:inherit;width:100%}
+textarea{min-height:64px;font-family:ui-monospace,monospace}
+.total{grid-column:1/-1;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;border-top:1px solid var(--line);padding-top:12px}
+.total b{font-size:20px}
+.msg{grid-column:1/-1;margin:0;color:var(--bad)}
+.done{background:var(--panel);border:1px solid var(--ok);border-radius:12px;padding:18px}
+.key{word-break:break-all;font-family:ui-monospace,monospace;font-size:12px;background:#0b121a;border:1px solid var(--line);border-radius:8px;padding:10px;margin:10px 0}
+.hint{color:var(--muted);font-size:13px}
+code{background:#0b121a;padding:1px 5px;border-radius:4px}
+@media (max-width:640px){form{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<main>
+  <h1 id="brand">P8S OS</h1>
+  <p class="lead">Virtualization for your servers: KVM, ZFS, a web dashboard, users, firewalls and public IPs. Home use is free. Subscriptions give companies stable updates and support, and let hosting providers sell servers to their own customers.</p>
+
+  <div class="tiers" id="tiers"></div>
+
+  <h2 id="buyTitle">Buy or renew a subscription</h2>
+  <div id="buyBox">
+  <form id="buy" autocomplete="on">
+    <label>Subscription
+      <select id="tier" required></select>
+    </label>
+    <label>New or renewal
+      <select id="kind"><option value="new">New licence</option><option value="renew">Renew a licence I have</option></select>
+    </label>
+    <label class="full" id="serversRow"><span>Server IDs, one per line (dashboard → Subscription, or run <code>p8sd server-id</code>)</span>
+      <textarea id="servers" placeholder="P8S-XXXX-XXXX-XXXX-XXXX" spellcheck="false"></textarea>
+    </label>
+    <label class="full" id="renewRow" hidden>Licence ID (from your key email, e.g. L7K2…)
+      <input id="renew" maxlength="30" spellcheck="false">
+    </label>
+    <label>Your name<input id="name" required maxlength="200" autocomplete="name"></label>
+    <label>Email (the key is sent here)<input id="email" type="email" required maxlength="200" autocomplete="email"></label>
+    <label>Company (optional)<input id="company" maxlength="200" autocomplete="organization"></label>
+    <label>GSTIN (optional, for a B2B invoice)<input id="gstin" maxlength="20"></label>
+    <label class="full">Billing address (optional)<input id="address" maxlength="300" autocomplete="street-address"></label>
+    <p class="msg" id="msg"></p>
+    <div class="total"><span>Total for one year: <b id="total">–</b> <span class="hint" id="taxNote"></span></span>
+      <button id="pay" type="submit">Pay and get the key</button></div>
+  </form>
+  </div>
+  <div class="done" id="done" hidden>
+    <h3 style="margin-top:0">Thank you! Your licence is ready.</h3>
+    <div id="doneInfo" class="hint"></div>
+    <div class="key" id="key"></div>
+    <button class="ghost" id="copy" type="button">Copy key</button>
+    <p class="hint">Paste it on each server: dashboard → <b>Subscription</b> → <b>Enter key</b>, or run <code>p8 license set &lt;key&gt;</code>. We also emailed it to you with the tax invoice.</p>
+  </div>
+  <p class="hint" id="support"></p>
+</main>
+<script>
+let info = null;
+const $ = id => document.getElementById(id);
+const fmt = v => (info.currency === 'INR' ? '₹' : info.currency + ' ') + (v / 100).toLocaleString('en-IN', {minimumFractionDigits: v % 100 ? 2 : 0});
+
+function el(tag, attrs, ...kids) {
+  const e = document.createElement(tag);
+  Object.assign(e, attrs || {});
+  for (const k of kids) e.append(k);
+  return e;
+}
+
+function serverCount() {
+  return $('servers').value.split(/[\s,]+/).filter(Boolean).length;
+}
+
+function update() {
+  const t = info.tiers.find(x => x.id === $('tier').value);
+  document.querySelectorAll('.tier').forEach(c => c.classList.toggle('pick', c.dataset.id === $('tier').value));
+  if (!t) return;
+  const renew = $('kind').value === 'renew';
+  $('serversRow').hidden = renew;
+  $('renewRow').hidden = !renew;
+  const n = Math.max(1, serverCount());
+  const sub = t.servers ? t.price : t.price * (renew ? 1 : n);
+  const tax = Math.round(sub * info.tax_percent / 100);
+  $('total').textContent = renew && !t.servers ? fmt(t.price + Math.round(t.price * info.tax_percent / 100)) + ' per server' : fmt(sub + tax);
+  $('taxNote').textContent = 'incl. ' + info.tax_name + ' ' + info.tax_percent + '%' + (t.servers ? ' · up to ' + t.servers + ' servers' : renew ? '' : ' · ' + n + ' server' + (n > 1 ? 's' : ''));
+}
+
+async function load() {
+  const r = await fetch('/api/shop');
+  info = await r.json();
+  document.title = info.brand + ' Subscriptions';
+  $('brand').textContent = info.brand;
+  if (info.support) $('support').textContent = 'Questions? ' + info.support;
+  const box = $('tiers');
+  for (const t of info.tiers) {
+    const ul = el('ul');
+    for (const s of t.summary) ul.append(el('li', {textContent: s}));
+    const b = t.price ? el('button', {type: 'button', textContent: 'Choose ' + t.name}) : el('button', {type: 'button', className: 'ghost', textContent: 'Free, no key needed', disabled: true});
+    b.onclick = () => { $('tier').value = t.id; update(); $('buy').scrollIntoView({behavior: 'smooth'}); };
+    const card = el('div', {className: 'tier'}, el('h3', {textContent: t.name}), el('div', {className: 'for', textContent: t.for}),
+      el('div', {className: 'price', textContent: t.price ? fmt(t.price) : 'Free'}),
+      el('div', {className: 'per', textContent: t.price ? 'per ' + t.per + ' / year + ' + info.tax_name : 'forever'}), ul, b);
+    card.dataset.id = t.id;
+    box.append(card);
+    if (t.price) $('tier').append(el('option', {value: t.id, textContent: t.name + ' — ' + fmt(t.price) + ' per ' + t.per + ' / year'}));
+  }
+  if (!info.payments) { $('pay').disabled = true; $('msg').textContent = 'Online payment is not set up yet. Please contact us to buy a subscription.'; }
+  const pre = new URLSearchParams(location.search);
+  if (pre.get('tier')) $('tier').value = pre.get('tier');
+  if (pre.get('server')) $('servers').value = pre.get('server');
+  if (pre.get('renew')) { $('kind').value = 'renew'; $('renew').value = pre.get('renew'); }
+  update();
+}
+
+function loadCheckout() {
+  return new Promise((ok, bad) => {
+    if (window.Razorpay) return ok();
+    const s = document.createElement('script');
+    s.src = 'https://checkout.razorpay.com/v1/checkout.js';
+    s.onload = ok; s.onerror = () => bad(new Error('could not load the payment window'));
+    document.head.append(s);
+  });
+}
+
+async function post(path, body) {
+  const r = await fetch(path, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j.error && j.error.message) || 'request failed (' + r.status + ')');
+  return j;
+}
+
+$('buy').onsubmit = async e => {
+  e.preventDefault();
+  $('msg').textContent = '';
+  $('pay').disabled = true;
+  try {
+    const renew = $('kind').value === 'renew';
+    const o = await post('/api/order', {tier: $('tier').value, servers: renew ? '' : $('servers').value, renew: renew ? $('renew').value.trim() : '',
+      name: $('name').value, email: $('email').value, company: $('company').value, gstin: $('gstin').value, address: $('address').value});
+    await loadCheckout();
+    const rz = new Razorpay({key: o.key_id, order_id: o.order_id, amount: o.amount, currency: o.currency, name: o.name,
+      description: $('tier').selectedOptions[0].textContent, prefill: {name: $('name').value, email: o.email}, theme: {color: '#3fa7ff'},
+      modal: {ondismiss: () => { $('pay').disabled = false; }},
+      handler: async resp => {
+        try {
+          const d = await post('/api/paid', resp);
+          $('buyBox').hidden = true; $('buyTitle').hidden = true; $('done').hidden = false;
+          $('key').textContent = d.key;
+          $('doneInfo').textContent = 'Licence ' + d.license.id + ' · ' + d.license.tier + ' · valid until ' + d.license.expires + ' · servers: ' + d.license.servers.join(', ') + ' · invoice ' + d.invoice.number;
+          $('done').scrollIntoView({behavior: 'smooth'});
+        } catch (err) { $('msg').textContent = err.message + ' — if money was taken, the key will arrive by email; otherwise contact us.'; $('pay').disabled = false; }
+      }});
+    rz.on('payment.failed', r => { $('msg').textContent = 'Payment failed: ' + (r.error && r.error.description || 'try again'); $('pay').disabled = false; });
+    rz.open();
+  } catch (err) { $('msg').textContent = err.message; $('pay').disabled = false; }
+};
+$('copy').onclick = async () => { try { await navigator.clipboard.writeText($('key').textContent); $('copy').textContent = 'Copied'; } catch (_) {} };
+['tier', 'kind', 'servers'].forEach(id => $(id).addEventListener('input', update));
+load().catch(err => { $('msg').textContent = 'Could not load prices: ' + err.message; });
+</script>
+</body>
+</html>

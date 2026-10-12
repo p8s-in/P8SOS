@@ -3,6 +3,7 @@
 //	p8sd serve [-config /etc/p8s/p8sd.json]   run the API server + web dashboard
 //	p8sd token [-name admin]                  generate an API token
 //	p8sd version
+//	p8sd server-id                            this server's ID (for buying a subscription)
 package main
 
 import (
@@ -27,6 +28,8 @@ import (
 	"p8sos/internal/api"
 	"p8sos/internal/audit"
 	"p8sos/internal/backup"
+	"p8sos/internal/billing"
+	"p8sos/internal/cloud"
 	"p8sos/internal/cloudinit"
 	"p8sos/internal/config"
 	"p8sos/internal/execx"
@@ -36,10 +39,15 @@ import (
 	"p8sos/internal/ippool"
 	"p8sos/internal/isos"
 	"p8sos/internal/jobs"
+	"p8sos/internal/license"
+	"p8sos/internal/mail"
 	"p8sos/internal/metrics"
 	"p8sos/internal/storage"
+	"p8sos/internal/support"
+	"p8sos/internal/tasks"
 	"p8sos/internal/tlsutil"
 	"p8sos/internal/tunnel"
+	"p8sos/internal/updates"
 	"p8sos/internal/users"
 	"p8sos/internal/virt"
 	"p8sos/internal/vm"
@@ -62,8 +70,14 @@ func main() {
 		err = token(args)
 	case "version":
 		fmt.Println(version)
+	case "server-id": // for buying a licence
+		dir := "/var/lib/p8s"
+		if c, err := config.Load("/etc/p8s/p8sd.json"); err == nil {
+			dir = c.DataDir
+		}
+		fmt.Println((&license.Manager{Path: filepath.Join(dir, "license.json")}).ID())
 	default:
-		err = fmt.Errorf("unknown command %q (serve, token, version)", cmd)
+		err = fmt.Errorf("unknown command %q (serve, token, version, server-id)", cmd)
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "p8sd:", err)
@@ -175,6 +189,33 @@ func serve(args []string) error {
 			}
 		}
 	}()
+	cloudStore := &cloud.Store{Path: filepath.Join(cfg.DataDir, "cloud.json")}
+	mailer := &mail.Mailer{Dir: cfg.DataDir, Config: func() mail.Config {
+		st := cloudStore.Settings()
+		return mail.Config{Host: st.SMTPHost, Port: st.SMTPPort, User: st.SMTPUser, Pass: st.SMTPPass, From: st.MailFrom}
+	}}
+	lic := &license.Manager{Path: filepath.Join(cfg.DataDir, "license.json")}
+	if cfg.LicenseServer != "" {
+		lic.ShopURL = strings.TrimRight(cfg.LicenseServer, "/") + "/"
+		lic.CheckURL = lic.ShopURL + "api/v1/check"
+	}
+	if st := lic.Status(); st.Notice {
+		log.Info("P8S OS subscription", "server_id", st.ServerID, "tier", st.Tier, "state", st.State)
+	}
+	go lic.Run(ctx, func(err error) { log.Warn("licence check", "err", err) })
+	upd := &updates.Manager{Dir: filepath.Join(cfg.DataDir, "updates"), Server: cfg.LicenseServer, Current: version, Run: run,
+		Info: func() updates.Channel {
+			st := lic.Status()
+			c := updates.Channel{Allowed: []string{"testing"}, Server: st.ServerID}
+			if st.Channel == "stable" {
+				c.Allowed = []string{"stable", "testing"}
+			}
+			if st.License != nil {
+				c.License = st.License.ID
+			}
+			return c
+		}}
+	go upd.Loop(ctx, func(err error) { log.Warn("update check", "err", err) })
 	sessions := &users.Sessions{Path: filepath.Join(cfg.DataDir, "sessions.json")}
 	go func() { // keep last-use times on disk, so idle sign-outs survive restarts
 		t := time.NewTicker(time.Minute)
@@ -190,24 +231,55 @@ func serve(args []string) error {
 		}
 	}()
 
-	srv := &http.Server{
-		Addr: cfg.Listen,
-		Handler: (&api.Server{
-			VMs: svc, Templates: cfg.Templates, Tokens: cfg.Tokens, Version: version, Log: log,
-			BackupKeep: cfg.BackupKeep, BackupTime: cfg.BackupTime, Metrics: mc,
-			Host: func(ctx context.Context) any {
-				in := hostinfo.Collect(ctx, run, cfg.VMDataset)
-				in.Networks = svc.Networks()
-				return in
+	apiSrv := &api.Server{
+		VMs: svc, Templates: cfg.Templates, Tokens: cfg.Tokens, Version: version, Log: log,
+		BackupKeep: cfg.BackupKeep, BackupTime: cfg.BackupTime, Metrics: mc,
+		Host: func(ctx context.Context) any {
+			in := hostinfo.Collect(ctx, run, cfg.VMDataset)
+			in.Networks = svc.Networks()
+			return in
+		},
+		UI:       web.Handler(),
+		Users:    &users.Store{Path: filepath.Join(cfg.DataDir, "users.json")},
+		Sessions: sessions,
+		Tunnel:   tun,
+		Pools:    pools,
+		Cloud:    cloudStore,
+		Billing:  &billing.Store{Dir: filepath.Join(cfg.DataDir, "billing")},
+		Mail:     mailer,
+		Support:  &support.Store{Path: filepath.Join(cfg.DataDir, "tickets.json")},
+		Audit:    &audit.Log{Path: filepath.Join(cfg.DataDir, "audit.log")},
+		Issuer:   issuer(),
+		License:  lic,
+		Updates:  upd,
+		Node: &tasks.Node{
+			Tasks: &tasks.Manager{Dir: filepath.Join(cfg.DataDir, "tasks"), Scripts: scriptsDir(), Run: run},
+			Run:   run, Pool: strings.SplitN(cfg.VMDataset, "/", 2)[0], DataDir: cfg.DataDir,
+			Templates: func() []string {
+				var l []string
+				for _, t := range cfg.Templates {
+					l = append(l, t.Name)
+				}
+				return l
 			},
-			UI:       web.Handler(),
-			Users:    &users.Store{Path: filepath.Join(cfg.DataDir, "users.json")},
-			Sessions: sessions,
-			Tunnel:   tun,
-			Pools:    pools,
-			Audit:    &audit.Log{Path: filepath.Join(cfg.DataDir, "audit.log")},
-			Issuer:   issuer(),
-		}).Handler(),
+			LAN: svc.LANAvailable,
+		},
+	}
+	go func() { // P8S Cloud billing: hourly charges, low/negative balance, suspension
+		for {
+			if err := apiSrv.BillingTick(ctx); err != nil {
+				log.Error("billing", "err", err)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(5 * time.Minute):
+			}
+		}
+	}()
+	srv := &http.Server{
+		Addr:              cfg.Listen,
+		Handler:           apiSrv.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		// VM create can take a while (clone + seed + define + start).
 		WriteTimeout: 5 * time.Minute,
@@ -341,4 +413,12 @@ func localURL(cfg *config.Config) string {
 		scheme = "https"
 	}
 	return scheme + "://" + net.JoinHostPort(host, port)
+}
+
+// scriptsDir is where install.sh puts the host scripts (P8S_SCRIPTS overrides, for tests).
+func scriptsDir() string {
+	if d := os.Getenv("P8S_SCRIPTS"); d != "" {
+		return d
+	}
+	return "/usr/local/share/p8s"
 }

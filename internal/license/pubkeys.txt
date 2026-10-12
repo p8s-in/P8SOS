@@ -1,0 +1,2 @@
+# P8S licence signing keys (Ed25519, base64), one per line.
+# Keys signed by any of these are accepted. Generate with: p8s-licensed keygen

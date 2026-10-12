@@ -326,6 +326,9 @@ step "6e. user accounts (customers see only their own VMs)"
 CU=smoke-cust; CPW=smoke-cust-pass-$RANDOM
 api DELETE "/users/$CU"   # leftover from an interrupted run
 api POST /users '{"name":"'"$CU"'","role":"customer","password":"'"$CPW"'","quota":{"vms":1,"vcpus":1,"memory_mib":1024,"disk_gb":20}}'
+if [[ $CODE == 402 ]]; then
+  ok "P8S OS Home: user limit reached -> 402 (skipping the customer tests; a subscription removes the limit)"
+else
 expect "add customer" 201
 out=$(curl -ks -X POST -H 'Content-Type: application/json' -d '{"user":"'"$CU"'","password":"'"$CPW"'"}' "$URL/login")
 CT=$(jq -r '.token // empty' <<<"$out")
@@ -351,6 +354,7 @@ capi GET /vms; expect "disabled customer is signed out" 401
 api DELETE "/users/$CU"; expect "delete customer" 204
 api GET "/audit?limit=50"
 jq -e --arg u "$CU" '[.entries[] | select(.user == $u)] | length > 0' <<<"$BODY" >/dev/null && ok "activity log records the customer's actions" || bad "audit: $BODY"
+fi
 
 step "6f. public IP pool (only with the home-network bridge)"
 api GET /host
@@ -376,6 +380,31 @@ if jq -e '.networks | index("lan")' <<<"$BODY" >/dev/null 2>&1; then
 else
   echo "  skipped (no home-network bridge; run: sudo p8 lan-setup)"
 fi
+
+step "6g. P8S Cloud (plans, billing, support, API tokens)"
+api GET /billing; expect "billing view" 200
+api PUT /plans/smoketest '{"name":"Smoke","vcpus":1,"memory_mib":512,"disk_gb":4,"price_monthly":73000,"hidden":true}'
+if [[ $CODE == 402 ]]; then
+  ok "priced plans need a Hosting subscription -> 402"
+else
+  expect "add a plan" 200
+  [[ $(jq -r .hourly <<<"$BODY") == 100 ]] && ok "hourly price = monthly / 730 (rounded up)" || bad "plan: $BODY"
+  api DELETE /plans/smoketest; expect "delete the plan" 204
+fi
+api POST /tickets '{"subject":"smoke test","text":"please ignore"}'; expect "open a support request" 201
+tid=$(jq -r .id <<<"$BODY")
+api POST "/tickets/$tid/close"; expect "close it" 200
+api GET /cloud/settings; expect "cloud settings (admin)" 200
+api GET /cloud/outbox; expect "sent-email log" 200
+
+step "6h. subscription"
+api GET /license; expect "subscription status (admin)" 200
+[[ $(jq -r .server_id <<<"$BODY") =~ ^P8S(-[0-9A-F]{4}){4}$ ]] && ok "server ID $(jq -r .server_id <<<"$BODY"), tier $(jq -r .tier <<<"$BODY")" || bad "license: $BODY"
+api PUT /license '{"key":"P8S1-not.a-key"}'; expect "a fake key is refused" 400
+api GET /updates; expect "update status (admin)" 200
+api GET /node; expect "Server page (admin)" 200
+[[ $(jq -r .storage.health <<<"$BODY") == ONLINE ]] && ok "storage pool ONLINE" || bad "storage: $(jq -c .storage <<<"$BODY")"
+jq -e '.catalog | length > 0' <<<"$BODY" >/dev/null && ok "OS template list ($(jq '.catalog | length' <<<"$BODY") images)" || bad "template catalog empty"
 
 step "7. delete"
 if [[ ${KEEP:-0} == 1 ]]; then

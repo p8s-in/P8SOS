@@ -94,17 +94,22 @@ func (o *ownedVMs) ListJobs() []vm.Job {
 }
 
 type mu struct {
-	t   *testing.T
-	srv *httptest.Server
-	vms *ownedVMs
-	us  *users.Store
-	now time.Time
-	log *audit.Log
+	t      *testing.T
+	srv    *httptest.Server
+	server *Server
+	vms    *ownedVMs
+	us     *users.Store
+	now    time.Time
+	log    *audit.Log
 }
 
 func newMultiUser(t *testing.T) *mu { return newMultiUserWith(t, nil) }
 
 func newMultiUserWith(t *testing.T, tun *tunnel.Manager) *mu {
+	return newMultiUserCfg(t, func(s *Server) { s.Tunnel = tun })
+}
+
+func newMultiUserCfg(t *testing.T, cfg func(*Server)) *mu {
 	dir := t.TempDir()
 	sum := sha256.Sum256([]byte(secret))
 	m := &mu{t: t, now: time.Unix(1_800_000_000, 0)}
@@ -116,7 +121,11 @@ func newMultiUserWith(t *testing.T, tun *tunnel.Manager) *mu {
 	m.log = &audit.Log{Path: filepath.Join(dir, "audit.log")}
 	s := &Server{VMs: m.vms, Version: "test", Tokens: []config.Token{{Name: "host", SHA256: hex.EncodeToString(sum[:])}},
 		Templates: []config.Template{{Name: "debian-13", MinDiskGB: 4}},
-		Users:     m.us, Sessions: &users.Sessions{}, Audit: m.log, Limiter: &users.Limiter{Max: 3}, Tunnel: tun, Pools: &ippool.Store{}}
+		Users:     m.us, Sessions: &users.Sessions{}, Audit: m.log, Limiter: &users.Limiter{Max: 3}, Pools: &ippool.Store{}}
+	if cfg != nil {
+		cfg(s)
+	}
+	m.server = s
 	m.srv = httptest.NewServer(s.Handler())
 	t.Cleanup(m.srv.Close)
 	return m

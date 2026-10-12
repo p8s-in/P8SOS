@@ -119,7 +119,13 @@ ok "Go $("$GO" env GOVERSION)"
 export PATH=$(dirname "$GO"):$PATH GOCACHE=/root/.cache/go-build GOFLAGS=-buildvcs=false
 (cd "$REPO" && go test ./... >/dev/null) || die "unit tests failed: cd $REPO && go test ./..."
 ok "unit tests pass"
-(cd "$REPO" && make -s install >/dev/null)
+V=$(tr -d ' \r\n' < "$REPO/VERSION" 2>/dev/null || true)  # release bundles carry their version
+(cd "$REPO" && make -s install ${V:+VERSION=$V} >/dev/null)
+# licence server (selling P8S OS subscriptions); installed but off until you enable it
+(cd "$REPO" && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o bin/p8s-licensed ./cmd/p8s-licensed) || die "building p8s-licensed failed"
+install -m 0755 "$REPO/bin/p8s-licensed" /usr/local/bin/p8s-licensed
+install -m 0644 "$REPO/deploy/p8s-licensed.service" /etc/systemd/system/p8s-licensed.service
+systemctl daemon-reload
 chown -R "$USER_NAME": "$REPO/bin" 2>/dev/null || true
 install -m 0755 "$REPO/scripts/p8" /usr/local/bin/p8
 install -d -m 0755 /usr/local/share/p8s
@@ -127,6 +133,7 @@ install -m 0755 "$REPO/scripts/smoke-test.sh" /usr/local/share/p8s/smoke-test.sh
 install -m 0755 "$REPO/scripts/setup-bridge.sh" /usr/local/share/p8s/setup-bridge.sh
 install -m 0755 "$REPO/scripts/make-template.sh" /usr/local/share/p8s/make-template.sh
 install -m 0755 "$REPO/scripts/storage.sh" /usr/local/share/p8s/storage.sh
+install -m 0755 "$REPO/scripts/os-upgrade.sh" /usr/local/share/p8s/os-upgrade.sh
 ok "installed /usr/local/bin/p8sd and the 'p8' command"
 
 # ---------------------------------------------------------------------------

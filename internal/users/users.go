@@ -58,6 +58,27 @@ type User struct {
 	TOTPSecret  string `json:"totp_secret,omitempty"`
 	TOTPPending string `json:"totp_pending,omitempty"`
 	TOTPLast    int64  `json:"totp_last,omitempty"` // last accepted time step (no replays)
+	// Email and contact details (self sign-up, notifications, invoices).
+	Email    string `json:"email,omitempty"`
+	Verified bool   `json:"verified,omitempty"` // email confirmed (or added by an admin)
+	FullName string `json:"full_name,omitempty"`
+	Phone    string `json:"phone,omitempty"`
+	Company  string `json:"company,omitempty"`
+	GSTIN    string `json:"gstin,omitempty"`
+	Address  string `json:"address,omitempty"`
+	// One-time codes for email links: "purpose:sha256hex:unix-expiry".
+	Codes []string `json:"codes,omitempty"`
+	// API tokens the user made for scripts (only hashes kept).
+	Tokens []APIToken `json:"tokens,omitempty"`
+}
+
+// APIToken is a personal API token (acts as its user).
+type APIToken struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	SHA256   string `json:"sha256"`
+	Created  string `json:"created_at"`
+	LastUsed string `json:"last_used,omitempty"`
 }
 
 // Public is what the API shows about a user (no secrets).
@@ -68,10 +89,18 @@ type Public struct {
 	Disabled  bool   `json:"disabled"`
 	TwoFactor bool   `json:"two_factor"`
 	CreatedAt string `json:"created_at"`
+	Email     string `json:"email,omitempty"`
+	Verified  bool   `json:"verified"`
+	FullName  string `json:"full_name,omitempty"`
+	Phone     string `json:"phone,omitempty"`
+	Company   string `json:"company,omitempty"`
+	GSTIN     string `json:"gstin,omitempty"`
+	Address   string `json:"address,omitempty"`
 }
 
 func (u User) Public() Public {
-	return Public{u.Name, u.Role, u.Quota, u.Disabled, u.TOTPSecret != "", u.CreatedAt}
+	return Public{u.Name, u.Role, u.Quota, u.Disabled, u.TOTPSecret != "", u.CreatedAt,
+		u.Email, u.Verified, u.FullName, u.Phone, u.Company, u.GSTIN, u.Address}
 }
 
 var (

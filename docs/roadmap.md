@@ -39,7 +39,16 @@ Each phase ships something usable on its own.
 - [x] Public IP pools (v0.4): address blocks per bridge (bridged or routed), static config via cloud-init network-config,
       anti-spoofing (MAC + IPv4 pinned to the VM's port), `public_ips` in plans, address kept for recreated VMs;
       Settings → Public IP pools, New VM → Public IP, `p8 ippool` / `p8 create --ip`
+- [x] P8S Cloud (v0.5): self sign-up with email confirmation, password reset, profile; plans with monthly prices billed
+      hourly from a prepaid wallet (monthly cap); Razorpay top-ups (Checkout + signature + capture + webhook), GST tax
+      invoices, manual payments; low/negative balance emails and automatic stop after a grace period; SMTP emails;
+      support tickets; personal API tokens; Settings → Selling / Plans / Payments / Email, Billing and Support pages
 - [x] Thin VM disks, `p8 storage grow`, file pool sized from free space
+- [x] P8S OS subscriptions (v0.6): Home (free) / Business / Hosting / Partner / Internal, Ed25519-signed keys tied to
+      server IDs, offline check + optional daily online check, 14-day grace, dashboard Subscription page and notice,
+      `p8 license`; `p8s-licensed` licence server with a Razorpay shop, GST invoices, renew/rebind/revoke ([subscriptions.md](subscriptions.md))
+- [x] Server page in the dashboard: storage + grow, add OS templates, home-network setup, Debian updates, reboot, task log with live output
+- [x] Update server: signed release bundles, testing / stable channels (stable for subscribers), one-click install from the dashboard, `p8 update`
 
 Still to do: projects, scoped API tokens per user; per-tenant VLAN/bridge;
 nftables firewall per VM; IP pools (static assignment via cloud-init network

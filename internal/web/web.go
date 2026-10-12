@@ -17,6 +17,12 @@ var (
 	consolePage []byte
 	//go:embed novnc.min.js
 	novncJS []byte
+	//go:embed cloud.js
+	cloudJS []byte
+	//go:embed license.js
+	licenseJS []byte
+	//go:embed node.js
+	nodeJS []byte
 	//go:embed novnc-LICENSE.txt
 	novncLicense []byte
 )
@@ -31,6 +37,9 @@ var assets = map[string]asset{
 	"/":                  {page, "text/html; charset=utf-8", "no-cache"},
 	"/console":           {consolePage, "text/html; charset=utf-8", "no-cache"},
 	"/novnc.min.js":      {novncJS, "text/javascript; charset=utf-8", "public, max-age=86400"},
+	"/cloud.js":          {cloudJS, "text/javascript; charset=utf-8", "no-cache"},
+	"/license.js":        {licenseJS, "text/javascript; charset=utf-8", "no-cache"},
+	"/node.js":           {nodeJS, "text/javascript; charset=utf-8", "no-cache"},
 	"/novnc-LICENSE.txt": {novncLicense, "text/plain; charset=utf-8", "public, max-age=86400"},
 }
 
@@ -59,9 +68,12 @@ func Handler() http.Handler {
 		if reHost.MatchString(r.Host) {
 			ws = " wss://" + r.Host + " ws://" + r.Host
 		}
+		// Razorpay Checkout (wallet top-ups) loads its script and opens its frame.
+		const rzp = "https://checkout.razorpay.com"
 		h.Set("Content-Security-Policy",
-			"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; "+
-				"connect-src 'self'"+ws+"; frame-ancestors 'none'; form-action 'self'")
+			"default-src 'self'; script-src 'self' 'unsafe-inline' "+rzp+"; style-src 'unsafe-inline'; img-src 'self' data: https:; "+
+				"connect-src 'self'"+ws+" https://api.razorpay.com https://lumberjack.razorpay.com; "+
+				"frame-src https://api.razorpay.com "+rzp+"; frame-ancestors 'none'; form-action 'self'")
 		_, _ = w.Write(a.body)
 	})
 }

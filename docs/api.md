@@ -67,6 +67,26 @@ customers only a reference (`ref 1a2b3c4d`); the details are in p8sd's log.
 | `POST /vms/{name}/sites` | owner/admin | `{"name":"shop","port":80,"https":false}` → `201` site; counts against `quota.sites` |
 | `DELETE /sites/{host}` | owner/admin | takes it off (route and DNS record) |
 
+### P8S Cloud — see [p8s-cloud.md](p8s-cloud.md)
+
+| endpoint | who | what |
+|---|---|---|
+| `POST /signup` | anyone (when open) | `{"user","email","password","full_name"}` → `201 {"token"}` or `202 {"verify":true}` (email link) |
+| `POST /verify`, `/verify/resend` | anyone | confirm email with the link's code (→ token) / send it again |
+| `POST /password/forgot`, `/password/reset` | anyone | email a reset link / `{"code","password"}` |
+| `PUT /me/profile` | user | email, full_name, phone, company, gstin, address |
+| `GET/POST /me/tokens`, `DELETE /me/tokens/{id}` | user (signed in) | personal API tokens `p8sk_…` |
+| `GET /plans`; `PUT/DELETE /plans/{id}` | all; admin | sizes and monthly prices (`hourly` = price/730 rounded up) |
+| `POST /vms` with `"plan"` | customer, admin | size from the plan; billing starts; needs a day of credit |
+| `GET /billing` (`?user=` admin) | signed in | balance, hourly burn, billed servers, suspended, payment info |
+| `GET /billing/entries`, `/billing/invoices`, `/billing/invoices/{number}` | owner, admin | transactions and tax invoices |
+| `POST /billing/topup` → `POST /billing/topup/verify` | customer | Razorpay order → Checkout → signature check, capture, credit, invoice |
+| `POST /billing/razorpay/webhook` | Razorpay | `payment.captured` (signature `X-Razorpay-Signature`) |
+| `POST /billing/adjust` | admin | `{"user","amount","note","invoice"}` credit/debit; `invoice` = payment received |
+| `GET /billing/customers` | admin | balances, servers, monthly spend |
+| `GET/PUT /cloud/settings`, `POST /cloud/test-email`, `GET /cloud/outbox` | admin | brand, sign-up, tax, seller, Razorpay, SMTP (secrets shown as `********`) |
+| `GET/POST /tickets`, `GET /tickets/{id}`, `POST /tickets/{id}/reply`, `/close` | owner, admin | support requests |
+
 ### Public IP pools — see [public-ips.md](public-ips.md)
 
 | endpoint | who | what |
@@ -294,6 +314,33 @@ and only from a page served by this host (Origin check). No bearer token on the 
 `POST /vms/{name}/password` `{"user":"debian","password":"…"}` → `204`. Sets a guest account's
 password through the guest agent so you can log in on the console (cloud images ship with
 passwords locked). 8–128 chars. `409` if the VM isn't running or the agent isn't up yet.
+
+### Subscription (admins)
+
+| Method | Path | |
+|---|---|---|
+| GET | `/api/v1/license` | server ID, tier, state (`none`, `active`, `expiring`, `grace`, `expired`, `revoked`), features, notice, user limit, tiers |
+| PUT | `/api/v1/license` | `{"key":"P8S1-…"}` install a key (400 if forged, expired or for another server) |
+| DELETE | `/api/v1/license` | remove the key (back to Home) |
+| POST | `/api/v1/license/check` | ask the licence server now |
+
+| GET | `/api/v1/updates` | running version, channel, available release, last install (state + log) |
+| POST | `/api/v1/updates/check` | ask the update server now |
+| POST | `/api/v1/updates/install` | download, verify and install the available release (202) |
+| PUT | `/api/v1/updates/channel` | `{"channel":"stable"|"testing"}` (stable needs a subscription) |
+
+### Server page (admins)
+
+| Method | Path | |
+|---|---|---|
+| GET | `/api/v1/node` | storage pool (size, used, free, health, how much it can grow), OS template catalog, home network, Debian updates, running task, recent tasks |
+| POST | `/api/v1/node/tasks` | `{"kind":"template","arg":"ubuntu-24.04"}` · `storage-grow` · `lan-setup` · `os-check` · `os-upgrade` · `reboot` (202; 409 while another runs) |
+| GET | `/api/v1/node/tasks` / `/api/v1/node/tasks/{id}` | task list / one task with its log |
+
+Tasks run as their own systemd units (`p8s-task-*`), so they finish even when p8sd restarts.
+
+Features a tier doesn't unlock answer **402** `subscription` (e.g. a 4th account on Home, priced plans without Hosting).
+See [subscriptions.md](subscriptions.md).
 
 ## Example session
 

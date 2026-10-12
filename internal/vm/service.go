@@ -113,6 +113,8 @@ type CreateRequest struct {
 	Network   string   `json:"network,omitempty"` // "nat" (default), "lan", or "public" (with ip_pool)
 	// IPPool gives the VM a public address from this pool (static, via cloud-init).
 	IPPool string `json:"ip_pool,omitempty"`
+	// Plan is a priced size (P8S Cloud); the API fills in CPUs/RAM/disk from it.
+	Plan string `json:"plan,omitempty"`
 	// ISO installs by hand from an image in the ISO library instead of a
 	// template: empty disk of DiskGB, boots the CD, install via the console.
 	ISO    string `json:"iso,omitempty"`

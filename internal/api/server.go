@@ -17,12 +17,19 @@ import (
 	"time"
 
 	"p8sos/internal/audit"
+	"p8sos/internal/billing"
+	"p8sos/internal/cloud"
 	"p8sos/internal/config"
 	"p8sos/internal/console"
 	"p8sos/internal/firewall"
 	"p8sos/internal/ippool"
+	"p8sos/internal/license"
+	"p8sos/internal/mail"
 	"p8sos/internal/metrics"
+	"p8sos/internal/support"
+	"p8sos/internal/tasks"
 	"p8sos/internal/tunnel"
+	"p8sos/internal/updates"
 	"p8sos/internal/users"
 	"p8sos/internal/vm"
 )
@@ -90,6 +97,18 @@ type Server struct {
 	Issuer   string          // name shown in authenticator apps
 	Tunnel   *tunnel.Manager // public websites via Cloudflare Tunnel; nil = off
 	Pools    *ippool.Store   // public IP pools; nil = none
+	// P8S Cloud (selling): settings and plans, wallet billing, email, support.
+	Cloud    *cloud.Store
+	Billing  *billing.Store
+	Mail     *mail.Mailer
+	Support  *support.Store
+	Razorpay func(cloud.Settings) *billing.Razorpay // nil = real API
+	// License is this server's P8S OS subscription; nil = everything allowed (tests).
+	License *license.Manager
+	// Updates installs new P8S OS versions from the update server; nil = not managed.
+	Updates *updates.Manager
+	// Node is the Server page: host tasks (templates, storage, network, Debian updates); nil = none.
+	Node *tasks.Node
 
 	once      sync.Once
 	lmOnce    sync.Once
@@ -112,6 +131,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/console", s.consoleSocket) // authorized by its one-time ticket
 	mux.HandleFunc("GET /api/v1/auth", s.authInfo)
 	mux.HandleFunc("POST /api/v1/login", s.login)
+	mux.HandleFunc("POST /api/v1/signup", s.signup)
+	mux.HandleFunc("POST /api/v1/verify", s.verifyEmail)
+	mux.HandleFunc("POST /api/v1/verify/resend", s.resendVerify)
+	mux.HandleFunc("POST /api/v1/password/forgot", s.forgotPassword)
+	mux.HandleFunc("POST /api/v1/password/reset", s.resetPassword)
+	mux.HandleFunc("POST /api/v1/billing/razorpay/webhook", s.razorpayWebhook)
 
 	auth := http.NewServeMux()
 	auth.HandleFunc("GET /api/v1/templates", s.listTemplates)
@@ -159,6 +184,30 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("PATCH /api/v1/users/{user}", s.updateUser)
 	auth.HandleFunc("DELETE /api/v1/users/{user}", s.deleteUser)
 	auth.HandleFunc("PUT /api/v1/vms/{name}/owner", s.setOwner)
+	auth.HandleFunc("PUT /api/v1/me/profile", s.setProfile)
+	auth.HandleFunc("GET /api/v1/me/tokens", s.listTokens)
+	auth.HandleFunc("POST /api/v1/me/tokens", s.newToken)
+	auth.HandleFunc("DELETE /api/v1/me/tokens/{id}", s.deleteToken)
+	auth.HandleFunc("GET /api/v1/plans", s.listPlans)
+	auth.HandleFunc("PUT /api/v1/plans/{id}", s.putPlan)
+	auth.HandleFunc("DELETE /api/v1/plans/{id}", s.deletePlan)
+	auth.HandleFunc("GET /api/v1/cloud/settings", s.getCloudSettings)
+	auth.HandleFunc("PUT /api/v1/cloud/settings", s.putCloudSettings)
+	auth.HandleFunc("POST /api/v1/cloud/test-email", s.testEmail)
+	auth.HandleFunc("GET /api/v1/cloud/outbox", s.outbox)
+	auth.HandleFunc("GET /api/v1/billing", s.getBilling)
+	auth.HandleFunc("GET /api/v1/billing/entries", s.billingEntries)
+	auth.HandleFunc("POST /api/v1/billing/topup", s.topup)
+	auth.HandleFunc("POST /api/v1/billing/topup/verify", s.topupVerify)
+	auth.HandleFunc("GET /api/v1/billing/invoices", s.listInvoices)
+	auth.HandleFunc("GET /api/v1/billing/invoices/{number}", s.getInvoice)
+	auth.HandleFunc("POST /api/v1/billing/adjust", s.adjust)
+	auth.HandleFunc("GET /api/v1/billing/customers", s.customers)
+	auth.HandleFunc("GET /api/v1/tickets", s.listTickets)
+	auth.HandleFunc("POST /api/v1/tickets", s.openTicket)
+	auth.HandleFunc("GET /api/v1/tickets/{id}", s.getTicket)
+	auth.HandleFunc("POST /api/v1/tickets/{id}/reply", s.replyTicket)
+	auth.HandleFunc("POST /api/v1/tickets/{id}/close", s.closeTicket)
 	auth.HandleFunc("GET /api/v1/ippools", s.listPools)
 	auth.HandleFunc("POST /api/v1/ippools", s.addPool)
 	auth.HandleFunc("PATCH /api/v1/ippools/{pool}", s.updatePool)
@@ -174,6 +223,18 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("GET /api/v1/vms/{name}/firewall", s.getFirewall)
 	auth.HandleFunc("PUT /api/v1/vms/{name}/firewall", s.putFirewall)
 	auth.HandleFunc("GET /api/v1/audit", s.auditLog)
+	auth.HandleFunc("GET /api/v1/license", s.getLicense)
+	auth.HandleFunc("PUT /api/v1/license", s.putLicense)
+	auth.HandleFunc("DELETE /api/v1/license", s.deleteLicense)
+	auth.HandleFunc("POST /api/v1/license/check", s.checkLicense)
+	auth.HandleFunc("GET /api/v1/node", s.getNode)
+	auth.HandleFunc("GET /api/v1/node/tasks", s.listTasks)
+	auth.HandleFunc("POST /api/v1/node/tasks", s.startTask)
+	auth.HandleFunc("GET /api/v1/node/tasks/{id}", s.getTask)
+	auth.HandleFunc("GET /api/v1/updates", s.getUpdates)
+	auth.HandleFunc("POST /api/v1/updates/check", s.checkUpdates)
+	auth.HandleFunc("POST /api/v1/updates/install", s.installUpdate)
+	auth.HandleFunc("PUT /api/v1/updates/channel", s.setUpdateChannel)
 	mux.Handle("/api/v1/", s.requireAuth(s.audited(auth)))
 	if s.UI != nil {
 		mux.Handle("/", s.UI) // the page itself is public; every API call it makes needs the token
@@ -239,6 +300,10 @@ func (s *Server) createVM(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := who(r)
+	plan, ok := s.applyPlan(w, r, &req)
+	if !ok {
+		return
+	}
 	if !p.Admin {
 		req.Owner = p.Name
 		if req.Network == vm.NetLAN && !p.Quota.LAN {
@@ -256,6 +321,9 @@ func (s *Server) createVM(w http.ResponseWriter, r *http.Request) {
 		defer s.quotaLock(p.Name)()
 		if err := s.checkQuota(r.Context(), p, d); err != nil {
 			s.fail(w, r, err)
+			return
+		}
+		if !s.canAfford(w, r, p.Name, plan) {
 			return
 		}
 	} else if req.Owner != "" {
@@ -281,6 +349,7 @@ func (s *Server) createVM(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
+	s.afterCreate(r, v, plan)
 	w.Header().Set("Location", "/api/v1/vms/"+v.Name)
 	writeJSON(w, http.StatusCreated, v)
 }
@@ -295,6 +364,9 @@ func (s *Server) getVM(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) startVM(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.vmFor(w, r); !ok {
+		return
+	}
+	if s.suspended(w, r) {
 		return
 	}
 	v, err := s.VMs.Start(r.Context(), r.PathValue("name"))
@@ -343,6 +415,11 @@ func (s *Server) deleteVM(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
+	if s.Billing != nil { // stop charging
+		if err := s.Billing.Unsubscribe(r.PathValue("name")); err != nil && s.Log != nil {
+			s.Log.Error("stop billing of deleted vm", "vm", r.PathValue("name"), "err", err)
+		}
+	}
 	if s.Tunnel != nil { // its websites go with it
 		if err := s.Tunnel.RemoveVM(context.WithoutCancel(r.Context()), r.PathValue("name")); err != nil && s.Log != nil {
 			s.Log.Error("remove websites of deleted vm", "vm", r.PathValue("name"), "err", err)
@@ -355,6 +432,12 @@ func (s *Server) resizeVM(w http.ResponseWriter, r *http.Request) {
 	cur, ok := s.vmFor(w, r)
 	if !ok {
 		return
+	}
+	if s.Billing != nil && !who(r).Admin {
+		if _, billed := s.Billing.Sub(cur.Name); billed {
+			writeErr(w, http.StatusBadRequest, "invalid", "this server is on a plan; to change its size, ask support (plan changes are coming)")
+			return
+		}
 	}
 	var req vm.ResizeRequest
 	if !decode(w, r, &req) {
@@ -914,4 +997,10 @@ func (s *Server) putFirewall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, fw)
+}
+
+func decodeBytes(b []byte, v any) error { return json.Unmarshal(b, v) }
+
+func auditEntry(user, detail string) audit.Entry {
+	return audit.Entry{User: user, Action: "billing", Status: 200, Detail: detail}
 }

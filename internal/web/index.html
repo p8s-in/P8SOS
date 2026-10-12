@@ -52,6 +52,7 @@ tr:last-child td{border-bottom:0}
 .empty{padding:40px;text-align:center;color:var(--muted)}
 .login{max-width:420px;margin:12vh auto;padding:28px}
 .login h1{margin:0 0 4px;font-size:22px}
+.login-links{display:flex;justify-content:space-between;margin-top:14px}
 label{display:block;font-size:13px;font-weight:550;margin:12px 0 4px}
 input,select,textarea{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:7px;background:var(--bg)}
 textarea{min-height:64px;resize:vertical}
@@ -103,6 +104,18 @@ dialog form.uform{padding:0}
 #pList td:last-child{white-space:nowrap;vertical-align:top}
 .steps{margin:8px 0 4px;padding-left:20px}.steps li{margin:3px 0}
 .state.connected .dot{background:var(--ok)} .state.starting .dot{background:var(--warn)} .state.error .dot,.state.not_installed .dot{background:var(--bad)}
+.plans{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px}
+.plan{border:1px solid var(--line);border-radius:9px;padding:10px;cursor:pointer;background:var(--bg)}
+.plan:hover{border-color:var(--muted)} .plan.sel{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent) inset}
+.plan b{display:block;font-size:13px} .plan .price{font-size:17px;font-weight:650;margin:4px 0 2px} .plan .sub{font-size:12px}
+.badge{display:inline-block;min-width:8px;padding:0 6px;border-radius:9px;background:var(--accent);color:var(--accent-ink);font-size:11px;margin-left:4px}
+.badge.bad{background:var(--bad);color:#fff}
+.inv{background:#fff;color:#111;padding:28px;border:1px solid var(--line);border-radius:8px;font-size:13px}
+.inv table td,.inv table th{border-bottom:1px solid #ddd;padding:6px 4px;white-space:normal;color:#111}
+.inv h2{color:#111}
+.thread .m{border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin:8px 0;white-space:pre-wrap}
+.thread .m.staff{border-left:4px solid var(--accent)}
+@media print{body *{visibility:hidden} .inv,.inv *{visibility:visible} .inv{position:absolute;left:0;top:0;border:0;width:100%}}
 .btn.confirm{background:var(--bad);border-color:var(--bad);color:#fff}
 @media (max-width:760px){
   header{padding:10px 16px} main{padding:16px} .panel-head{flex-wrap:wrap} #hVer{display:none}
@@ -137,9 +150,10 @@ dialog form.uform{padding:0}
     <option value="lan">Home network — IP from your router</option>
   </select>
   <div class="hint" id="cNetHint"></div>
+  <div id="cPlanBox" hidden><label>Size and price</label><div id="cPlans" class="plans"></div></div>
   <div id="cOwnerBox" hidden><label for="cOwner">For</label><select id="cOwner"></select>
     <div class="hint">The customer sees and manages this VM; it counts against their plan.</div></div>
-  <div class="row">
+  <div class="row" id="cSizeRow">
     <div><label for="cCpu">CPUs</label><input id="cCpu" type="number" min="1" value="1"></div>
     <div><label for="cMem">RAM</label><select id="cMem">
       <option value="512">512 MB</option><option value="1024" selected>1 GB</option><option value="2048">2 GB</option>
@@ -413,7 +427,9 @@ const store = {
   clear(){ mem = ""; try { sessionStorage.removeItem("p8s.token"); localStorage.removeItem("p8s.token"); } catch {} },
 };
 let mem = "", token = store.get(), vms = [], host = null, templates = [], busy = new Set(), timer = null, version = "";
-let me = null, userList = [];
+let me = null, userList = [], brandName = "P8S OS";
+// "P8S Cloud" -> P8S <b>Cloud</b>: the last word in the accent colour, like the original logo.
+function brandHTML(){ const w = esc(brandName).split(" "); return w.length > 1 ? w.slice(0, -1).join(" ") + " <b>" + w[w.length - 1] + "</b>" : "<b>" + w[0] + "</b>"; }
 const isAdmin = () => me?.role === "admin";
 
 function toast(msg, err){
@@ -451,7 +467,7 @@ function renderLogin(){
   for (const d of document.querySelectorAll("dialog[open]")) d.close();
   $("#app").innerHTML = `
   <div class="panel login">
-    <h1><span class="logo">P8S <b>OS</b></span></h1>
+    <h1><span class="logo" id="lBrand">P8S <b>OS</b></span></h1>
     <form id="fLogin" hidden>
       <div class="sub">Sign in to manage your servers.</div>
       <label for="lUser">User name</label>
@@ -461,15 +477,38 @@ function renderLogin(){
       <div id="lOtpBox" hidden><label for="lOtp">Code from your authenticator app</label>
         <input id="lOtp" inputmode="numeric" maxlength="6" autocomplete="one-time-code" placeholder="123456"></div>
       <label class="check"><input id="lRem" type="checkbox"> Remember on this device</label>
+      <div id="lUnver" class="hint" hidden>Didn't get the email? <button type="button" class="linkbtn" id="lResend">Send it again</button></div>
       <div class="dlg-actions"><button type="button" class="linkbtn" id="lTokLink">Use an API token instead</button><span class="spacer"></span><button class="btn primary">Sign in</button></div>
+      <div class="login-links"><button type="button" class="linkbtn" id="lSignupLink" hidden>Create an account</button>
+        <button type="button" class="linkbtn" id="lForgotLink" hidden>Forgot password?</button></div>
     </form>
+    <form id="fSignup" hidden>
+      <div class="sub">Create your account. You'll add credit and create servers right after.</div>
+      <label for="sName">Your name</label><input id="sName" autocomplete="name" maxlength="100">
+      <label for="sEmail">Email</label><input id="sEmail" type="email" autocomplete="email" required>
+      <label for="sUser">User name</label>
+      <input id="sUser" autocomplete="username" autocapitalize="none" pattern="[a-z][a-z0-9._\\-]{1,31}" placeholder="lowercase, e.g. ravi" required>
+      <label for="sPw">Password</label><input id="sPw" type="password" minlength="10" autocomplete="new-password" required placeholder="10+ characters">
+      <div class="dlg-actions"><button type="button" class="linkbtn" data-back>Back to sign in</button><span class="spacer"></span><button class="btn primary">Create account</button></div>
+    </form>
+    <form id="fForgot" hidden>
+      <div class="sub">We'll email you a link to choose a new password.</div>
+      <label for="fgEmail">Email</label><input id="fgEmail" type="email" autocomplete="email" required>
+      <div class="dlg-actions"><button type="button" class="linkbtn" data-back>Back to sign in</button><span class="spacer"></span><button class="btn primary">Send link</button></div>
+    </form>
+    <form id="fReset" hidden>
+      <div class="sub">Choose a new password.</div>
+      <label for="rsPw">New password</label><input id="rsPw" type="password" minlength="10" autocomplete="new-password" required>
+      <div class="dlg-actions"><span class="spacer"></span><button class="btn primary">Save password</button></div>
+    </form>
+    <div id="fMsg" class="sub" hidden></div>
     <form id="fFirst" hidden>
       <div class="sub">Welcome! Create your admin account. You'll sign in with it from now on.</div>
       <label for="fCode">Setup code</label>
       <input id="fCode" type="password" placeholder="p8s_…" autocomplete="off" required>
       <div class="hint">On the server: <span class="mono">cat ~/.p8s-token</span> (also shown at the end of the install)</div>
       <label for="fUser">Your user name</label>
-      <input id="fUser" autocomplete="username" autocapitalize="none" pattern="[a-z][a-z0-9._\-]{1,31}" placeholder="e.g. admin or your name" required>
+      <input id="fUser" autocomplete="username" autocapitalize="none" pattern="[a-z][a-z0-9._\\-]{1,31}" placeholder="e.g. admin or your name" required>
       <div class="row" style="grid-template-columns:1fr 1fr">
         <div><label for="fPw">Password</label><input id="fPw" type="password" minlength="10" autocomplete="new-password" required></div>
         <div><label for="fPw2">Repeat</label><input id="fPw2" type="password" minlength="10" autocomplete="new-password" required></div>
@@ -487,13 +526,53 @@ function renderLogin(){
       <div class="dlg-actions"><button type="button" class="linkbtn" id="lUserLink" hidden>Sign in with a user name</button><span class="spacer"></span><button class="btn primary">Sign in</button></div>
     </form>
   </div>`;
-  const show = mode => { // "login", "first" (no accounts yet) or "token"
-    $("#fLogin").hidden = mode !== "login"; $("#fFirst").hidden = mode !== "first"; $("#fTok").hidden = mode !== "token";
+  const forms = {login: "#fLogin", first: "#fFirst", token: "#fTok", signup: "#fSignup", forgot: "#fForgot", reset: "#fReset", msg: "#fMsg"};
+  const show = mode => { // which form
+    for (const [k, sel] of Object.entries(forms)) $(sel).hidden = k !== mode;
     $("#tokNoAcc").hidden = true;
-    ({login: $("#lUser"), first: $("#fCode"), token: $("#tok")})[mode].focus();
+    ({login: $("#lUser"), first: $("#fCode"), token: $("#tok"), signup: $("#sName"), forgot: $("#fgEmail"), reset: $("#rsPw")})[mode]?.focus();
   };
+  const post = (path, body) => fetch(API + path, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)})
+    .then(async r => ({ok: r.ok, status: r.status, d: await r.json().catch(() => ({}))})).catch(() => ({ok: false, d: {error: {message: "Can't reach the server"}}}));
+  const enter = tok => { token = tok; store.set(token, false); location.hash = ""; $("#app").innerHTML = ""; render(); };
+  const msg = text => { $("#fMsg").innerHTML = text; show("msg"); };
   let accounts = false;
-  fetch(API + "/auth").then(r => r.json()).then(a => { accounts = !!a.accounts; $("#lUserLink").hidden = !accounts; show(accounts ? "login" : "first"); }).catch(() => show("token"));
+  const hash = new URLSearchParams(location.hash.slice(1));
+  fetch(API + "/auth").then(r => r.json()).then(async a => {
+    accounts = !!a.accounts; $("#lUserLink").hidden = !accounts;
+    brandName = a.brand || "P8S OS"; document.title = brandName; $("#lBrand").innerHTML = brandHTML();
+    $("#lSignupLink").hidden = !a.signup; $("#lForgotLink").hidden = !a.reset;
+    if (hash.get("verify")) {
+      const r = await post("/verify", {code: hash.get("verify")});
+      if (r.ok) { toast("Email confirmed — welcome!"); return enter(r.d.token); }
+      toast(r.d?.error?.message || "That link didn't work", true); location.hash = "";
+    }
+    if (hash.get("reset")) return show("reset");
+    show(accounts ? "login" : "first");
+  }).catch(() => show("token"));
+  for (const b of document.querySelectorAll("#app [data-back]")) b.onclick = () => show("login");
+  $("#lSignupLink").onclick = () => show("signup");
+  $("#lForgotLink").onclick = () => show("forgot");
+  $("#fSignup").onsubmit = async e => {
+    e.preventDefault();
+    const r = await post("/signup", {full_name: $("#sName").value.trim(), email: $("#sEmail").value.trim(), user: $("#sUser").value.trim().toLowerCase(), password: $("#sPw").value});
+    if (r.status === 201) return enter(r.d.token);
+    if (r.status === 202) return msg(`Almost done: we sent a confirmation link to <b>${esc(r.d.email)}</b>. Open it to activate your account.`);
+    toast(r.d?.error?.message || "Sign-up failed", true);
+  };
+  $("#fForgot").onsubmit = async e => {
+    e.preventDefault();
+    await post("/password/forgot", {email: $("#fgEmail").value.trim()});
+    msg("If an account uses that email, a reset link is on its way. It works for 1 hour.");
+  };
+  $("#fReset").onsubmit = async e => {
+    e.preventDefault();
+    const r = await post("/password/reset", {code: hash.get("reset"), password: $("#rsPw").value});
+    location.hash = "";
+    if (r.ok) { toast("Password changed — sign in with it now"); return show("login"); }
+    toast(r.d?.error?.message || "That link didn't work", true); show("forgot");
+  };
+  $("#lResend").onclick = async () => { await post("/verify/resend", {user: $("#lUser").value.trim().toLowerCase()}); toast("If the account is waiting for confirmation, a new email is on its way"); };
   $("#lTokLink").onclick = () => show("token");
   $("#fTokLink").onclick = () => show("token");
   $("#fFirst").onsubmit = async e => {
@@ -523,6 +602,7 @@ function renderLogin(){
     const d = await r.json().catch(() => ({}));
     if (r.ok) { token = d.token; store.set(token, $("#lRem").checked); $("#app").innerHTML = ""; render(); return; }
     if (d?.error?.code === "otp_required") { $("#lOtpBox").hidden = false; $("#lOtp").focus(); return; }
+    $("#lUnver").hidden = d?.error?.code !== "unverified";
     if (d?.error?.code === "bad_login" && !$("#lOtpBox").hidden) $("#lOtp").value = "";
     toast(d?.error?.message || "Sign-in failed", true);
   };
@@ -537,7 +617,7 @@ function renderLogin(){
 function renderShell(){
   $("#app").innerHTML = `
   <header>
-    <span class="logo">P8S <b>OS</b></span>
+    <span class="logo" id="hBrand"></span>
     <span class="sub" id="hName"></span>
     <span class="spacer"></span>
     <span class="sub" id="hVer"></span>
@@ -545,6 +625,8 @@ function renderShell(){
     <button class="btn" id="bBackups">Backups</button>
     <button class="btn" id="bUsers" hidden>Users</button>
     <button class="btn" id="bSettings" hidden>Settings</button>
+    <button class="btn" id="bBilling" hidden>Billing</button>
+    <button class="btn" id="bSupport" hidden>Support</button>
     <button class="btn" id="bAudit">Activity</button>
     <button class="btn" id="bMe" title="Password and two-factor sign-in"></button>
     <button class="btn" id="bOut">Sign out</button>
@@ -561,6 +643,9 @@ function renderShell(){
   $("#bOut").onclick = async () => { await call("POST", "/logout").catch(() => {}); store.clear(); token = ""; me = null; render(); };
   $("#bUsers").onclick = openUsers;
   $("#bSettings").onclick = openSettings;
+  $("#hBrand").innerHTML = brandHTML();
+  cloudShell();
+  licLoaded = false; // license.js: Subscription button + notice once we know who's signed in
   $("#bAudit").onclick = openAudit;
   $("#bMe").onclick = openAccount;
   $("#bBackups").onclick = openAllBackups;
@@ -592,15 +677,16 @@ function renderHost(){
   if (me) {
     $("#bMe").textContent = me.account ? me.name : "admin (token)";
     $("#bIsos").hidden = $("#bUsers").hidden = $("#bSettings").hidden = !isAdmin();
+    if (isAdmin() && !licLoaded) { licLoaded = true; licenseShell(); nodeShell(); }
   }
   if (me && !isAdmin()) {
     const q = me.quota, u = me.usage;
     $("#hName").textContent = "";
     $("#cards").innerHTML =
-      card("Virtual machines", `${u.vms} / ${q.vms}`, `in your plan · ${run} running`, q.vms ? u.vms / q.vms * 100 : 100) +
-      card("CPUs", `${u.vcpus} / ${q.vcpus}`, "in your plan", q.vcpus ? u.vcpus / q.vcpus * 100 : 100) +
-      card("Memory", `${gb(u.memory_mib)}`, `of ${gb(q.memory_mib)} in your plan`, q.memory_mib ? u.memory_mib / q.memory_mib * 100 : 100) +
-      card("Disk", `${u.disk_gb} GB`, `of ${q.disk_gb} GB in your plan`, q.disk_gb ? u.disk_gb / q.disk_gb * 100 : 100);
+      card("Virtual machines", `${u.vms} / ${q.vms}`, `allowed · ${run} running`, q.vms ? u.vms / q.vms * 100 : 100) +
+      card("CPUs", `${u.vcpus} / ${q.vcpus}`, "allowed", q.vcpus ? u.vcpus / q.vcpus * 100 : 100) +
+      card("Memory", `${gb(u.memory_mib)}`, `of ${gb(q.memory_mib)} allowed`, q.memory_mib ? u.memory_mib / q.memory_mib * 100 : 100) +
+      card("Disk", `${u.disk_gb} GB`, `of ${q.disk_gb} GB allowed`, q.disk_gb ? u.disk_gb / q.disk_gb * 100 : 100);
     return;
   }
   if (!host) { $("#cards").innerHTML = card("Virtual machines", `${run} / ${vms.length}`, "running / total"); return; }
@@ -690,6 +776,7 @@ async function openCreate(){
   }
   if (!lan && $("#cNet").value === "lan") $("#cNet").value = "nat";
   netHint();
+  await cloudCreate();
   $("#dlgCreate").showModal(); $("#cName").focus();
 }
 function netHint(){
@@ -726,9 +813,9 @@ $("#fCreate").onsubmit = async e => {
   const go = $("#cGo"); go.disabled = true; go.textContent = "Creating…";
   const tpl = $("#cTpl").value, iso = tpl.startsWith("iso:") ? tpl.slice(4) : "";
   try {
-    const net = $("#cNet").value, pool = net.startsWith("pool:") ? net.slice(5) : "";
-    const common = {name, vcpus: +$("#cCpu").value, memory_mib: +$("#cMem").value, disk_gb: +$("#cDisk").value,
-      ...(pool ? {ip_pool: pool} : {network: net}),
+    const net = $("#cNet").value, pool = net.startsWith("pool:") ? net.slice(5) : "", plan = cloudPlan();
+    const common = {name, ...(plan ? {plan: plan.id} : {vcpus: +$("#cCpu").value, memory_mib: +$("#cMem").value, disk_gb: +$("#cDisk").value}),
+      ...(plan?.public_ip ? {} : pool ? {ip_pool: pool} : {network: net}),
       ...(!$("#cOwnerBox").hidden && $("#cOwner").value ? {owner: $("#cOwner").value} : {})};
     if (iso) {
       await call("POST", "/vms", {...common, iso, os_type: $("#cOS").value});
@@ -1456,7 +1543,10 @@ function startPolling(){ stopPolling(); refresh(true); timer = setInterval(() =>
 function stopPolling(){ if (timer) clearInterval(timer); timer = null; }
 document.addEventListener("visibilitychange", () => { if (!document.hidden && token) refresh(true); });
 
-render();
+document.addEventListener("DOMContentLoaded", render); // after cloud.js has loaded
 </script>
+<script src="/cloud.js"></script>
+<script src="/license.js"></script>
+<script src="/node.js"></script>
 </body>
 </html>

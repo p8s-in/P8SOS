@@ -16,17 +16,19 @@ import (
 
 	"p8sos/internal/audit"
 	"p8sos/internal/backup"
+	"p8sos/internal/license"
 	"p8sos/internal/users"
 	"p8sos/internal/vm"
 )
 
 // principal is who is making a request.
 type principal struct {
-	Name    string // user name, or "api-token:<name>"
-	Admin   bool
-	Quota   users.Quota
-	Session string // the sign-in token (empty for API tokens)
-	User    bool   // a P8S user account (can have a password / 2FA)
+	Name     string // user name, or "api-token:<name>"
+	Admin    bool
+	Quota    users.Quota
+	Session  string // the sign-in token (empty for API tokens)
+	User     bool   // a P8S user account (can have a password / 2FA)
+	ViaToken bool   // a personal API token (scripts): no account changes
 }
 
 type ctxKey struct{}
@@ -48,6 +50,11 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 					if u, err := s.Users.Get(name); err == nil && !u.Disabled {
 						p = principal{Name: u.Name, Admin: u.Role == users.Admin, Quota: u.Quota, Session: tok, User: true}
 					}
+				}
+			}
+			if p.Name == "" && s.Users != nil {
+				if u, ok := s.Users.TokenUser(tok); ok {
+					p = principal{Name: u.Name, Admin: u.Role == users.Admin, Quota: u.Quota, User: true, ViaToken: true}
 				}
 			}
 			if p.Name == "" {
@@ -275,6 +282,10 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
+	if u.Email != "" && !u.Verified {
+		writeErr(w, http.StatusForbidden, "unverified", users.ErrUnverified.Error())
+		return
+	}
 	s.limiter().Reset(keys[0])
 	tok, ttl := s.Sessions.New(u.Name)
 	s.audit(r, u.Name, http.StatusOK, "signed in")
@@ -303,7 +314,13 @@ func (s *Server) authInfo(w http.ResponseWriter, r *http.Request) {
 	if s.Users != nil {
 		n = s.Users.Count()
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"accounts": s.Users != nil && s.Sessions != nil && n > 0})
+	out := map[string]any{"accounts": s.Users != nil && s.Sessions != nil && n > 0, "brand": "P8S OS"}
+	if s.Cloud != nil {
+		st := s.Cloud.Settings()
+		out["brand"], out["signup"], out["currency"] = s.brand().Name, st.SignupOpen && n > 0 && s.License.Allows(license.FeatSelling), st.Currency
+		out["reset"] = st.Email()
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // --- me ---
@@ -324,8 +341,11 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 		out["role"] = users.Admin
 	}
 	out["ssh_keys"] = []string{}
+	out["via_token"] = p.ViaToken
 	if p.User {
 		if u, err := s.Users.Get(p.Name); err == nil {
+			out["email"], out["verified"], out["full_name"], out["phone"] = u.Email, u.Verified, u.FullName, u.Phone
+			out["company"], out["gstin"], out["address"] = u.Company, u.GSTIN, u.Address
 			out["two_factor"] = u.TOTPSecret != ""
 			if u.SSHKeys != nil {
 				out["ssh_keys"] = u.SSHKeys
@@ -336,7 +356,7 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) accountOnly(w http.ResponseWriter, r *http.Request) bool {
-	if who(r).User {
+	if p := who(r); p.User && !p.ViaToken {
 		return true
 	}
 	writeErr(w, http.StatusBadRequest, "invalid", "signed in with an API token: there is no account password or 2FA to change")
@@ -454,7 +474,7 @@ func (s *Server) listUsers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) addUser(w http.ResponseWriter, r *http.Request) {
-	if !s.adminOnly(w, r) || !s.usersOn(w) {
+	if !s.adminOnly(w, r) || !s.usersOn(w) || s.userLimitReached(w) {
 		return
 	}
 	var body struct {
@@ -462,6 +482,7 @@ func (s *Server) addUser(w http.ResponseWriter, r *http.Request) {
 		Role     string       `json:"role"`
 		Password string       `json:"password"`
 		Quota    *users.Quota `json:"quota"`
+		Email    string       `json:"email"`
 	}
 	if !decode(w, r, &body) {
 		return
@@ -473,10 +494,27 @@ func (s *Server) addUser(w http.ResponseWriter, r *http.Request) {
 	if body.Quota != nil {
 		q = *body.Quota
 	}
-	u, err := s.Users.Add(strings.ToLower(strings.TrimSpace(body.Name)), body.Role, body.Password, q)
+	email := ""
+	if strings.TrimSpace(body.Email) != "" {
+		e, err := users.NormEmail(body.Email)
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		if s.Users.EmailTaken(e, "") {
+			writeErr(w, http.StatusConflict, "exists", "another account uses that email")
+			return
+		}
+		email = e
+	}
+	name := strings.ToLower(strings.TrimSpace(body.Name))
+	u, err := s.Users.Add(name, body.Role, body.Password, q)
 	if err != nil {
 		s.fail(w, r, err)
 		return
+	}
+	if email != "" { // an admin vouches for the address
+		u, _ = s.Users.Update(name, func(x *users.User) error { x.Email, x.Verified = email, true; return nil })
 	}
 	writeJSON(w, http.StatusCreated, u)
 }

@@ -55,6 +55,15 @@ p8 — manage P8S OS virtual machines
   p8 templates                     installed OS templates
   p8 templates available           OS images that can be added
   p8 templates add NAME            download and add one (e.g. ubuntu-24.04, rocky-9)
+  p8 plans / p8 plan ID NAME CPUS RAM_MB DISK_GB PRICE [--public-ip]
+                                   P8S Cloud sizes and monthly prices (also in Settings)
+  p8 balance [USER] / p8 credit USER AMOUNT [NOTE] [--invoice]
+                                   wallet; --invoice = payment received (bank/UPI) with tax invoice
+  p8 license                       this server's subscription (tier, expiry, server ID)
+  p8 license set KEY | remove | check | id
+                                   install a key / back to Home / ask the licence server now / server ID
+  p8 update [check|install|channel stable|testing]
+                                   P8S OS updates from the update server (VMs keep running)
   p8 ippools                       public IP pools and who has which address
   p8 ippool add NAME NETWORK GATEWAY [bridge=br0] [customers=yes]
                                    e.g. p8 ippool add dc1 203.0.113.8/29 203.0.113.9
@@ -572,6 +581,70 @@ TXT
         need "${1:-}"; call DELETE "/ippools/$1" >/dev/null || exit 1; green "✔ pool $1 deleted" ;;
       *) red "usage: p8 ippool add|open|close|rm ..."; exit 1 ;;
     esac ;;
+
+  plans)
+    b=$(call GET /plans) || exit 1
+    [[ $(jq '.plans | length' <<<"$b") == 0 ]] && { echo "No plans. Add them in the dashboard: Settings → Plans (or: p8 plan s1 Starter 1 1024 25 399)"; exit 0; }
+    jq -r '.currency as $c | .plans[] | "\(.id)\t\(.name)\t\(.vcpus) CPU\t\(.memory_mib) MB\t\(.disk_gb) GB\t\(.price_monthly/100) \($c)/mo\t\(if .public_ip then "public IP" else "" end)\(if .hidden then " hidden" else "" end)"' <<<"$b" | column -t -s $'\t' ;;
+
+  plan)
+    [[ -n ${1:-} && -n ${2:-} && ${6:-} =~ ^[0-9.]+$ ]] || { red "usage: p8 plan ID NAME CPUS RAM_MB DISK_GB PRICE_PER_MONTH [--public-ip]   e.g. p8 plan s1 Starter 1 1024 25 399"; exit 1; }
+    pub=false; [[ ${7:-} == --public-ip ]] && pub=true
+    b=$(call PUT "/plans/$1" "$(jq -nc --arg n "$2" --argjson c "$3" --argjson m "$4" --argjson d "$5" --arg p "$6" --argjson pub "$pub" \
+      '{name:$n, vcpus:$c, memory_mib:$m, disk_gb:$d, price_monthly:(($p|tonumber)*100|round), public_ip:$pub}')") || exit 1
+    green "✔ plan $(jq -r '"\(.id) \(.name): \(.vcpus) CPU, \(.memory_mib) MB, \(.disk_gb) GB for \(.price_monthly/100)/month (\(.hourly/100)/hour)"' <<<"$b")" ;;
+
+  balance)
+    b=$(call GET "/billing${1:+?user=$1}") || exit 1
+    jq -r '"\(.user): balance \(.balance/100) \(.currency)\(if .suspended then " (SUSPENDED)" else "" end), \(.servers|length) server(s), \(.hourly/100)/hour"' <<<"$b" ;;
+
+  credit)
+    [[ -n ${1:-} && ${2:-} =~ ^-?[0-9.]+$ ]] || { red "usage: p8 credit USER AMOUNT [NOTE] [--invoice]   (--invoice: a payment received, with a tax invoice)"; exit 1; }
+    inv=false; note=${3:-}; [[ $note == --invoice ]] && { inv=true; note=""; }; [[ ${4:-} == --invoice ]] && inv=true
+    b=$(call POST /billing/adjust "$(jq -nc --arg u "$1" --arg a "$2" --arg n "$note" --argjson i "$inv" '{user:$u, amount:(($a|tonumber)*100|round), note:$n, invoice:$i}')") || exit 1
+    green "✔ $1: balance now $(jq -r '.balance/100' <<<"$b")$(jq -r 'if .invoice then ", invoice " + .invoice.number else "" end' <<<"$b")" ;;
+
+  update|updates|upgrade)
+    case ${1:-show} in
+      show)    b=$(call GET /updates) || exit 1 ;;
+      check)   b=$(call POST /updates/check) || exit 1 ;;
+      channel) [[ ${2:-} =~ ^(stable|testing)$ ]] || { red "usage: p8 update channel stable|testing"; exit 1; }
+               b=$(call PUT /updates/channel "$(jq -nc --arg c "$2" '{channel:$c}')") || exit 1 ;;
+      install)
+        b=$(call POST /updates/check) || exit 1
+        jq -e .update <<<"$b" >/dev/null || { green "✔ up to date ($(jq -r .current <<<"$b"))"; exit 0; }
+        read -rp "Install $(jq -r .available.version <<<"$b") now? VMs keep running; p8sd restarts. [y/N] " a
+        [[ $a =~ ^[Yy] ]] || exit 0
+        call POST /updates/install >/dev/null || exit 1
+        green "✔ update started — follow it with: journalctl -fu 'p8s-update-*'"; exit 0 ;;
+      *) red "usage: p8 update [check|install|channel stable|testing]"; exit 1 ;;
+    esac
+    jq -r '"running     \(.current)",
+           "channel     \(.channel)  (can use: \(.channels|join(", ")))",
+           (if .enabled|not then "update server: not set (license_server in /etc/p8s/p8sd.json); update with git pull && sudo bash update.sh"
+            elif .error then "error       \(.error)"
+            elif .update then "available   \(.available.version) (\(.available.date))\(if .available.notes != "" then ": " + .available.notes else "" end)  -> p8 update install"
+            else "up to date" end),
+           (if .install then "last update \(.install.from) -> \(.install.version): \(.install.state)" else empty end)' <<<"$b" ;;
+
+  license|licence|subscription)
+    case ${1:-show} in
+      set)    [[ -n ${2:-} ]] || { red "usage: p8 license set KEY"; exit 1; }
+              b=$(call PUT /license "$(jq -nc --arg k "$2" '{key:$k}')") || exit 1 ;;
+      remove) b=$(call DELETE /license) || exit 1 ;;
+      check)  b=$(call POST /license/check) || exit 1 ;;
+      id)     call GET /license | jq -r .server_id; exit ;;
+      show)   b=$(call GET /license) || exit 1 ;;
+      *)      red "usage: p8 license [set KEY|remove|check|id]"; exit 1 ;;
+    esac
+    jq -r '"server ID   \(.server_id)",
+           "tier        P8S OS \(.tier_name)  (\(.state))",
+           (if .license then "licence     \(.license.id) · \(.license.customer) · until \(.license.expires) · \(.license.servers|length) server(s)" else empty end),
+           "updates     \(.channel)",
+           (if .user_limit > 0 then "users       up to \(.user_limit)" else empty end),
+           "",
+           .message,
+           (if .shop then "buy / renew: \(.shop)" else empty end)' <<<"$b" ;;
 
   jobs)
     body=$(call GET /jobs) || exit 1

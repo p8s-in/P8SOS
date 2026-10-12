@@ -32,6 +32,10 @@ type Config struct {
 	VMAllow      []string   `json:"vm_allow"`         // private addresses VMs may still reach, e.g. a NAS
 	BackupTime   string     `json:"backup_time"`      // daily backups at HH:MM host time; default 02:30
 	BackupKeep   int        `json:"backup_keep"`      // default number of daily backups kept per VM; default 7
+	// LicenseServer is the P8S licence server, e.g. "https://licence.example.com";
+	// p8sd asks it once a day whether this server's key was renewed or cancelled.
+	// Empty = keys are only checked offline.
+	LicenseServer string `json:"license_server"`
 }
 
 // GuardOn reports whether VM isolation rules are wanted (default yes).

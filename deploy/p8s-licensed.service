@@ -1,0 +1,21 @@
+[Unit]
+Description=P8S licence server (subscription shop and key checks)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/p8s-licensed serve -config /etc/p8s-licensed.json
+Restart=on-failure
+RestartSec=3
+DynamicUser=no
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/p8s-licensed
+StateDirectory=p8s-licensed
+StateDirectoryMode=0700
+
+[Install]
+WantedBy=multi-user.target
