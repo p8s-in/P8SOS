@@ -291,8 +291,31 @@ func (s *Service) SetPassword(ctx context.Context, name, user, password string) 
 	if st != virt.Running {
 		return fmt.Errorf("%w: vm %q is %s; start it first", ErrConflict, name, st)
 	}
-	if err := s.HV.SetUserPassword(ctx, dom, user, password); err != nil {
-		return fmt.Errorf("%w: could not set the password — is the VM fully booted? (guest agent: %v)", ErrConflict, err)
+	// Right after a boot or reboot the guest agent can take a few seconds to
+	// connect, so "not connected / not responding" is retried for a while.
+	pause, wait := s.AgentRetry, s.AgentWait
+	if pause == 0 {
+		pause = 3 * time.Second
 	}
-	return nil
+	if wait == 0 {
+		wait = 45 * time.Second
+	}
+	deadline := time.Now().Add(wait)
+	for {
+		err = s.HV.SetUserPassword(ctx, dom, user, password)
+		if err == nil {
+			return nil
+		}
+		msg := strings.ToLower(err.Error())
+		retry := strings.Contains(msg, "not connected") || strings.Contains(msg, "not responding") ||
+			strings.Contains(msg, "agent is not") || strings.Contains(msg, "timeout")
+		if !retry || time.Now().After(deadline) || ctx.Err() != nil {
+			break
+		}
+		time.Sleep(pause)
+	}
+	if s.Log != nil {
+		s.Log.Error("set guest password", "vm", name, "user", user, "err", err)
+	}
+	return fmt.Errorf("%w: could not set the password for %q: %v", ErrConflict, user, err)
 }

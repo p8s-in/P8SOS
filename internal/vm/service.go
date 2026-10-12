@@ -53,7 +53,11 @@ type Service struct {
 	BridgeUp func(name string) bool
 	Limits   Limits
 	SSHKeys  []string // default keys for creates that pass none
-	Log      *slog.Logger
+	// AgentRetry is the pause between guest-agent retries; 0 = 3s (tests shorten it).
+	AgentRetry time.Duration
+	// AgentWait is how long to keep retrying; 0 = 45s.
+	AgentWait time.Duration
+	Log       *slog.Logger
 
 	locks sync.Map // name -> *sync.Mutex; serializes ops per VM
 }

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"p8sos/internal/cloudinit"
 	"p8sos/internal/config"
@@ -14,15 +15,16 @@ import (
 )
 
 type fakeHV struct {
-	mu        sync.Mutex
-	doms      map[string][]byte
-	state     map[string]virt.State
-	failStart bool
-	noAgent   bool
-	pw        string
-	frozen    int
-	thawed    int
-	auto      map[string]bool
+	mu          sync.Mutex
+	doms        map[string][]byte
+	state       map[string]virt.State
+	failStart   bool
+	noAgent     bool
+	pw          string
+	agentWarmup int
+	frozen      int
+	thawed      int
+	auto        map[string]bool
 }
 
 func newHV() *fakeHV { return &fakeHV{doms: map[string][]byte{}, state: map[string]virt.State{}} }
@@ -120,6 +122,13 @@ func (h *fakeHV) SetUserPassword(_ context.Context, n, user, pw string) error {
 	if h.noAgent {
 		return errors.New("guest agent is not connected")
 	}
+	if h.agentWarmup > 0 {
+		h.agentWarmup--
+		return errors.New("error: Guest agent is not responding: QEMU guest agent is not connected")
+	}
+	if user == "nobody-here" {
+		return errors.New("error: internal error: unable to execute QEMU agent command 'guest-set-user-password': chpasswd: user does not exist")
+	}
 	h.pw = user + ":" + pw
 	return nil
 }
@@ -215,8 +224,9 @@ func newSvc() (*Service, *fakeHV, *fakeDisks, *fakeSeeds) {
 	hv, d, s := newHV(), &fakeDisks{live: map[string]bool{}}, &fakeSeeds{live: map[string]bool{}}
 	return &Service{
 		HV: hv, Disks: d, Seeds: s, Bridge: "vmbr0",
-		Templates: []config.Template{{Name: "debian-13", Snapshot: "tank/t/debian-13@base", MinDiskGB: 4}},
-		Limits:    Limits{MaxVCPUs: 8, MaxMemoryMiB: 16384, MaxDiskGB: 500},
+		Templates:  []config.Template{{Name: "debian-13", Snapshot: "tank/t/debian-13@base", MinDiskGB: 4}},
+		Limits:     Limits{MaxVCPUs: 8, MaxMemoryMiB: 16384, MaxDiskGB: 500},
+		AgentRetry: time.Millisecond, AgentWait: 50 * time.Millisecond,
 	}, hv, d, s
 }
 
@@ -594,5 +604,21 @@ func TestLoginUserFromTemplate(t *testing.T) {
 	d, _ := svc.Create(ctx, CreateRequest{Name: "d1", Template: "debian-13"})
 	if d.User != "debian" {
 		t.Fatalf("old-style template without default_user should mean debian: %+v", d)
+	}
+}
+
+func TestSetPasswordWaitsForAgent(t *testing.T) {
+	ctx := context.Background()
+	svc, hv, _, _ := newSvc()
+	svc.AgentRetry = time.Millisecond
+	_, _ = svc.Create(ctx, CreateRequest{Name: "web1", Template: "debian-13"})
+	hv.agentWarmup = 3 // just rebooted: agent connects after a few tries
+	if err := svc.SetPassword(ctx, "web1", "root", "longenough"); err != nil || hv.pw != "root:longenough" {
+		t.Fatalf("should succeed once the agent is up: %v", err)
+	}
+	// A real failure is reported at once with the guest's own reason.
+	err := svc.SetPassword(ctx, "web1", "nobody-here", "longenough")
+	if !errors.Is(err, ErrConflict) || !strings.Contains(err.Error(), "user does not exist") {
+		t.Fatalf("got %v", err)
 	}
 }
