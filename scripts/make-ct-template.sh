@@ -48,8 +48,11 @@ DS=$POOL/p8s/ct-templates/$NAME
 MNT=/var/lib/p8s/ct-templates/$NAME
 if zfs list -H "$DS@base" >/dev/null 2>&1; then echo "==> $NAME is already added"; exit 0; fi
 
+# IPv4 first: many networks hand out IPv6 addresses without a working IPv6 route
+get() { curl -4 "$@" 2>/dev/null || curl "$@"; }
+
 echo "==> finding the newest $LABEL image"
-LINE=$(curl -fsSL --retry 3 "$SERVER/meta/1.0/index-system" | grep "^$DIST;$REL;amd64;cloud;" | tail -1 || true)
+LINE=$(get -fsSL --retry 3 "$SERVER/meta/1.0/index-system" | grep "^$DIST;$REL;amd64;cloud;" | tail -1 || true)
 [[ -n $LINE ]] || { echo "no amd64 cloud image for $DIST $REL on $SERVER" >&2; exit 1; }
 DIR=$(cut -d';' -f6 <<<"$LINE")
 URL=$SERVER$DIR
@@ -57,8 +60,8 @@ echo "    $URL"
 
 WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT
 echo "==> downloading (usually 50-200 MB)"
-curl -fSL --retry 3 -o "$WORK/rootfs.tar.xz" "${URL}rootfs.tar.xz"
-curl -fsSL --retry 3 -o "$WORK/SHA256SUMS" "${URL}SHA256SUMS"
+get -fSL --retry 3 -o "$WORK/rootfs.tar.xz" "${URL}rootfs.tar.xz"
+get -fsSL --retry 3 -o "$WORK/SHA256SUMS" "${URL}SHA256SUMS"
 echo "==> checking the checksum"
 want=$(awk '$2 == "rootfs.tar.xz" || $2 == "*rootfs.tar.xz" {print $1}' "$WORK/SHA256SUMS")
 have=$(sha256sum "$WORK/rootfs.tar.xz" | cut -d' ' -f1)

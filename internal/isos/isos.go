@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -46,6 +47,25 @@ type Library struct {
 	Dir    string       // e.g. /var/lib/p8s/isos
 	Client *http.Client // for downloads; nil = http.DefaultClient
 }
+
+// ipv4First downloads over IPv4 first: many home and office networks hand out
+// IPv6 addresses without a working IPv6 route ("network is unreachable").
+var ipv4First = &http.Client{Transport: func() *http.Transport {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	d := &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}
+	t.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		c, err4 := d.DialContext(ctx, "tcp4", addr)
+		if err4 == nil {
+			return c, nil
+		}
+		c, err := d.DialContext(ctx, network, addr)
+		if err != nil {
+			return nil, fmt.Errorf("%v (IPv4: %v)", err, err4)
+		}
+		return c, nil
+	}
+	return t
+}()}
 
 // Path returns the file of an existing ISO.
 func (l *Library) Path(name string) (string, error) {
@@ -183,7 +203,7 @@ func (l *Library) Download(ctx context.Context, rawURL, name, sha256hex string, 
 	}
 	c := l.Client
 	if c == nil {
-		c = http.DefaultClient
+		c = ipv4First
 	}
 	resp, err := c.Do(req)
 	if err != nil {

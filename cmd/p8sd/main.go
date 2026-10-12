@@ -283,17 +283,16 @@ func serve(args []string) error {
 				return l
 			},
 			LAN: svc.LANAvailable,
-			CTTemplates: func() []string {
-				if cts == nil {
-					return nil
-				}
-				var l []string
-				for _, t := range cts.Templates(context.Background()) {
-					l = append(l, t.Name)
-				}
-				return l
-			},
 		},
+	}
+	if cts != nil {
+		apiSrv.Node.CTTemplates = func() []string {
+			var l []string
+			for _, t := range cts.Templates(context.Background()) {
+				l = append(l, t.Name)
+			}
+			return l
+		}
 	}
 	go func() { // P8S Cloud billing: hourly charges, low/negative balance, suspension
 		for {

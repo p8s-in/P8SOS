@@ -56,14 +56,15 @@ type OSUpdates struct {
 
 // Overview is the Server page.
 type Overview struct {
-	Storage   Storage        `json:"storage"`
-	Catalog   []CatalogEntry `json:"catalog"`
-	CTCatalog []CatalogEntry `json:"ct_catalog"` // empty when containers are off
-	LAN       bool           `json:"lan"`
-	OS        OSUpdates      `json:"os"`
-	Running   *Task          `json:"running,omitempty"`
-	Tasks     []Task         `json:"tasks"`
-	Hostname  string         `json:"hostname"`
+	Storage    Storage        `json:"storage"`
+	Catalog    []CatalogEntry `json:"catalog"`
+	CTCatalog  []CatalogEntry `json:"ct_catalog"` // empty when containers are off
+	Containers bool           `json:"containers"` // LXC installed
+	LAN        bool           `json:"lan"`
+	OS         OSUpdates      `json:"os"`
+	Running    *Task          `json:"running,omitempty"`
+	Tasks      []Task         `json:"tasks"`
+	Hostname   string         `json:"hostname"`
 }
 
 const gib = 1 << 30
@@ -131,6 +132,7 @@ func (n *Node) Overview(ctx context.Context) Overview {
 	o := Overview{Storage: n.storage(ctx), Catalog: n.catalog(ctx, "make-template.sh", n.Templates), Tasks: n.Tasks.List(ctx),
 		CTCatalog: []CatalogEntry{}}
 	if n.CTTemplates != nil {
+		o.Containers = true
 		o.CTCatalog = n.catalog(ctx, "make-ct-template.sh", n.CTTemplates)
 	}
 	if n.LAN != nil {

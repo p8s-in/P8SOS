@@ -92,7 +92,12 @@ function renderNode(){
   for (const b of $("#ndTpl").querySelectorAll("[data-tpl]")) b.onclick = () => runTask("template", b.dataset.tpl,
     "Add " + b.dataset.tpl + "? It downloads a few hundred MB; the dashboard restarts for a moment when it's done.");
 
-  $("#ndCTBox").hidden = !(n.ct_catalog || []).length;
+  $("#ndCTBox").hidden = false;
+  if (!n.containers) {
+    $("#ndCTTpl").innerHTML = `<tr><td class="sub">Containers are off: LXC isn't installed on this server. Run <code>sudo bash update.sh</code> (needs internet), then reload this page.</td></tr>`;
+  } else if (!(n.ct_catalog || []).length) {
+    $("#ndCTTpl").innerHTML = `<tr><td class="sub">The container template list isn't available (make-ct-template.sh missing — run <code>sudo bash update.sh</code>).</td></tr>`;
+  } else
   $("#ndCTTpl").innerHTML = (n.ct_catalog || []).map(c => `<tr><td><b>${esc(c.label)}</b><div class="sub mono">${esc(c.name)}</div></td>
     <td style="text-align:right">${c.installed ? `<span class="sub">✔ added</span>` : `<button class="btn" data-cttpl="${esc(c.name)}" ${dis}>Add</button>`}</td></tr>`).join("");
   for (const b of $("#ndCTTpl").querySelectorAll("[data-cttpl]")) b.onclick = () => runTask("ct-template", b.dataset.cttpl,
