@@ -79,6 +79,7 @@ async function cloudShell(){
   } catch {}
   try { bill = await call("GET", "/billing"); cloudOn = true; cloudCur = bill.currency; } catch { cloudOn = false; }
   $("#bBilling").hidden = !cloudOn; $("#bSupport").hidden = !cloudOn;
+  if (typeof sideGroups === "function") sideGroups();
   $("#bBilling").onclick = openBilling; $("#bSupport").onclick = openSupport;
   const acc = $("#bMe").onclick;
   $("#bMe").onclick = async () => { await acc(); cloudAccount(); };
@@ -92,8 +93,9 @@ async function cloudShell(){
 }
 
 function badge(){
-  if (!cloudOn || !bill || isAdmin()) { $("#bBilling").textContent = "Billing"; return; }
-  $("#bBilling").innerHTML = `Billing <span class="badge ${bill.balance < 0 || bill.suspended ? "bad" : ""}">${esc(money(bill.balance))}</span>`;
+  const label = ic("card") + "<span>Billing</span>";
+  if (!cloudOn || !bill || isAdmin()) { $("#bBilling").innerHTML = label; return; }
+  $("#bBilling").innerHTML = label + `<span class="badge ${bill.balance < 0 || bill.suspended ? "bad" : ""}">${esc(money(bill.balance))}</span>`;
 }
 
 /* ---------- create: plans ---------- */
