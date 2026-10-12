@@ -163,6 +163,7 @@ func TestMultiUser(t *testing.T) {
 		m.req(f[0], f[1], bob, "", 404)
 	}
 	m.req("GET", "/api/v1/vms/web1", alice, "", 404) // admin-owned
+	m.req("PUT", "/api/v1/vms/shop/firewall", bob, `{"enabled":true,"rules":[]}`, 404)
 	m.req("POST", "/api/v1/vms/shop/start", alice, "", 200)
 	m.req("POST", "/api/v1/vms/shop/console", alice, "", 201)
 

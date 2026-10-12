@@ -3,6 +3,8 @@ package api
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +19,7 @@ import (
 	"p8sos/internal/audit"
 	"p8sos/internal/config"
 	"p8sos/internal/console"
+	"p8sos/internal/firewall"
 	"p8sos/internal/metrics"
 	"p8sos/internal/users"
 	"p8sos/internal/vm"
@@ -53,6 +56,8 @@ type VMService interface {
 	Screenshot(ctx context.Context, name string) ([]byte, error)
 	SetPassword(ctx context.Context, name, user, password string) error
 	SetOwner(ctx context.Context, name, owner string) (vm.VM, error)
+	GetFirewall(ctx context.Context, name string) (firewall.Settings, error)
+	SetFirewall(ctx context.Context, name string, fw firewall.Settings) (firewall.Settings, error)
 }
 
 type Server struct {
@@ -141,6 +146,7 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("POST /api/v1/logout", s.logout)
 	auth.HandleFunc("GET /api/v1/me", s.me)
 	auth.HandleFunc("POST /api/v1/me/password", s.changeMyPassword)
+	auth.HandleFunc("PUT /api/v1/me/ssh-keys", s.setMyKeys)
 	auth.HandleFunc("POST /api/v1/me/2fa/setup", s.setup2FA)
 	auth.HandleFunc("POST /api/v1/me/2fa/enable", s.enable2FA)
 	auth.HandleFunc("POST /api/v1/me/2fa/disable", s.disable2FA)
@@ -149,6 +155,8 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("PATCH /api/v1/users/{user}", s.updateUser)
 	auth.HandleFunc("DELETE /api/v1/users/{user}", s.deleteUser)
 	auth.HandleFunc("PUT /api/v1/vms/{name}/owner", s.setOwner)
+	auth.HandleFunc("GET /api/v1/vms/{name}/firewall", s.getFirewall)
+	auth.HandleFunc("PUT /api/v1/vms/{name}/firewall", s.putFirewall)
 	auth.HandleFunc("GET /api/v1/audit", s.auditLog)
 	mux.Handle("/api/v1/", s.requireAuth(s.audited(auth)))
 	if s.UI != nil {
@@ -197,7 +205,7 @@ func (s *Server) hostInfo(w http.ResponseWriter, r *http.Request) {
 func (s *Server) listVMs(w http.ResponseWriter, r *http.Request) {
 	vms, err := s.VMs.List(r.Context())
 	if err != nil {
-		s.fail(w, err)
+		s.fail(w, r, err)
 		return
 	}
 	p, out := who(r), []vm.VM{}
@@ -223,7 +231,7 @@ func (s *Server) createVM(w http.ResponseWriter, r *http.Request) {
 		}
 		defer s.quotaLock(p.Name)()
 		if err := s.checkQuota(r.Context(), p, Usage{VMs: 1, VCPUs: max(req.VCPUs, 1), MemoryMiB: max(req.MemoryMiB, 1024), DiskGB: s.diskFor(req)}); err != nil {
-			s.fail(w, err)
+			s.fail(w, r, err)
 			return
 		}
 	} else if req.Owner != "" {
@@ -232,13 +240,21 @@ func (s *Server) createVM(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if _, err := s.Users.Get(req.Owner); err != nil {
-			s.fail(w, err)
+			s.fail(w, r, err)
 			return
+		}
+	}
+	if req.Owner != "" {
+		req.NoDefaultKeys = true
+		if len(req.SSHKeys) == 0 && s.Users != nil {
+			if u, err := s.Users.Get(req.Owner); err == nil {
+				req.SSHKeys = u.SSHKeys
+			}
 		}
 	}
 	v, err := s.VMs.Create(r.Context(), req)
 	if err != nil {
-		s.fail(w, err)
+		s.fail(w, r, err)
 		return
 	}
 	w.Header().Set("Location", "/api/v1/vms/"+v.Name)
@@ -259,7 +275,7 @@ func (s *Server) startVM(w http.ResponseWriter, r *http.Request) {
 	}
 	v, err := s.VMs.Start(r.Context(), r.PathValue("name"))
 	if err != nil {
-		s.fail(w, err)
+		s.fail(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, v)
@@ -277,7 +293,7 @@ func (s *Server) stopVM(w http.ResponseWriter, r *http.Request) {
 	}
 	v, err := s.VMs.Stop(r.Context(), r.PathValue("name"), body.Force)
 	if err != nil {
-		s.fail(w, err)
+		s.fail(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusAccepted, v)
@@ -289,7 +305,7 @@ func (s *Server) rebootVM(w http.ResponseWriter, r *http.Request) {
 	}
 	v, err := s.VMs.Reboot(r.Context(), r.PathValue("name"))
 	if err != nil {
-		s.fail(w, err)
+		s.fail(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusAccepted, v)
@@ -300,7 +316,7 @@ func (s *Server) deleteVM(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.VMs.Delete(r.Context(), r.PathValue("name")); err != nil {
-		s.fail(w, err)
+		s.fail(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -328,13 +344,13 @@ func (s *Server) resizeVM(w http.ResponseWriter, r *http.Request) {
 			d.DiskGB = req.DiskGB - cur.DiskGB
 		}
 		if err := s.checkQuota(r.Context(), p, d); err != nil {
-			s.fail(w, err)
+			s.fail(w, r, err)
 			return
 		}
 	}
 	v, err := s.VMs.Resize(r.Context(), r.PathValue("name"), req)
 	if err != nil {
-		s.fail(w, err)
+		s.fail(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, v)
@@ -346,7 +362,7 @@ func (s *Server) listSnapshots(w http.ResponseWriter, r *http.Request) {
 	}
 	snaps, err := s.VMs.Snapshots(r.Context(), r.PathValue("name"))
 	if err != nil {
-		s.fail(w, err)
+		s.fail(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"snapshots": snaps})
@@ -364,7 +380,7 @@ func (s *Server) createSnapshot(w http.ResponseWriter, r *http.Request) {
 	}
 	sn, err := s.VMs.CreateSnapshot(r.Context(), r.PathValue("name"), body.Name)
 	if err != nil {
-		s.fail(w, err)
+		s.fail(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, sn)
@@ -382,7 +398,7 @@ func (s *Server) rollback(w http.ResponseWriter, r *http.Request) {
 	}
 	v, err := s.VMs.Rollback(r.Context(), r.PathValue("name"), r.PathValue("snap"), body.DestroyNewer)
 	if err != nil {
-		s.fail(w, err)
+		s.fail(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, v)
@@ -393,7 +409,7 @@ func (s *Server) deleteSnapshot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.VMs.DeleteSnapshot(r.Context(), r.PathValue("name"), r.PathValue("snap")); err != nil {
-		s.fail(w, err)
+		s.fail(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -405,7 +421,7 @@ func (s *Server) consoleTicket(w http.ResponseWriter, r *http.Request) {
 	}
 	name := r.PathValue("name")
 	if _, err := s.VMs.ConsoleAddr(r.Context(), name); err != nil {
-		s.fail(w, err)
+		s.fail(w, r, err)
 		return
 	}
 	t, ttl := s.tickets().Issue(name)
@@ -429,7 +445,7 @@ func (s *Server) consoleSocket(w http.ResponseWriter, r *http.Request) {
 	}
 	addr, err := s.VMs.ConsoleAddr(r.Context(), name)
 	if err != nil {
-		s.fail(w, err)
+		s.fail(w, r, err)
 		return
 	}
 	dial := s.Dial
@@ -439,7 +455,7 @@ func (s *Server) consoleSocket(w http.ResponseWriter, r *http.Request) {
 	}
 	tcp, err := dial(r.Context(), addr)
 	if err != nil {
-		s.fail(w, fmt.Errorf("connect to the VM's screen at %s: %w", addr, err))
+		s.fail(w, r, fmt.Errorf("connect to the VM's screen at %s: %w", addr, err))
 		return
 	}
 	ws, err := console.Upgrade(w, r)
@@ -457,13 +473,13 @@ func (s *Server) listBackups(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	if name != "" {
 		if _, err := s.VMs.Get(r.Context(), name); err != nil && !errors.Is(err, vm.ErrNotFound) {
-			s.fail(w, err)
+			s.fail(w, r, err)
 			return
 		}
 	}
 	b, err := s.VMs.ListBackups(name)
 	if err != nil {
-		s.fail(w, err)
+		s.fail(w, r, err)
 		return
 	}
 	p, out := who(r), []vm.Backup{}
@@ -481,7 +497,7 @@ func (s *Server) startBackup(w http.ResponseWriter, r *http.Request) {
 	}
 	j, err := s.VMs.StartBackup(r.Context(), r.PathValue("name"))
 	if err != nil {
-		s.fail(w, err)
+		s.fail(w, r, err)
 		return
 	}
 	s.noteJob(r, j.ID)
@@ -494,7 +510,7 @@ func (s *Server) deleteBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.VMs.DeleteBackup(r.PathValue("name"), r.PathValue("id")); err != nil {
-		s.fail(w, err)
+		s.fail(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -525,17 +541,17 @@ func (s *Server) restoreBackup(w http.ResponseWriter, r *http.Request) {
 			return
 		case errors.Is(err, vm.ErrNotFound): // becomes a new VM: must fit the plan
 			if err := s.checkQuota(r.Context(), p, Usage{VMs: 1, VCPUs: m.VCPUs, MemoryMiB: m.MemoryMiB, DiskGB: m.DiskGB}); err != nil {
-				s.fail(w, err)
+				s.fail(w, r, err)
 				return
 			}
 		case err != nil:
-			s.fail(w, err)
+			s.fail(w, r, err)
 			return
 		}
 	}
 	j, err := s.VMs.StartRestore(r.Context(), r.PathValue("name"), r.PathValue("id"), body.Name)
 	if err != nil {
-		s.fail(w, err)
+		s.fail(w, r, err)
 		return
 	}
 	s.noteJob(r, j.ID)
@@ -556,7 +572,7 @@ func (s *Server) getSchedule(w http.ResponseWriter, r *http.Request) {
 	}
 	sch, err := s.VMs.GetSchedule(name)
 	if err != nil {
-		s.fail(w, err)
+		s.fail(w, r, err)
 		return
 	}
 	keep := sch.Keep
@@ -582,7 +598,7 @@ func (s *Server) putSchedule(w http.ResponseWriter, r *http.Request) {
 		body.Keep = s.BackupKeep
 	}
 	if err := s.VMs.SetSchedule(name, vm.Schedule{Daily: body.Daily, Keep: body.Keep}); err != nil {
-		s.fail(w, err)
+		s.fail(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, scheduleView{Daily: body.Daily, Keep: body.Keep, At: s.BackupTime})
@@ -614,7 +630,7 @@ func (s *Server) hostMetrics(w http.ResponseWriter, r *http.Request) {
 func (s *Server) listISOs(w http.ResponseWriter, r *http.Request) {
 	l, err := s.VMs.ListISOs()
 	if err != nil {
-		s.fail(w, err)
+		s.fail(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"isos": l})
@@ -631,7 +647,7 @@ func (s *Server) uploadISO(w http.ResponseWriter, r *http.Request) {
 	_ = rc.SetWriteDeadline(time.Now().Add(6 * time.Hour))
 	iso, err := s.VMs.SaveISO(r.PathValue("name"), r.Body)
 	if err != nil {
-		s.fail(w, err)
+		s.fail(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, iso)
@@ -651,7 +667,7 @@ func (s *Server) downloadISO(w http.ResponseWriter, r *http.Request) {
 	}
 	j, err := s.VMs.StartISODownload(r.Context(), body.URL, body.Name, body.SHA256)
 	if err != nil {
-		s.fail(w, err)
+		s.fail(w, r, err)
 		return
 	}
 	s.noteJob(r, j.ID)
@@ -664,7 +680,7 @@ func (s *Server) deleteISO(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.VMs.DeleteISO(r.Context(), r.PathValue("name")); err != nil {
-		s.fail(w, err)
+		s.fail(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -676,7 +692,7 @@ func (s *Server) screenshot(w http.ResponseWriter, r *http.Request) {
 	}
 	b, err := s.VMs.Screenshot(r.Context(), r.PathValue("name"))
 	if err != nil {
-		s.fail(w, err)
+		s.fail(w, r, err)
 		return
 	}
 	w.Header().Set("Content-Type", "image/png")
@@ -690,7 +706,7 @@ func (s *Server) ejectISO(w http.ResponseWriter, r *http.Request) {
 	}
 	v, err := s.VMs.EjectISO(r.Context(), r.PathValue("name"))
 	if err != nil {
-		s.fail(w, err)
+		s.fail(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, v)
@@ -730,7 +746,7 @@ func (s *Server) setPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.VMs.SetPassword(r.Context(), r.PathValue("name"), body.User, body.Password); err != nil {
-		s.fail(w, err)
+		s.fail(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -772,7 +788,7 @@ func decode(w http.ResponseWriter, r *http.Request, v any) bool {
 	return true
 }
 
-func (s *Server) fail(w http.ResponseWriter, err error) {
+func (s *Server) fail(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, errQuota):
 		writeErr(w, http.StatusForbidden, "quota", err.Error())
@@ -793,12 +809,19 @@ func (s *Server) fail(w http.ResponseWriter, err error) {
 	case errors.Is(err, vm.ErrConflict):
 		writeErr(w, http.StatusConflict, "conflict", err.Error())
 	default:
+		ref := newRef()
 		if s.Log != nil {
-			s.Log.Error("request failed", "err", err)
+			s.Log.Error("request failed", "err", err, "ref", ref, "user", who(r).Name)
 		}
-		// Single-admin host: show the real cause (libvirt/zfs stderr) instead of a
-		// bare 500, so problems can be fixed without digging through the journal.
-		writeErr(w, http.StatusInternalServerError, "internal", "host error: "+err.Error())
+		if !who(r).Admin {
+			// Customers don't get to read the host's internals (zfs/libvirt output).
+			writeErr(w, http.StatusInternalServerError, "internal",
+				"the server couldn't do that right now; try again, or contact support with reference "+ref)
+			return
+		}
+		// Admins see the real cause (libvirt/zfs stderr), so problems can be
+		// fixed without digging through the journal.
+		writeErr(w, http.StatusInternalServerError, "internal", "host error: "+err.Error()+" (ref "+ref+")")
 	}
 }
 
@@ -823,4 +846,39 @@ func (s *Server) diskFor(req vm.CreateRequest) int {
 		}
 	}
 	return 0
+}
+
+// newRef is a short id tying an error message to its log line.
+func newRef() string {
+	b := make([]byte, 4)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+func (s *Server) getFirewall(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.vmFor(w, r); !ok {
+		return
+	}
+	fw, err := s.VMs.GetFirewall(r.Context(), r.PathValue("name"))
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, fw)
+}
+
+func (s *Server) putFirewall(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.vmFor(w, r); !ok {
+		return
+	}
+	var body firewall.Settings
+	if !decode(w, r, &body) {
+		return
+	}
+	fw, err := s.VMs.SetFirewall(r.Context(), r.PathValue("name"), body)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, fw)
 }

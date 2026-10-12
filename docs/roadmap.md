@@ -30,6 +30,10 @@ Each phase ships something usable on its own.
 - [x] User accounts (v0.3): admin / customer roles, sign-in with password, TOTP 2FA, lockout after failed sign-ins,
       per-customer plans (VMs, CPUs, RAM, disk, LAN), customers see only their VMs/backups/jobs, VM owner hand-over,
       activity (audit) log; dashboard Users / Activity / account dialogs; `p8 users|user|give|audit`
+- [x] v0.3 hardening: customers see error references not host internals, no host SSH key in customer VMs,
+      per-user SSH keys, sign-ins survive restarts
+- [x] Per-VM firewall (v0.4 part 1): allow-list of incoming tcp/udp/ping with optional source, nftables bridge table by MAC,
+      dashboard Manage → Firewall, `p8 fw`
 - [x] Thin VM disks, `p8 storage grow`, file pool sized from free space
 
 Still to do: projects, scoped API tokens per user; per-tenant VLAN/bridge;

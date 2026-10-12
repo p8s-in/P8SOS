@@ -4,20 +4,89 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 )
 
-// Sessions are dashboard sign-ins: random tokens kept in memory (a p8sd
-// restart signs everyone out). Only the SHA-256 of each token is kept.
+// Sessions are dashboard sign-ins. Only the SHA-256 of each token is kept,
+// in memory and (with Path) in a 0600 file, so a p8sd restart or update
+// doesn't sign everyone out.
 type Sessions struct {
 	Idle time.Duration // signed out after this long unused; 0 = 12h
 	Max  time.Duration // and after this long in any case; 0 = 7 days
 	Now  func() time.Time
+	Path string // e.g. /var/lib/p8s/sessions.json; empty = memory only
 
-	mu sync.Mutex
-	m  map[string]*session
+	mu     sync.Mutex
+	m      map[string]*session
+	loaded bool
+	dirty  bool // last-use times changed since the last save
+}
+
+type savedSession struct {
+	Key     string    `json:"key"` // sha256 of the token
+	User    string    `json:"user"`
+	Created time.Time `json:"created"`
+	Last    time.Time `json:"last"`
+}
+
+// load reads the saved sessions once (caller holds mu).
+func (s *Sessions) load() {
+	if s.loaded {
+		return
+	}
+	s.loaded = true
+	if s.m == nil {
+		s.m = map[string]*session{}
+	}
+	if s.Path == "" {
+		return
+	}
+	b, err := os.ReadFile(s.Path)
+	if err != nil {
+		return
+	}
+	var list []savedSession
+	if json.Unmarshal(b, &list) != nil {
+		return
+	}
+	for _, v := range list {
+		if len(v.Key) == 64 && v.User != "" {
+			s.m[v.Key] = &session{user: v.User, created: v.Created, last: v.Last}
+		}
+	}
+}
+
+// save writes the sessions (caller holds mu). Failure only means sign-ins
+// don't survive a restart, so it is not reported.
+func (s *Sessions) save() {
+	s.dirty = false
+	if s.Path == "" {
+		return
+	}
+	list := make([]savedSession, 0, len(s.m))
+	for k, v := range s.m {
+		list = append(list, savedSession{k, v.user, v.created, v.last})
+	}
+	b, _ := json.Marshal(list)
+	_ = os.MkdirAll(filepath.Dir(s.Path), 0o750)
+	tmp := s.Path + ".tmp"
+	if os.WriteFile(tmp, b, 0o600) == nil {
+		_ = os.Rename(tmp, s.Path)
+	}
+}
+
+// Flush saves last-use times if they changed (p8sd calls it every minute).
+func (s *Sessions) Flush() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.dirty {
+		s.save()
+	}
 }
 
 type session struct {
@@ -53,9 +122,7 @@ func (s *Sessions) New(user string) (string, time.Duration) {
 	now := s.now()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.m == nil {
-		s.m = map[string]*session{}
-	}
+	s.load()
 	idle, max := s.limits()
 	for k, v := range s.m {
 		if now.Sub(v.last) > idle || now.Sub(v.created) > max {
@@ -63,6 +130,7 @@ func (s *Sessions) New(user string) (string, time.Duration) {
 		}
 	}
 	s.m[key(tok)] = &session{user: user, created: now, last: now}
+	s.save()
 	return tok, idle
 }
 
@@ -71,6 +139,7 @@ func (s *Sessions) User(tok string) (string, bool) {
 	now := s.now()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.load()
 	k := key(tok)
 	v, ok := s.m[k]
 	if !ok {
@@ -79,9 +148,11 @@ func (s *Sessions) User(tok string) (string, bool) {
 	idle, max := s.limits()
 	if now.Sub(v.last) > idle || now.Sub(v.created) > max {
 		delete(s.m, k)
+		s.dirty = true
 		return "", false
 	}
 	v.last = now
+	s.dirty = true
 	return v.user, true
 }
 
@@ -89,7 +160,9 @@ func (s *Sessions) User(tok string) (string, bool) {
 func (s *Sessions) End(tok string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.load()
 	delete(s.m, key(tok))
+	s.save()
 }
 
 // EndUser signs a user out everywhere (password change, disabled, deleted).
@@ -101,11 +174,13 @@ func (s *Sessions) EndUser(user, keep string) {
 	if keep != "" {
 		kk = key(keep)
 	}
+	s.load()
 	for k, v := range s.m {
 		if v.user == user && k != kk {
 			delete(s.m, k)
 		}
 	}
+	s.save()
 }
 
 // Limiter slows down password guessing: after Max failures for a user name

@@ -261,7 +261,7 @@ func (s *Service) restoreAsNew(ctx context.Context, name string, m Backup, p job
 	uuid := newUUID()
 	// A new instance-id makes cloud-init treat it as a new machine: new hostname,
 	// new SSH host keys. Users, passwords and data come from the backup.
-	seed, err := s.Seeds.Build(ctx, dom, cloudinit.Spec{InstanceID: uuid, Hostname: name, SSHKeys: s.SSHKeys})
+	seed, err := s.Seeds.Build(ctx, dom, cloudinit.Spec{InstanceID: uuid, Hostname: name, SSHKeys: s.defaultKeys(m.Owner)})
 	if err != nil {
 		return fail(err)
 	}
@@ -423,4 +423,12 @@ func (s *Service) ListJobs() []Job {
 		return []Job{}
 	}
 	return s.Jobs.List()
+}
+
+// defaultKeys are the host's SSH keys for admin VMs; customer VMs don't get them.
+func (s *Service) defaultKeys(owner string) []string {
+	if owner != "" {
+		return nil
+	}
+	return s.SSHKeys
 }

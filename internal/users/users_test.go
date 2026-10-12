@@ -165,3 +165,25 @@ func TestSessionsAndLimiter(t *testing.T) {
 		t.Fatal("still blocked after the window")
 	}
 }
+
+func TestSessionsSurviveRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sessions.json")
+	a := &Sessions{Path: path}
+	tok, _ := a.New("alice")
+	gone, _ := a.New("bob")
+	a.End(gone)
+	if st, err := os.Stat(path); err != nil || st.Mode().Perm() != 0o600 {
+		t.Fatalf("sessions file: %v", err)
+	}
+	b := &Sessions{Path: path} // p8sd restarted
+	if u, ok := b.User(tok); !ok || u != "alice" {
+		t.Fatal("session lost across restart")
+	}
+	if _, ok := b.User(gone); ok {
+		t.Fatal("ended session came back")
+	}
+	b.EndUser("alice", "")
+	if _, ok := (&Sessions{Path: path}).User(tok); ok {
+		t.Fatal("signed-out user still signed in after restart")
+	}
+}

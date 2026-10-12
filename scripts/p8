@@ -55,6 +55,8 @@ p8 — manage P8S OS virtual machines
   p8 templates                     installed OS templates
   p8 templates available           OS images that can be added
   p8 templates add NAME            download and add one (e.g. ubuntu-24.04, rocky-9)
+  p8 fw NAME [on|off]              VM firewall: show, switch on/off
+  p8 fw NAME allow tcp 22 [from 203.0.113.0/24] | allow ping | remove N
   p8 users                         user accounts (dashboard sign-in)
   p8 user add NAME [--admin] [vms=2 cpus=4 ram=4096 disk=60 lan=no]
                                    new customer (or admin); asks for the password
@@ -441,6 +443,31 @@ case $cmd in
     body=$(call GET "/audit?limit=${1:-40}") || exit 1
     jq -r '.entries[] | [(.time | sub("T"; " ") | sub("Z"; "")), .user, .ip, (.status|tostring), (.detail // "" | if . == "" then null else . end) // .action] | @tsv' <<<"$body" |
       while IFS=$'\t' read -r t u ip st a; do printf '%-20s %-18s %-15s %-4s %s\n' "$t" "$u" "$ip" "$st" "$a"; done ;;
+
+  fw|firewall)
+    need "${1:-}"; n=$1; shift
+    fw=$(call GET "/vms/$n/firewall") || exit 1
+    put() { fw=$(call PUT "/vms/$n/firewall" "$1") || exit 1; }
+    case ${1:-show} in
+      show) ;;
+      on|off) put "$(jq -c --argjson e "$([[ $1 == on ]] && echo true || echo false)" '.enabled=$e' <<<"$fw")" ;;
+      allow)
+        proto=${2:-}; ports=""; src=""
+        [[ $proto == tcp || $proto == udp || $proto == icmp || $proto == ping ]] || { red "usage: p8 fw $n allow tcp|udp PORTS [from SOURCE]   or   allow ping"; exit 1; }
+        [[ $proto == ping ]] && proto=icmp
+        shift 2
+        [[ $proto != icmp ]] && { ports=${1:-}; shift || true; }
+        [[ ${1:-} == from ]] && src=${2:-}
+        put "$(jq -c --arg p "$proto" --arg o "$ports" --arg s "$src" '.rules += [{proto:$p, ports:$o, source:$s}]' <<<"$fw")" ;;
+      remove|rm)
+        [[ ${2:-} =~ ^[0-9]+$ ]] || { red "usage: p8 fw $n remove RULE_NUMBER (see: p8 fw $n)"; exit 1; }
+        put "$(jq -c --argjson i "$2" 'del(.rules[$i-1])' <<<"$fw")" ;;
+      *) red "usage: p8 fw NAME [on|off|allow tcp|udp PORTS [from SOURCE]|allow ping|remove N]"; exit 1 ;;
+    esac
+    if [[ $(jq -r .enabled <<<"$fw") == true ]]; then green "firewall ON for $n: only this gets in"; else echo "firewall OFF for $n: everything may connect (rules below are kept)"; fi
+    jq -r '.rules | to_entries[] | "  \(.key+1). \(if .value.proto=="icmp" then "ping" else "\(.value.proto) \(.value.ports)" end)\(if (.value.source // "") != "" then "  from \(.value.source)" else "" end)\(if (.value.comment // "") != "" then "  (\(.value.comment))" else "" end)"' <<<"$fw"
+    [[ $(jq '.rules | length' <<<"$fw") == 0 ]] && echo "  (no rules)"
+    true ;;
 
   jobs)
     body=$(call GET /jobs) || exit 1

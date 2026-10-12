@@ -29,6 +29,7 @@ import (
 	"p8sos/internal/cloudinit"
 	"p8sos/internal/config"
 	"p8sos/internal/execx"
+	"p8sos/internal/firewall"
 	"p8sos/internal/guard"
 	"p8sos/internal/hostinfo"
 	"p8sos/internal/isos"
@@ -95,6 +96,10 @@ func serve(args []string) error {
 		Jobs:         &jobs.Manager{Log: log},
 		ISOs:         &isos.Library{Dir: cfg.ISODir},
 		ScheduleFile: filepath.Join(cfg.DataDir, "backup-schedule.json"),
+		FirewallFile: filepath.Join(cfg.DataDir, "firewall.json"),
+		Firewall: func(ctx context.Context, vms []firewall.VM) error {
+			return firewall.Apply(ctx, run, vms)
+		},
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -106,6 +111,7 @@ func serve(args []string) error {
 	}
 	go svc.RunSchedule(ctx, cfg.BackupTime, nil)
 	go runGuard(ctx, log, run, cfg)
+	go runFirewalls(ctx, log, svc)
 	virsh := &virt.Virsh{Run: run, URI: cfg.LibvirtURI}
 	mc := &metrics.Collector{
 		Stats: func(ctx context.Context) (map[string]metrics.Raw, error) {
@@ -131,6 +137,21 @@ func serve(args []string) error {
 		}
 	}
 
+	sessions := &users.Sessions{Path: filepath.Join(cfg.DataDir, "sessions.json")}
+	go func() { // keep last-use times on disk, so idle sign-outs survive restarts
+		t := time.NewTicker(time.Minute)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				sessions.Flush()
+				return
+			case <-t.C:
+				sessions.Flush()
+			}
+		}
+	}()
+
 	srv := &http.Server{
 		Addr: cfg.Listen,
 		Handler: (&api.Server{
@@ -143,7 +164,7 @@ func serve(args []string) error {
 			},
 			UI:       web.Handler(),
 			Users:    &users.Store{Path: filepath.Join(cfg.DataDir, "users.json")},
-			Sessions: &users.Sessions{},
+			Sessions: sessions,
 			Audit:    &audit.Log{Path: filepath.Join(cfg.DataDir, "audit.log")},
 			Issuer:   issuer(),
 		}).Handler(),
@@ -239,4 +260,29 @@ func issuer() string {
 		return "P8S OS (" + h + ")"
 	}
 	return "P8S OS"
+}
+
+// runFirewalls keeps the per-VM firewalls loaded (start-up, then every 5
+// minutes, in case something flushed nftables).
+func runFirewalls(ctx context.Context, log *slog.Logger, svc *vm.Service) {
+	lastErr := ""
+	for {
+		msg := ""
+		if err := svc.ApplyFirewalls(ctx); err != nil {
+			msg = err.Error()
+		}
+		if msg != lastErr {
+			if msg != "" {
+				log.Error("VM firewalls could not be loaded", "err", msg)
+			} else if lastErr != "" {
+				log.Info("VM firewalls loaded again")
+			}
+			lastErr = msg
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(5 * time.Minute):
+		}
+	}
 }

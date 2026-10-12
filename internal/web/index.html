@@ -96,6 +96,9 @@ dialog form.uform{padding:0}
 .pill.on{background:var(--accent);color:var(--accent-ink)}
 .uedit{margin-top:8px;padding:10px;border:1px solid var(--line);border-radius:8px}
 .linkbtn{background:none;border:0;padding:0;color:var(--accent);cursor:pointer;font-size:13px}
+.fw td{padding:4px 4px 4px 0}
+.fw select,.fw input{padding:5px 7px}
+.fw select{width:86px}.fw td:nth-child(2){width:24%}.fw td:last-child{width:1%}
 .btn.confirm{background:var(--bad);border-color:var(--bad);color:#fff}
 @media (max-width:760px){
   header{padding:10px 16px} main{padding:16px} .panel-head{flex-wrap:wrap} #hVer{display:none}
@@ -149,6 +152,7 @@ dialog form.uform{padding:0}
   <div class="hint">Leave empty to log in with SSH keys only (safest). You can set or change passwords later under Manage.</div>
   <label for="cKeys">SSH public key <span class="muted">(optional)</span></label>
   <textarea id="cKeys" placeholder="ssh-ed25519 AAAA… — leave empty to use the host's default key"></textarea>
+  <div class="hint" id="cKeysHint"></div>
   </div>
   <div class="dlg-actions">
     <button class="btn" value="cancel" formnovalidate>Cancel</button>
@@ -190,6 +194,18 @@ dialog form.uform{padding:0}
   </div>
   <div class="hint">Disks can only grow. The VM's filesystem grows to the new size when it boots.</div>
   <div class="inline"><span class="spacer"></span><button class="btn primary" id="mRzGo">Apply</button></div>
+
+  <h3>Firewall</h3>
+  <div class="sub">Off: anything can connect to this VM. On: only what is listed below gets in;
+    everything the VM starts itself (updates, downloads) keeps working.</div>
+  <label class="check"><input id="mFwOn" type="checkbox"> Only allow the incoming traffic below</label>
+  <table class="snaps fw"><tbody id="mFwRules"></tbody></table>
+  <div class="inline" style="flex-wrap:wrap">
+    <button class="btn" data-fwp="ssh">+ SSH</button><button class="btn" data-fwp="web">+ Web</button>
+    <button class="btn" data-fwp="ping">+ Ping</button><button class="btn" data-fwp="custom">+ Custom</button>
+    <span class="spacer"></span><button class="btn primary" id="mFwSave">Save firewall</button>
+  </div>
+  <div class="hint" id="mFwHint"></div>
 
   <h3>Change password</h3>
   <div class="sub" id="mPwHint">Sets a login password inside the VM (needs it running and fully booted).</div>
@@ -276,6 +292,10 @@ dialog form.uform{padding:0}
       <input id="acNew" type="password" minlength="10" placeholder="new password (10+)" autocomplete="new-password">
       <button class="btn" id="acPwGo">Change</button>
     </div>
+    <h3>SSH keys for new VMs</h3>
+    <div class="sub">Public keys (one per line) put into VMs you create without giving a key.</div>
+    <textarea id="acKeys" placeholder="ssh-ed25519 AAAA… you@laptop"></textarea>
+    <div class="inline"><span class="spacer"></span><button class="btn" id="acKeysGo">Save keys</button></div>
     <h3>Two-factor sign-in</h3>
     <div class="sub" id="ac2State"></div>
     <div id="ac2Setup" hidden>
@@ -527,7 +547,9 @@ async function openCreate(){
   const min = templates[0]?.min_disk_gb || 1;
   $("#cDisk").min = min; if (+$("#cDisk").value < min) $("#cDisk").value = Math.max(10, min);
   tplHint();
-  $("#cName").value = ""; $("#cKeys").value = ""; $("#cPw").value = $("#cPw2").value = ""; $("#cPwSSH").checked = true;
+  $("#cName").value = ""; $("#cKeys").value = "";
+  $("#cKeys").placeholder = isAdmin() ? "ssh-ed25519 AAAA… — leave empty to use the host's default key" : "ssh-ed25519 AAAA… — leave empty to use the keys saved under your name";
+  $("#cKeysHint").textContent = !isAdmin() && !(me?.ssh_keys || []).length ? "No saved keys: set a root password above, or save keys under your name (top right)." : ""; $("#cPw").value = $("#cPw2").value = ""; $("#cPwSSH").checked = true;
   if (isAdmin()) host = await call("GET", "/host").catch(() => host);
   const lan = isAdmin() ? !!host?.networks?.includes("lan") : !!me?.lan;
   $("#cOwnerBox").hidden = !(isAdmin() && me?.accounts_on);
@@ -624,7 +646,8 @@ async function openManage(name){
   $("#dlgManage").showModal();
   $("#mBackups").innerHTML = `<tr><td class="muted">Loading…</td></tr>`;
   $("#mCharts").innerHTML = "";
-  await Promise.all([loadSnaps(), loadBackups(), loadVMCharts()]);
+  $("#mFwRules").innerHTML = `<tr><td class="muted">Loading…</td></tr>`;
+  await Promise.all([loadSnaps(), loadBackups(), loadVMCharts(), loadFirewall()]);
 }
 async function loadSnaps(){
   try { snaps = (await call("GET", `/vms/${encodeURIComponent(mName)}/snapshots`)).snapshots; }
@@ -728,6 +751,62 @@ $("#mPwGo").onclick = async () => {
   try {
     await call("POST", `/vms/${encodeURIComponent(mName)}/password`, {user, password});
     toast(`Password for ${user} on ${mName} changed`); $("#mPw").value = "";
+  } catch (err) { toast(err.message, true); }
+  go.disabled = false;
+};
+
+/* ---------- per-VM firewall ---------- */
+let fwRules = [];
+async function loadFirewall(){
+  try {
+    const fw = await call("GET", `/vms/${encodeURIComponent(mName)}/firewall`);
+    $("#mFwOn").checked = fw.enabled; fwRules = fw.rules || [];
+  } catch (err) { toast(err.message, true); fwRules = []; }
+  renderFw();
+}
+function renderFw(){
+  $("#mFwRules").innerHTML = fwRules.length ? fwRules.map((r, i) => `<tr data-i="${i}">
+    <td><select data-k="proto" aria-label="Protocol">${["tcp", "udp", "icmp"].map(p => `<option value="${p}" ${r.proto === p ? "selected" : ""}>${p === "icmp" ? "ping" : p.toUpperCase()}</option>`).join("")}</select></td>
+    <td><input data-k="ports" value="${esc(r.ports || "")}" placeholder="22 or 80,443" aria-label="Ports" ${r.proto === "icmp" ? "disabled" : ""}></td>
+    <td><input data-k="source" value="${esc(r.source || "")}" placeholder="from anywhere" aria-label="Allowed source"></td>
+    <td><input data-k="comment" value="${esc(r.comment || "")}" placeholder="note" aria-label="Note"></td>
+    <td><button class="btn danger" data-fwdel title="Remove rule">✕</button></td></tr>`).join("")
+    : `<tr><td class="muted">No rules. With the firewall on, nothing can connect in (not even SSH).</td></tr>`;
+  const v = vms.find(x => x.name === mName);
+  $("#mFwHint").textContent = $("#mFwOn").checked && !fwRules.some(r => r.proto === "tcp" && /(^|,)22(,|$)/.test(r.ports || ""))
+    ? "Heads-up: without a rule for port 22 you can't SSH in — use the Console instead." : "";
+}
+function readFw(){
+  for (const tr of $("#mFwRules").querySelectorAll("tr[data-i]")) {
+    const r = fwRules[+tr.dataset.i];
+    for (const el of tr.querySelectorAll("[data-k]")) r[el.dataset.k] = el.value.trim();
+  }
+}
+$("#mFwRules").addEventListener("change", e => {
+  if (e.target.dataset.k === "proto") { readFw(); renderFw(); }
+});
+$("#mFwRules").addEventListener("click", e => {
+  if (!e.target.closest("[data-fwdel]")) return;
+  readFw(); fwRules.splice(+e.target.closest("tr").dataset.i, 1); renderFw();
+});
+$("#dlgManage").addEventListener("click", e => {
+  const b = e.target.closest("[data-fwp]"); if (!b) return;
+  readFw();
+  const add = {ssh: [{proto: "tcp", ports: "22", comment: "SSH"}], web: [{proto: "tcp", ports: "80,443", comment: "Web"}],
+    ping: [{proto: "icmp", comment: "Ping"}], custom: [{proto: "tcp", ports: ""}]}[b.dataset.fwp];
+  fwRules.push(...add.map(r => ({source: "", ...r})));
+  renderFw();
+  if (b.dataset.fwp === "custom") $("#mFwRules").querySelector('tr:last-child [data-k="ports"]')?.focus();
+});
+$("#mFwOn").onchange = renderFw;
+$("#mFwSave").onclick = async () => {
+  readFw();
+  const go = $("#mFwSave"); go.disabled = true;
+  try {
+    const fw = await call("PUT", `/vms/${encodeURIComponent(mName)}/firewall`, {enabled: $("#mFwOn").checked,
+      rules: fwRules.map(r => ({proto: r.proto, ports: r.proto === "icmp" ? "" : r.ports, source: r.source, comment: r.comment}))});
+    fwRules = fw.rules; $("#mFwOn").checked = fw.enabled; renderFw();
+    toast(fw.enabled ? `Firewall on for ${mName}: ${fw.rules.length} rule(s)` : `Firewall off for ${mName}`);
   } catch (err) { toast(err.message, true); }
   go.disabled = false;
 };
@@ -1035,6 +1114,7 @@ async function openAccount(){
   const q = me.quota, u = me.usage;
   $("#acPlan").innerHTML = isAdmin() ? "" : `<h3>My plan</h3><div class="sub">${u.vms} of ${q.vms} VMs · ${u.vcpus} of ${q.vcpus} CPUs ·
     ${gb(u.memory_mib)} of ${gb(q.memory_mib)} RAM · ${u.disk_gb} of ${q.disk_gb} GB disk</div>`;
+  $("#acKeys").value = (me.ssh_keys || []).join("\n");
   render2FA();
   $("#dlgAccount").showModal();
 }
@@ -1068,6 +1148,12 @@ $("#acPwGo").onclick = async () => {
   } catch (err) { toast(err.message, true); }
 };
 $("#acClose").onclick = () => $("#dlgAccount").close();
+$("#acKeysGo").onclick = async () => {
+  try {
+    const r = await call("PUT", "/me/ssh-keys", {keys: $("#acKeys").value.split("\n").map(s => s.trim()).filter(Boolean)});
+    toast(r.keys.length ? `${r.keys.length} SSH key(s) saved` : "SSH keys removed");
+  } catch (err) { toast(err.message, true); }
+};
 
 /* ---------- polling ---------- */
 let tick = 0;

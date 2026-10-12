@@ -19,7 +19,7 @@ Two kinds of token work:
 - **Sign-in tokens** from `POST /login` with a user name and password (plus a
   6-digit code when that user has 2FA on). They expire after 12 h unused
   (7 days at most) and on `POST /logout`, a password change, or when the
-  account is disabled. A p8sd restart signs everyone out.
+  account is disabled. Sign-ins survive p8sd restarts (`/var/lib/p8s/sessions.json`, token hashes only).
 
 ### Users, roles and plans
 
@@ -50,6 +50,32 @@ user's VM answers `404`, exactly like a VM that doesn't exist.
 | `PUT /vms/{name}/owner` | admin | `{"owner":"alice"}` (`""` = admins only); works while the VM runs |
 | `POST /vms` with `"owner"` | admin | make a VM for a customer |
 | `GET /audit?limit=200` | signed in | who changed what, newest first (customers: their own) |
+| `PUT /me/ssh-keys` | user | `{"keys":[...]}` put into the user's new VMs when they give none |
+
+Customer VMs never get the host's default SSH keys. Server errors show
+customers only a reference (`ref 1a2b3c4d`); the details are in p8sd's log.
+
+### Per-VM firewall
+
+`GET /vms/{name}/firewall`, `PUT /vms/{name}/firewall` (owner or admin):
+
+```json
+{"enabled": true, "rules": [
+  {"proto": "tcp", "ports": "22", "comment": "SSH"},
+  {"proto": "tcp", "ports": "80,443"},
+  {"proto": "udp", "ports": "51820", "source": "203.0.113.0/24"},
+  {"proto": "icmp"}
+]}
+```
+
+Off (default): everything may connect. On: only the listed incoming traffic
+reaches the VM; replies to the VM's own connections, ARP, IPv6 neighbor
+discovery and DHCP always pass. `proto` tcp/udp/icmp (ping); `ports` like
+`22`, `80,443`, `8000-8100`; `source` an IPv4/IPv6 address or network (empty =
+anywhere); up to 32 rules. Enforced by nftables (`table bridge p8s_fw`,
+matched by the VM's MAC) for private and home-network VMs alike; needs the
+`nf_conntrack_bridge` kernel module. If the rules can't be loaded the change
+is refused and nothing changes. CLI: `p8 fw NAME [on|off|allow tcp 22 [from CIDR]|allow ping|remove N]`.
 
 Users live in `/var/lib/p8s/users.json` (passwords as PBKDF2-SHA256), the
 activity log in `/var/lib/p8s/audit.log`.

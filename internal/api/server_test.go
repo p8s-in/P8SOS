@@ -16,11 +16,13 @@ import (
 	"time"
 
 	"p8sos/internal/config"
+	"p8sos/internal/firewall"
 	"p8sos/internal/metrics"
 	"p8sos/internal/vm"
 )
 
 type fakeVMs struct {
+	fw      firewall.Settings
 	created vm.CreateRequest
 	sched   vm.Schedule
 }
@@ -152,6 +154,21 @@ func (f *fakeVMs) SetOwner(ctx context.Context, n, owner string) (vm.VM, error) 
 	v.Owner = owner
 	return v, err
 }
+func (f *fakeVMs) GetFirewall(ctx context.Context, n string) (firewall.Settings, error) {
+	_, err := f.Get(ctx, n)
+	return f.fw, err
+}
+func (f *fakeVMs) SetFirewall(ctx context.Context, n string, fw firewall.Settings) (firewall.Settings, error) {
+	if _, err := f.Get(ctx, n); err != nil {
+		return fw, err
+	}
+	fw, err := firewall.Validate(fw)
+	if err != nil {
+		return fw, fmt.Errorf("%w: %v", vm.ErrInvalid, err)
+	}
+	f.fw = fw
+	return fw, nil
+}
 func (f *fakeVMs) EjectISO(ctx context.Context, n string) (vm.VM, error) { return f.Get(ctx, n) }
 
 type fakeMetrics struct{}
@@ -203,6 +220,10 @@ func TestAPI(t *testing.T) {
 		{"GET", "/api/v1/vms", "", "", 401, "unauthorized"},
 		{"GET", "/api/v1/vms", "wrong", "", 401, "unauthorized"},
 		{"GET", "/api/v1/vms", secret, "", 200, `"name":"web1"`},
+		{"GET", "/api/v1/vms/web1/firewall", secret, "", 200, `"enabled":false`},
+		{"PUT", "/api/v1/vms/web1/firewall", secret, `{"enabled":true,"rules":[{"proto":"tcp","ports":"22, 443"}]}`, 200, `"ports":"22,443"`},
+		{"PUT", "/api/v1/vms/web1/firewall", secret, `{"enabled":true,"rules":[{"proto":"tcp","ports":"0"}]}`, 400, "invalid"},
+		{"PUT", "/api/v1/vms/nope/firewall", secret, `{"enabled":true}`, 404, "not_found"},
 		{"GET", "/api/v1/templates", secret, "", 200, `"debian-13"`},
 		{"GET", "/api/v1/templates", secret, "", 200, `"label":"Ubuntu 24.04 LTS","min_disk_gb":4,"os_variant":"","default_user":"ubuntu"`},
 		{"GET", "/api/v1/templates", secret, "", 200, `"name":"debian-13","label":"debian-13","min_disk_gb":4,"os_variant":"","default_user":"debian"`},

@@ -18,6 +18,7 @@ import (
 	"p8sos/internal/backup"
 	"p8sos/internal/cloudinit"
 	"p8sos/internal/config"
+	"p8sos/internal/firewall"
 	"p8sos/internal/isos"
 	"p8sos/internal/jobs"
 	"p8sos/internal/virt"
@@ -67,9 +68,13 @@ type Service struct {
 	ISOs         *isos.Library // installer images; nil = ISO installs off
 	Jobs         *jobs.Manager // runs backups and restores in the background
 	ScheduleFile string        // daily-backup settings per VM (JSON); empty = in memory only
+	FirewallFile string        // per-VM firewall settings (JSON); empty = in memory only
+	// Firewall loads the per-VM firewall rules (nftables); nil = not enforced (tests).
+	Firewall func(ctx context.Context, vms []firewall.VM) error
 
 	locks    sync.Map // name -> *sync.Mutex; serializes ops per VM
 	memSched sync.Map // backup schedules when ScheduleFile is empty (tests)
+	memFW    sync.Map // firewall settings when FirewallFile is empty (tests)
 }
 
 type Limits struct{ MaxVCPUs, MaxMemoryMiB, MaxDiskGB int }
@@ -111,6 +116,9 @@ type CreateRequest struct {
 	RootPassword string `json:"root_password,omitempty"`
 	// SSHPasswordAuth allows SSH logins as root with RootPassword (default true when one is set).
 	SSHPasswordAuth *bool `json:"ssh_password_auth,omitempty"`
+	// NoDefaultKeys leaves out the host's default SSH keys (customer VMs: the
+	// provider's key doesn't belong in them). Set by the API, not by clients.
+	NoDefaultKeys bool `json:"-"`
 	// Owner is the P8S user the VM is made for (set by the API from the login).
 	Owner     string `json:"owner,omitempty"`
 	Start     *bool  `json:"start,omitempty"`     // default true
@@ -273,7 +281,7 @@ func (s *Service) Create(ctx context.Context, r CreateRequest) (VM, error) {
 
 	uuid := newUUID()
 	keys := r.SSHKeys
-	if len(keys) == 0 {
+	if len(keys) == 0 && !r.NoDefaultKeys {
 		keys = s.SSHKeys
 	}
 	ci := cloudinit.Spec{InstanceID: uuid, Hostname: r.Name, SSHKeys: keys, UserData: r.UserData}
@@ -459,6 +467,7 @@ func (s *Service) Delete(ctx context.Context, name string) error {
 	s.logErr("remove seed", s.Seeds.Remove(dom))
 	// Backups are kept (a deleted VM can be restored); its daily schedule is not.
 	s.logErr("remove backup schedule", s.SetSchedule(name, Schedule{}))
+	s.logErr("remove firewall", s.dropFirewall(context.WithoutCancel(ctx), name))
 	if err := s.Disks.DestroyDisk(context.WithoutCancel(ctx), dom); err != nil {
 		return fmt.Errorf("domain removed but disk cleanup failed: %w", err)
 	}

@@ -183,6 +183,25 @@ if [[ ${MARKER:-0} == 1 ]]; then  # guest agent is up (SSH worked)
   api POST "/vms/$NAME/password" '{"user":"debian","password":"smoke-test-pw-1"}'; expect "set guest password" 204
 fi
 
+step "5c. VM firewall"
+api GET "/vms/$NAME/firewall"; expect "firewall settings" 200
+[[ $(jq -r .enabled <<<"$BODY") == false ]] && ok "firewall is off by default" || bad "firewall default: $BODY"
+if [[ ${MARKER:-0} == 1 ]]; then
+  mac=$(api GET "/vms/$NAME"; jq -r .mac <<<"$BODY")
+  api PUT "/vms/$NAME/firewall" '{"enabled":true,"rules":[{"proto":"tcp","ports":"2222"}]}'; expect "firewall on, SSH not allowed" 200
+  sudo nft list table bridge p8s_fw 2>/dev/null | grep -q "ether daddr $mac" && ok "nftables rules loaded for $mac" || bad "no p8s_fw rules for $mac: $BODY"
+  ssh "${ssh_opts[@]}" -o ConnectTimeout=4 "$LOGIN@$ip" true 2>/dev/null && bad "firewall did not block SSH" || ok "firewall blocks SSH (port 22 not allowed)"
+  api PUT "/vms/$NAME/firewall" '{"enabled":true,"rules":[{"proto":"tcp","ports":"22","comment":"SSH"}]}'; expect "allow SSH" 200
+  g=""
+  for _ in 1 2 3; do g=$(ssh "${ssh_opts[@]}" "$LOGIN@$ip" 'getent hosts deb.debian.org >/dev/null && timeout 8 bash -c "</dev/tcp/deb.debian.org/80" && echo NET-OK' 2>/dev/null) && break; sleep 2; done
+  [[ -n $g ]] && ok "SSH allowed again by the rule" || bad "SSH still blocked with port 22 allowed"
+  grep -q NET-OK <<<"$g" && ok "VM's own connections still work with the firewall on" || bad "VM lost internet with firewall on: $g"
+  api PUT "/vms/$NAME/firewall" '{"enabled":false,"rules":[{"proto":"tcp","ports":"22"}]}'; expect "firewall off" 200
+  sudo nft list table bridge p8s_fw 2>/dev/null | grep -q "$mac" && bad "rules left after switching off" || ok "rules removed when off"
+else
+  echo "  skipped the traffic checks (no SSH to the VM)"
+fi
+
 step "6. power operations"
 api POST "/vms/$NAME/stop"; expect "ACPI stop" 202
 wait_state stopped "$STOP_TIMEOUT" && ok "guest shut down cleanly" || bad "still $(state) after ${STOP_TIMEOUT}s of ACPI shutdown"

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -132,7 +133,7 @@ func (s *Server) vmFor(w http.ResponseWriter, r *http.Request) (vm.VM, bool) {
 		err = fmt.Errorf("%w: vm %q", vm.ErrNotFound, name)
 	}
 	if err != nil {
-		s.fail(w, err)
+		s.fail(w, r, err)
 		return vm.VM{}, false
 	}
 	return v, true
@@ -241,7 +242,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		s.audit(r, name, http.StatusUnauthorized, "sign-in failed")
 		return
 	case err != nil:
-		s.fail(w, err)
+		s.fail(w, r, err)
 		return
 	}
 	s.limiter().Reset(keys[0])
@@ -281,7 +282,7 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 	p := who(r)
 	all, err := s.VMs.List(r.Context())
 	if err != nil {
-		s.fail(w, err)
+		s.fail(w, r, err)
 		return
 	}
 	out := map[string]any{
@@ -292,9 +293,13 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 	if p.Admin {
 		out["role"] = users.Admin
 	}
+	out["ssh_keys"] = []string{}
 	if p.User {
 		if u, err := s.Users.Get(p.Name); err == nil {
 			out["two_factor"] = u.TOTPSecret != ""
+			if u.SSHKeys != nil {
+				out["ssh_keys"] = u.SSHKeys
+			}
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -322,7 +327,7 @@ func (s *Server) changeMyPassword(w http.ResponseWriter, r *http.Request) {
 	p := who(r)
 	u, err := s.Users.Get(p.Name)
 	if err != nil {
-		s.fail(w, err)
+		s.fail(w, r, err)
 		return
 	}
 	if !users.VerifyPassword(u.PassHash, body.Old) {
@@ -330,7 +335,7 @@ func (s *Server) changeMyPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Users.SetPassword(p.Name, body.New); err != nil {
-		s.fail(w, err)
+		s.fail(w, r, err)
 		return
 	}
 	s.Sessions.EndUser(p.Name, p.Session) // sign out everywhere else
@@ -343,7 +348,7 @@ func (s *Server) setup2FA(w http.ResponseWriter, r *http.Request) {
 	}
 	secret, uri, err := s.Users.StartTOTP(who(r).Name, s.issuer())
 	if err != nil {
-		s.fail(w, err)
+		s.fail(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"secret": secret, "uri": uri})
@@ -360,7 +365,7 @@ func (s *Server) enable2FA(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Users.ConfirmTOTP(who(r).Name, body.Code); err != nil {
-		s.fail(w, err)
+		s.fail(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -377,7 +382,7 @@ func (s *Server) disable2FA(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Users.DisableTOTP(who(r).Name, body.Code, false); err != nil {
-		s.fail(w, err)
+		s.fail(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -403,12 +408,12 @@ func (s *Server) listUsers(w http.ResponseWriter, r *http.Request) {
 	}
 	list, err := s.Users.List()
 	if err != nil {
-		s.fail(w, err)
+		s.fail(w, r, err)
 		return
 	}
 	all, err := s.VMs.List(r.Context())
 	if err != nil {
-		s.fail(w, err)
+		s.fail(w, r, err)
 		return
 	}
 	out := []userView{}
@@ -440,7 +445,7 @@ func (s *Server) addUser(w http.ResponseWriter, r *http.Request) {
 	}
 	u, err := s.Users.Add(strings.ToLower(strings.TrimSpace(body.Name)), body.Role, body.Password, q)
 	if err != nil {
-		s.fail(w, err)
+		s.fail(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, u)
@@ -463,7 +468,7 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("user")
 	cur, err := s.Users.Get(name)
 	if err != nil {
-		s.fail(w, err)
+		s.fail(w, r, err)
 		return
 	}
 	losesAdmin := cur.Role == users.Admin && !cur.Disabled &&
@@ -474,7 +479,7 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.Password != nil {
 		if err := users.CheckPassword(*body.Password); err != nil {
-			s.fail(w, err)
+			s.fail(w, r, err)
 			return
 		}
 	}
@@ -497,7 +502,7 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 	if err != nil {
-		s.fail(w, err)
+		s.fail(w, r, err)
 		return
 	}
 	if body.Password != nil || (body.Disabled != nil && *body.Disabled) {
@@ -513,7 +518,7 @@ func (s *Server) deleteUser(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("user")
 	cur, err := s.Users.Get(name)
 	if err != nil {
-		s.fail(w, err)
+		s.fail(w, r, err)
 		return
 	}
 	if cur.Role == users.Admin && !cur.Disabled && s.Users.AdminCount() <= 1 {
@@ -522,7 +527,7 @@ func (s *Server) deleteUser(w http.ResponseWriter, r *http.Request) {
 	}
 	all, err := s.VMs.List(r.Context())
 	if err != nil {
-		s.fail(w, err)
+		s.fail(w, r, err)
 		return
 	}
 	if n := usageOf(all, name).VMs; n > 0 {
@@ -530,7 +535,7 @@ func (s *Server) deleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Users.Delete(name); err != nil {
-		s.fail(w, err)
+		s.fail(w, r, err)
 		return
 	}
 	s.Sessions.EndUser(name, "")
@@ -553,13 +558,13 @@ func (s *Server) setOwner(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if _, err := s.Users.Get(body.Owner); err != nil {
-			s.fail(w, err)
+			s.fail(w, r, err)
 			return
 		}
 	}
 	v, err := s.VMs.SetOwner(r.Context(), r.PathValue("name"), body.Owner)
 	if err != nil {
-		s.fail(w, err)
+		s.fail(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, v)
@@ -577,7 +582,7 @@ func (s *Server) auditLog(w http.ResponseWriter, r *http.Request) {
 	}
 	list, err := s.Audit.Recent(n, user)
 	if err != nil {
-		s.fail(w, err)
+		s.fail(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"entries": list})
@@ -625,6 +630,55 @@ func (s *Server) backupFor(w http.ResponseWriter, r *http.Request) (vm.Backup, b
 		}
 		err = fmt.Errorf("%w: backup %s of %q", vm.ErrNotFound, id, name)
 	}
-	s.fail(w, err)
+	s.fail(w, r, err)
 	return backup.Meta{}, false
+}
+
+// setMyKeys saves the SSH public keys put into the user's new VMs.
+func (s *Server) setMyKeys(w http.ResponseWriter, r *http.Request) {
+	if !s.accountOnly(w, r) {
+		return
+	}
+	var body struct {
+		Keys []string `json:"keys"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	keys := []string{}
+	for _, k := range body.Keys {
+		k = strings.TrimSpace(k)
+		if k == "" {
+			continue
+		}
+		if !validKey(k) {
+			writeErr(w, http.StatusBadRequest, "invalid", "that doesn't look like an SSH public key (ssh-ed25519 AAAA… or ssh-rsa AAAA…)")
+			return
+		}
+		keys = append(keys, k)
+	}
+	if len(keys) > 10 {
+		writeErr(w, http.StatusBadRequest, "invalid", "at most 10 keys")
+		return
+	}
+	if _, err := s.Users.Update(who(r).Name, func(u *users.User) error { u.SSHKeys = keys; return nil }); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"keys": keys})
+}
+
+func validKey(k string) bool {
+	f := strings.Fields(k)
+	if len(f) < 2 || len(k) > 16384 || strings.ContainsAny(k, "\r\n") {
+		return false
+	}
+	switch f[0] {
+	case "ssh-ed25519", "ssh-rsa", "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521",
+		"sk-ssh-ed25519@openssh.com", "sk-ecdsa-sha2-nistp256@openssh.com":
+	default:
+		return false
+	}
+	_, err := base64.StdEncoding.DecodeString(f[1])
+	return err == nil
 }

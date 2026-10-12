@@ -49,6 +49,8 @@ type User struct {
 	Quota     Quota  `json:"quota"`
 	Disabled  bool   `json:"disabled,omitempty"`
 	CreatedAt string `json:"created_at"`
+	// SSHKeys go into the user's new VMs when they don't give any.
+	SSHKeys []string `json:"ssh_keys,omitempty"`
 	// TOTP (authenticator app). TOTPPending holds a secret until the user has
 	// proved with one code that their app has it.
 	TOTPSecret  string `json:"totp_secret,omitempty"`
