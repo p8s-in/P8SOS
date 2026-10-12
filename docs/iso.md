@@ -76,6 +76,16 @@ By default VMs are only reachable from the laptop. To let other PCs/phones reach
 Ethernet cable in, then `sudo p8 lan-setup` once, then `p8 create web2 --lan` (or choose
 **Home network** in the dashboard). Details: [networking.md](networking.md).
 
+## 7. Snapshots and resizing
+
+```
+p8 snap web1 before-upgrade        # instant copy of the disk
+p8 rollback web1 before-upgrade    # undo everything since (asks first)
+p8 resize web1 cpus=4 ram=4096 disk=40
+```
+In the dashboard: **Manage** on a VM. Resizing and rolling back need the VM stopped;
+`p8` stops and restarts it for you after asking.
+
 ## Updating an installed host
 
 Copy the newest `P8SOS` folder to the host (USB stick, or `git clone`), then: `sudo bash update.sh`.

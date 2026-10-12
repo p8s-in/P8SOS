@@ -41,6 +41,10 @@ type Hypervisor interface {
 	Autostart(ctx context.Context, name string) (bool, error)
 	// Addresses returns the guest's IPv4 addresses (may be empty while booting).
 	Addresses(ctx context.Context, name string) ([]string, error)
+	// FSFreeze / FSThaw pause guest filesystem writes (via the guest agent) so a
+	// disk snapshot is clean. Freeze fails if the agent isn't running.
+	FSFreeze(ctx context.Context, name string) error
+	FSThaw(ctx context.Context, name string) error
 }
 
 type Virsh struct {
@@ -124,6 +128,16 @@ func (v *Virsh) List(ctx context.Context) ([]string, error) {
 
 func (v *Virsh) Reboot(ctx context.Context, name string) error {
 	_, err := v.virsh(ctx, "reboot", name, "--mode", "acpi")
+	return err
+}
+
+func (v *Virsh) FSFreeze(ctx context.Context, name string) error {
+	_, err := v.virsh(ctx, "domfsfreeze", name)
+	return err
+}
+
+func (v *Virsh) FSThaw(ctx context.Context, name string) error {
+	_, err := v.virsh(ctx, "domfsthaw", name)
 	return err
 }
 

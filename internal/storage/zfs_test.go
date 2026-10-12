@@ -71,3 +71,41 @@ func TestCloneDiskDeviceNeverAppears(t *testing.T) {
 		t.Fatalf("expected cleanup, last call %q", last)
 	}
 }
+
+func TestSnapshots(t *testing.T) {
+	r := &testfake.Runner{Out: map[string]string{
+		"zfs list -H -p -t snapshot":     "tank/vms/p8s-a1-disk0@first\t1791700000\t4096\ntank/vms/p8s-a1-disk0@second\t1791700600\t1048576\n",
+		"zfs get -H -p -o value volsize": "21474836480\n",
+	}}
+	z := &ZFS{Run: r, Dataset: "tank/vms"}
+	ctx := context.Background()
+	snaps, err := z.Snapshots(ctx, "p8s-a1")
+	if err != nil || len(snaps) != 2 || snaps[0].Name != "first" || snaps[1].UsedBytes != 1048576 ||
+		snaps[0].CreatedAt != "2026-10-11T06:26:40Z" {
+		t.Fatalf("snapshots %v %+v", err, snaps)
+	}
+	if gb, err := z.DiskSizeGB(ctx, "p8s-a1"); err != nil || gb != 20 {
+		t.Fatalf("size %d %v", gb, err)
+	}
+	_ = z.Snapshot(ctx, "p8s-a1", "third")
+	_ = z.Rollback(ctx, "p8s-a1", "first", true)
+	_ = z.Rollback(ctx, "p8s-a1", "second", false)
+	_ = z.DestroySnapshot(ctx, "p8s-a1", "first")
+	_ = z.ResizeDisk(ctx, "p8s-a1", 30)
+	want := []string{
+		"zfs snapshot tank/vms/p8s-a1-disk0@third",
+		"zfs rollback -r tank/vms/p8s-a1-disk0@first",
+		"zfs rollback tank/vms/p8s-a1-disk0@second",
+		"zfs destroy tank/vms/p8s-a1-disk0@first",
+		"zfs set volsize=30G tank/vms/p8s-a1-disk0",
+	}
+	got := r.Calls[2:]
+	for i, w := range want {
+		if got[i] != w {
+			t.Errorf("call %d = %q, want %q", i, got[i], w)
+		}
+	}
+	if len(ParseSnapshots("")) != 0 {
+		t.Fatal("empty output should give no snapshots")
+	}
+}

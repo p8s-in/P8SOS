@@ -128,7 +128,30 @@ ACPI reboot of a running guest. `202` VM object. `409 conflict` if the VM is not
 
 ### `DELETE /vms/{name}`
 Force-stops if running, undefines the domain, destroys the disk and seed ISO.
-`204`. **Irreversible.**
+`204`. **Irreversible.** Also deletes the VM's snapshots.
+
+### `PATCH /vms/{name}` — resize
+`{"vcpus":4, "memory_mib":4096, "disk_gb":40}` — any subset. The VM must be **stopped**
+(`409` otherwise). Disks only grow (`400` on shrink); the guest's root filesystem grows
+to the new size on its next boot (cloud-init growpart). `200` + VM object.
+
+### Snapshots
+A snapshot is a ZFS snapshot of the VM's disk (instant, copy-on-write). Only the disk
+is saved — CPU/RAM settings are not. At most 30 per VM.
+
+`GET /vms/{name}/snapshots` → `200 {"snapshots":[{"name":"before-upgrade","created_at":"2026-10-12T10:00:00Z","used_bytes":1048576}]}`
+(oldest first; `used_bytes` = space only that snapshot holds).
+
+`POST /vms/{name}/snapshots` `{"name":"before-upgrade"}` → `201` snapshot. Name optional
+(default `snap-YYYYMMDD-HHMMSS`), `^[a-z0-9][a-z0-9._-]{0,39}$`. Works on running VMs:
+the guest's filesystems are frozen for the instant of the snapshot when the guest agent
+answers (clean snapshot), otherwise it is crash-consistent.
+
+`POST /vms/{name}/snapshots/{snap}/rollback` `{"destroy_newer":true}` → `200` VM. The VM
+must be stopped. ZFS can only roll back to the newest snapshot, so rolling back further
+deletes the newer ones — without `destroy_newer` that is a `409` listing them.
+
+`DELETE /vms/{name}/snapshots/{snap}` → `204`.
 
 ## Example session
 
@@ -146,8 +169,7 @@ curl -s -H "Authorization: Bearer $TOK" -X DELETE $P8S/vms/web1 -w '%{http_code}
 
 ## Planned (not in Phase 1)
 
-- Resize CPU/RAM; change autostart on an existing VM.
-- Snapshots: `POST /vms/{name}/snapshots`, rollback.
+- Change autostart on an existing VM; CPU/RAM changes on a running VM.
 - Async jobs: `POST` returns `202` + `/jobs/{id}` for long operations.
 - Tenants, projects, quotas, scoped tokens (Phase 2).
 - Console websocket for noVNC (Phase 3).

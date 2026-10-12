@@ -44,6 +44,38 @@ func (f *fakeVMs) Stop(ctx context.Context, n string, force bool) (vm.VM, error)
 func (f *fakeVMs) Reboot(ctx context.Context, n string) (vm.VM, error) { return f.Get(ctx, n) }
 func (f *fakeVMs) Delete(ctx context.Context, n string) error          { _, err := f.Get(ctx, n); return err }
 
+func (f *fakeVMs) Resize(ctx context.Context, n string, r vm.ResizeRequest) (vm.VM, error) {
+	if r.DiskGB == 1 {
+		return vm.VM{}, fmt.Errorf("%w: disk_gb can only grow", vm.ErrInvalid)
+	}
+	v, err := f.Get(ctx, n)
+	v.VCPUs = r.VCPUs
+	return v, err
+}
+func (f *fakeVMs) Snapshots(ctx context.Context, n string) ([]vm.Snapshot, error) {
+	_, err := f.Get(ctx, n)
+	return []vm.Snapshot{{Name: "s1"}}, err
+}
+func (f *fakeVMs) CreateSnapshot(ctx context.Context, n, snap string) (vm.Snapshot, error) {
+	if snap == "" {
+		snap = "snap-auto"
+	}
+	_, err := f.Get(ctx, n)
+	return vm.Snapshot{Name: snap}, err
+}
+func (f *fakeVMs) Rollback(ctx context.Context, n, snap string, destroyNewer bool) (vm.VM, error) {
+	if !destroyNewer {
+		return vm.VM{}, fmt.Errorf("%w: newer snapshots exist", vm.ErrConflict)
+	}
+	return f.Get(ctx, n)
+}
+func (f *fakeVMs) DeleteSnapshot(ctx context.Context, n, snap string) error {
+	if snap != "s1" {
+		return fmt.Errorf("%w: snapshot", vm.ErrNotFound)
+	}
+	return nil
+}
+
 const secret = "p8s_testtoken"
 
 func newTestServer() (*httptest.Server, *fakeVMs) {
@@ -102,6 +134,18 @@ func TestAPI(t *testing.T) {
 		{"DELETE", "/api/v1/vms/web1", secret, "", 204, ""},
 		{"DELETE", "/api/v1/vms/nope", secret, "", 404, "not_found"},
 		{"PUT", "/api/v1/vms/web1", secret, "", 405, ""},
+		{"PATCH", "/api/v1/vms/web1", secret, `{"vcpus":4}`, 200, `"vcpus":4`},
+		{"PATCH", "/api/v1/vms/web1", secret, `{"disk_gb":1}`, 400, "only grow"},
+		{"PATCH", "/api/v1/vms/web1", secret, `{"cpus":4}`, 400, "unknown field"},
+		{"GET", "/api/v1/vms/web1/snapshots", secret, "", 200, `"name":"s1"`},
+		{"GET", "/api/v1/vms/nope/snapshots", secret, "", 404, "not_found"},
+		{"POST", "/api/v1/vms/web1/snapshots", secret, `{"name":"before-upgrade"}`, 201, `"before-upgrade"`},
+		{"POST", "/api/v1/vms/web1/snapshots", secret, "", 201, `"snap-auto"`},
+		{"POST", "/api/v1/vms/web1/snapshots/s1/rollback", secret, "", 409, "conflict"},
+		{"POST", "/api/v1/vms/web1/snapshots/s1/rollback", secret, `{"destroy_newer":true}`, 200, "web1"},
+		{"DELETE", "/api/v1/vms/web1/snapshots/s1", secret, "", 204, ""},
+		{"DELETE", "/api/v1/vms/web1/snapshots/zz", secret, "", 404, "not_found"},
+		{"GET", "/api/v1/vms/web1/snapshots", "", "", 401, "unauthorized"},
 	}
 	for _, c := range cases {
 		code, body := do(t, srv, c.method, c.path, c.tok, c.body)

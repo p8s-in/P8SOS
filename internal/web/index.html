@@ -63,6 +63,15 @@ dialog h2{margin:0 0 4px;font-size:17px}
 .toast{background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--ok);padding:10px 14px;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.15);max-width:360px}
 .toast.err{border-left-color:var(--bad)}
 .copy{cursor:pointer;border-bottom:1px dashed var(--muted)}
+dialog.wide{width:min(620px,calc(100vw - 32px))}
+.dlg-body{padding:20px}
+.dlg-body h3{margin:20px 0 2px;font-size:14px}
+.inline{display:flex;gap:8px;align-items:center;margin-top:8px}
+.inline input{flex:1}
+.snaps td{padding:8px 0;border-bottom:1px solid var(--line)}
+.snaps td:last-child{text-align:right}
+.snaps td.muted{text-align:left}
+.btn.confirm{background:var(--bad);border-color:var(--bad);color:#fff}
 @media (max-width:760px){
   header{padding:10px 16px} main{padding:16px} .panel-head{flex-wrap:wrap} #hVer{display:none}
   thead{display:none} table,tbody,tr,td{display:block;width:100%}
@@ -116,6 +125,32 @@ dialog h2{margin:0 0 4px;font-size:17px}
   </div>
 </form></dialog>
 
+<dialog id="dlgManage" class="wide"><div class="dlg-body">
+  <h2 id="mTitle"></h2>
+  <div class="sub" id="mSub"></div>
+
+  <h3>Resize</h3>
+  <div class="sub" id="mRzHint"></div>
+  <div class="row">
+    <div><label for="mCpu">CPUs</label><input id="mCpu" type="number" min="1"></div>
+    <div><label for="mMem">RAM (MB)</label><input id="mMem" type="number" min="256" step="256"></div>
+    <div><label for="mDisk">Disk (GB)</label><input id="mDisk" type="number"></div>
+  </div>
+  <div class="hint">Disks can only grow. The VM's filesystem grows to the new size when it boots.</div>
+  <div class="inline"><span class="spacer"></span><button class="btn primary" id="mRzGo">Apply</button></div>
+
+  <h3>Snapshots</h3>
+  <div class="sub">A snapshot saves the VM's disk as it is right now, in an instant. Take one before
+    risky changes; roll back to undo everything since.</div>
+  <div class="inline">
+    <input id="mSnapName" placeholder="name, e.g. before-upgrade (optional)" autocomplete="off" pattern="[a-z0-9][a-z0-9._\-]{0,39}">
+    <button class="btn" id="mSnapGo">Take snapshot</button>
+  </div>
+  <table class="snaps"><tbody id="mSnaps"></tbody></table>
+
+  <div class="dlg-actions"><button class="btn" id="mClose">Close</button></div>
+</div></dialog>
+
 <script>
 "use strict";
 const API = "/api/v1";
@@ -155,6 +190,7 @@ function render(){
   if (!token) return renderLogin();
   if (!$("#vmBody")) renderShell();
   renderHost(); renderVMs();
+  if ($("#dlgManage").open) renderManage();
 }
 
 function renderLogin(){
@@ -237,7 +273,7 @@ function renderVMs(){
       <td data-k="IP">${ip}</td>
       <td data-k="CPU">${v.vcpus}</td><td data-k="RAM">${gb(v.memory_mib)}</td><td data-k="Disk">${v.disk_gb} GB</td>
       <td data-k="Autostart">${v.autostart ? "yes" : "no"}</td>
-      <td><div class="actions">${acts}<button class="btn danger" data-a="delete" ${dis}>Delete</button></div></td></tr>`;
+      <td><div class="actions">${acts}<button class="btn" data-a="manage" ${dis} title="Resize and snapshots">Manage</button><button class="btn danger" data-a="delete" ${dis}>Delete</button></div></td></tr>`;
   }).join("");
 }
 
@@ -248,6 +284,7 @@ document.addEventListener("click", async e => {
   const btn = e.target.closest("button[data-a]"); if (!btn) return;
   const name = btn.closest("tr").dataset.n, a = btn.dataset.a;
   if (a === "delete") return openDelete(name);
+  if (a === "manage") return openManage(name);
   const path = {start: "/start", stop: "/stop", reboot: "/reboot", kill: "/stop"}[a];
   busy.add(name); renderVMs();
   try {
@@ -307,6 +344,99 @@ $("#fDelete").onsubmit = async e => {
   catch (err) { toast(err.message, true); }
   busy.delete(name); refresh();
 };
+
+/* ---------- manage: resize + snapshots ---------- */
+let mName = "", snaps = [], mVM = null;
+const fmtBytes = b => b >= 1 << 30 ? (b / (1 << 30)).toFixed(1) + " GB" : b >= 1 << 20 ? (b / (1 << 20)).toFixed(0) + " MB" : "< 1 MB";
+const fmtTime = t => { const d = new Date(t); return isNaN(d) ? t : d.toLocaleString(); };
+
+async function openManage(name){
+  mName = name; mVM = null; snaps = [];
+  const v = vms.find(x => x.name === name);
+  $("#mCpu").value = v.vcpus; $("#mMem").value = v.memory_mib; $("#mDisk").value = v.disk_gb; $("#mDisk").min = v.disk_gb;
+  $("#mSnapName").value = "";
+  $("#mTitle").textContent = name; $("#mSnaps").dataset.key = ""; $("#mRzHint").dataset.st = "";
+  renderManage();
+  $("#dlgManage").showModal();
+  await loadSnaps();
+}
+async function loadSnaps(){
+  try { snaps = (await call("GET", `/vms/${encodeURIComponent(mName)}/snapshots`)).snapshots; }
+  catch (err) { toast(err.message, true); }
+  renderManage();
+}
+function renderManage(){
+  const v = vms.find(x => x.name === mName);
+  if (!v) { $("#dlgManage").close(); return; }
+  const stopped = v.state === "stopped";
+  $("#mSub").textContent = `${v.state} · ${v.vcpus} CPU · ${gb(v.memory_mib)} RAM · ${v.disk_gb} GB disk`;
+  if ($("#mRzHint").dataset.st !== v.state + mName) $("#mRzHint").innerHTML = stopped ? "Change CPUs, memory or disk size. Takes effect when you start the VM."
+    : `Stop the VM first to resize it. <button class="btn" data-m="stop">Stop ${esc(v.name)}</button>`;
+  $("#mRzHint").dataset.st = v.state + mName;
+  for (const id of ["#mCpu", "#mMem", "#mDisk", "#mRzGo"]) $(id).disabled = !stopped;
+  if (mVM && mVM.disk_gb !== v.disk_gb) { $("#mDisk").value = v.disk_gb; $("#mDisk").min = v.disk_gb; }
+  mVM = v;
+  const key = v.state + "|" + JSON.stringify(snaps);
+  if ($("#mSnaps").dataset.key === key) return; // unchanged: keep half-confirmed buttons as they are
+  $("#mSnaps").dataset.key = key;
+  $("#mSnaps").innerHTML = snaps.length ? snaps.slice().reverse().map((sn, i) => {
+    const newer = i; // list is newest first
+    return `<tr data-s="${esc(sn.name)}" data-newer="${newer}">
+      <td><b class="mono">${esc(sn.name)}</b><div class="sub">${esc(fmtTime(sn.created_at))} · ${fmtBytes(sn.used_bytes || 0)}</div></td>
+      <td><button class="btn" data-m="rollback" ${stopped ? "" : 'disabled title="Stop the VM first"'}>Roll back</button>
+          <button class="btn danger" data-m="unsnap">Delete</button></td></tr>`;
+  }).join("") : `<tr><td class="muted">No snapshots yet.</td></tr>`;
+}
+// Two-click confirm for destructive buttons (no browser pop-ups).
+function armed(btn, text){
+  if (btn.classList.contains("confirm")) return true;
+  const old = btn.textContent; btn.classList.add("confirm"); btn.textContent = text;
+  setTimeout(() => { btn.classList.remove("confirm"); btn.textContent = old; }, 4000);
+  return false;
+}
+$("#dlgManage").addEventListener("click", async e => {
+  const btn = e.target.closest("button[data-m]"); if (!btn) return;
+  const m = btn.dataset.m, row = btn.closest("tr"), sn = row?.dataset.s, n = encodeURIComponent(mName);
+  try {
+    if (m === "stop") {
+      btn.disabled = true; await call("POST", `/vms/${n}/stop`); toast(`${mName} is shutting down`);
+    } else if (m === "rollback") {
+      const newer = +row.dataset.newer;
+      if (!armed(btn, newer ? `Also deletes ${newer} newer — sure?` : "Undo all changes since — sure?")) return;
+      btn.disabled = true;
+      await call("POST", `/vms/${n}/snapshots/${encodeURIComponent(sn)}/rollback`, {destroy_newer: newer > 0});
+      toast(`${mName} rolled back to ${sn}. Start it when ready.`); await loadSnaps();
+    } else if (m === "unsnap") {
+      if (!armed(btn, "Delete — sure?")) return;
+      btn.disabled = true;
+      await call("DELETE", `/vms/${n}/snapshots/${encodeURIComponent(sn)}`);
+      toast(`snapshot ${sn} deleted`); await loadSnaps();
+    }
+  } catch (err) { toast(err.message, true); btn.disabled = false; }
+  refresh();
+});
+$("#mSnapGo").onclick = async () => {
+  const name = $("#mSnapName").value.trim(), go = $("#mSnapGo");
+  if (name && !$("#mSnapName").checkValidity()) return toast("Snapshot names: lowercase letters, digits, . _ -", true);
+  go.disabled = true; go.textContent = "Saving…";
+  try {
+    const sn = await call("POST", `/vms/${encodeURIComponent(mName)}/snapshots`, name ? {name} : {});
+    toast(`snapshot ${sn.name} saved`); $("#mSnapName").value = ""; await loadSnaps();
+  } catch (err) { toast(err.message, true); }
+  go.disabled = false; go.textContent = "Take snapshot";
+};
+$("#mRzGo").onclick = async () => {
+  const v = vms.find(x => x.name === mName), body = {};
+  if (+$("#mCpu").value !== v.vcpus) body.vcpus = +$("#mCpu").value;
+  if (+$("#mMem").value !== v.memory_mib) body.memory_mib = +$("#mMem").value;
+  if (+$("#mDisk").value !== v.disk_gb) body.disk_gb = +$("#mDisk").value;
+  if (!Object.keys(body).length) return toast("Nothing changed");
+  const go = $("#mRzGo"); go.disabled = true;
+  try { await call("PATCH", `/vms/${encodeURIComponent(mName)}`, body); toast(`${mName} resized`); }
+  catch (err) { toast(err.message, true); }
+  await refresh();
+};
+$("#mClose").onclick = () => $("#dlgManage").close();
 
 /* ---------- polling ---------- */
 let tick = 0;

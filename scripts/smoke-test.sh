@@ -134,6 +134,12 @@ if [[ -n $ip && $keys != '[]' ]]; then
       b2=$(ssh "${ssh_opts[@]}" "debian@$ip" cat /proc/sys/kernel/random/boot_id 2>/dev/null) && [[ -n $b2 && $b2 != "$b1" ]] && break
     done
     [[ -n $b2 && $b2 != "$b1" ]] && ok "guest rebooted and is reachable again" || bad "guest did not come back after reboot"
+
+    # Snapshot a running guest (filesystems frozen via the guest agent), then change the file.
+    ssh "${ssh_opts[@]}" "debian@$ip" 'echo one | sudo tee /var/p8s-marker >/dev/null; sync' 2>/dev/null
+    api POST "/vms/$NAME/snapshots" '{"name":"smoke1"}'; expect "snapshot running VM" 201
+    ssh "${ssh_opts[@]}" "debian@$ip" 'echo two | sudo tee /var/p8s-marker >/dev/null; sync' 2>/dev/null
+    MARKER=1
   else
     bad "SSH to debian@$ip failed for ${SSH_TIMEOUT}s"
   fi
@@ -149,6 +155,38 @@ api POST "/vms/$NAME/start"; expect "start again (idempotent)" 200
 api POST "/vms/$NAME/stop" '{"force":true}'; expect "force stop" 202
 [[ $(state) == stopped ]] && ok "stopped immediately" || bad "state $(state)"
 api POST "/vms/$NAME/reboot"; expect "reboot a stopped VM is refused" 409
+
+step "6b. snapshots and resize"
+api POST "/vms/$NAME/snapshots" '{"name":"smoke2"}'; expect "snapshot stopped VM" 201
+api POST "/vms/$NAME/snapshots" '{"name":"smoke2"}'; expect "duplicate snapshot" 409
+sudo zfs list -H -t snapshot "$DATASET/$DOM-disk0@smoke2" >/dev/null 2>&1 && ok "zfs: snapshot exists" || bad "zfs: snapshot missing"
+api GET "/vms/$NAME/snapshots"
+[[ $(jq -r '[.snapshots[].name] | join(",")' <<<"$BODY") == *smoke2 ]] && ok "snapshots listed" || bad "snapshots: $BODY"
+api PATCH "/vms/$NAME" '{"vcpus":2,"memory_mib":1536,"disk_gb":12}'; expect "resize" 200
+api PATCH "/vms/$NAME" '{"disk_gb":5}'; expect "shrink disk is refused" 400
+vs=$(sudo zfs get -H -o value volsize "$DATASET/$DOM-disk0" 2>/dev/null)
+[[ $vs == 12G ]] && ok "zfs: disk grew to 12G" || bad "zfs: volsize $vs, want 12G"
+info=$(sudo virsh dominfo "$DOM" 2>/dev/null)
+grep -Eq '^CPU\(s\):[[:space:]]+2$' <<<"$info" && ok "libvirt: 2 CPUs" || bad "libvirt CPUs: $(grep CPU <<<"$info")"
+grep -Eq '^Max memory:[[:space:]]+1572864 KiB' <<<"$info" && ok "libvirt: 1536 MB" || bad "libvirt memory: $(grep -i 'max memory' <<<"$info")"
+grep -Eq '^Autostart:[[:space:]]+enable' <<<"$info" && ok "autostart kept after resize" || bad "autostart lost after resize"
+if [[ ${MARKER:-0} == 1 ]]; then
+  api POST "/vms/$NAME/snapshots/smoke1/rollback"; expect "rollback past a newer snapshot needs confirmation" 409
+  api POST "/vms/$NAME/snapshots/smoke1/rollback" '{"destroy_newer":true}'; expect "rollback" 200
+  vs=$(sudo zfs get -H -p -o value volsize "$DATASET/$DOM-disk0" 2>/dev/null)
+  [[ $(jq -r .disk_gb <<<"$BODY") == $((vs >> 30)) ]] && ok "API disk size matches the disk after rollback ($((vs >> 30)) GB)" \
+    || bad "disk_gb after rollback: $(jq -r .disk_gb <<<"$BODY"), disk is $((vs >> 30)) GB"
+  api POST "/vms/$NAME/start"; expect "start after rollback" 200
+  m=""
+  for ((i = 0; i < SSH_TIMEOUT; i += 5)); do
+    sleep 5; m=$(ssh "${ssh_opts[@]}" "debian@$ip" 'cat /var/p8s-marker' 2>/dev/null) && [[ -n $m ]] && break
+  done
+  [[ $m == one ]] && ok "rollback restored the guest's files (marker=one)" || bad "marker after rollback is '$m', want 'one'"
+  api POST "/vms/$NAME/stop" '{"force":true}'
+else
+  api POST "/vms/$NAME/snapshots/smoke2/rollback"; expect "rollback (no SSH: disk only)" 200
+fi
+api DELETE "/vms/$NAME/snapshots/nope"; expect "delete missing snapshot" 404
 
 step "7. delete"
 if [[ ${KEEP:-0} == 1 ]]; then

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -40,7 +41,7 @@ func (z *ZFS) CloneDisk(ctx context.Context, snapshot, vm string, sizeGB int) (s
 	if _, err := z.Run.Run(ctx, "zfs", "clone", "-p", snapshot, ds); err != nil {
 		return "", fmt.Errorf("clone disk: %w", err)
 	}
-	if _, err := z.Run.Run(ctx, "zfs", "set", fmt.Sprintf("volsize=%dG", sizeGB), ds); err != nil {
+	if err := z.ResizeDisk(ctx, vm, sizeGB); err != nil {
 		_ = z.DestroyDisk(ctx, vm)
 		return "", fmt.Errorf("resize disk: %w", err)
 	}
@@ -76,4 +77,90 @@ func (z *ZFS) DestroyDisk(ctx context.Context, vm string) error {
 func (z *ZFS) SnapshotExists(ctx context.Context, snapshot string) bool {
 	_, err := z.Run.Run(ctx, "zfs", "list", "-H", "-t", "snapshot", "-o", "name", snapshot)
 	return err == nil
+}
+
+// ResizeDisk sets the disk's size. Callers must only grow disks.
+func (z *ZFS) ResizeDisk(ctx context.Context, vm string, sizeGB int) error {
+	if _, err := z.Run.Run(ctx, "zfs", "set", fmt.Sprintf("volsize=%dG", sizeGB), z.diskDataset(vm)); err != nil {
+		return fmt.Errorf("resize disk: %w", err)
+	}
+	return nil
+}
+
+// DiskSizeGB reports the disk's current size (it changes on rollback).
+func (z *ZFS) DiskSizeGB(ctx context.Context, vm string) (int, error) {
+	out, err := z.Run.Run(ctx, "zfs", "get", "-H", "-p", "-o", "value", "volsize", z.diskDataset(vm))
+	if err != nil {
+		return 0, err
+	}
+	b, err := strconv.ParseInt(strings.TrimSpace(string(out)), 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("volsize %q: %w", out, err)
+	}
+	return int(b >> 30), nil
+}
+
+// Snapshot is a point-in-time copy of a VM's disk.
+type Snapshot struct {
+	Name      string `json:"name"`
+	CreatedAt string `json:"created_at"` // RFC 3339
+	UsedBytes int64  `json:"used_bytes"` // space only this snapshot holds
+}
+
+// Snapshot takes a ZFS snapshot of the VM's disk (instant, copy-on-write).
+func (z *ZFS) Snapshot(ctx context.Context, vm, name string) error {
+	if _, err := z.Run.Run(ctx, "zfs", "snapshot", z.diskDataset(vm)+"@"+name); err != nil {
+		return fmt.Errorf("snapshot: %w", err)
+	}
+	return nil
+}
+
+// Snapshots lists the VM disk's snapshots, oldest first.
+func (z *ZFS) Snapshots(ctx context.Context, vm string) ([]Snapshot, error) {
+	out, err := z.Run.Run(ctx, "zfs", "list", "-H", "-p", "-t", "snapshot", "-o", "name,creation,used",
+		"-s", "createtxg", "-d", "1", z.diskDataset(vm))
+	if err != nil {
+		return nil, fmt.Errorf("list snapshots: %w", err)
+	}
+	return ParseSnapshots(string(out)), nil
+}
+
+// ParseSnapshots reads `zfs list -H -p -o name,creation,used` output.
+func ParseSnapshots(out string) []Snapshot {
+	snaps := []Snapshot{}
+	for _, l := range strings.Split(strings.TrimSpace(out), "\n") {
+		f := strings.Split(l, "\t")
+		if len(f) != 3 {
+			continue
+		}
+		_, name, ok := strings.Cut(f[0], "@")
+		if !ok {
+			continue
+		}
+		created, _ := strconv.ParseInt(f[1], 10, 64)
+		used, _ := strconv.ParseInt(f[2], 10, 64)
+		snaps = append(snaps, Snapshot{Name: name, CreatedAt: time.Unix(created, 0).UTC().Format(time.RFC3339), UsedBytes: used})
+	}
+	return snaps
+}
+
+// Rollback returns the disk to a snapshot. destroyNewer also deletes snapshots
+// taken after it (ZFS can only roll back to the latest one).
+func (z *ZFS) Rollback(ctx context.Context, vm, name string, destroyNewer bool) error {
+	args := []string{"rollback"}
+	if destroyNewer {
+		args = append(args, "-r")
+	}
+	if _, err := z.Run.Run(ctx, "zfs", append(args, z.diskDataset(vm)+"@"+name)...); err != nil {
+		return fmt.Errorf("rollback: %w", err)
+	}
+	return nil
+}
+
+// DestroySnapshot deletes one snapshot.
+func (z *ZFS) DestroySnapshot(ctx context.Context, vm, name string) error {
+	if _, err := z.Run.Run(ctx, "zfs", "destroy", z.diskDataset(vm)+"@"+name); err != nil {
+		return fmt.Errorf("delete snapshot: %w", err)
+	}
+	return nil
 }

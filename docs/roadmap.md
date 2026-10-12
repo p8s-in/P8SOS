@@ -17,7 +17,7 @@ Each phase ships something usable on its own.
 - [x] VM IP in API and `p8 list` (DHCP lease → guest agent → ARP)
 - [x] Autostart with the host (default on), reboot
 - [x] Serial console log per VM (`p8 bootlog`), recovery from interrupted creates
-- [ ] Resize CPU/RAM, ZFS snapshots + rollback
+- [x] Resize CPU/RAM/disk, ZFS snapshots + rollback (API, `p8 snap/rollback/resize`, dashboard Manage dialog)
 - [x] End-to-end smoke test script (`scripts/smoke-test.sh`) + [USER.md](../USER.md) test guide
 - [x] One-command `install.sh` and `p8` CLI helper
 - [x] **Bare metal** — alpha ISO installed on the ASUS FX505GT; `p8 create web1 2 2048 20` + `p8 ssh web1` working (2026-10-12)

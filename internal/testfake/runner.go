@@ -14,6 +14,7 @@ type Runner struct {
 	mu    sync.Mutex
 	Calls []string
 	Fail  map[string]string // "zfs set" -> stderr
+	Out   map[string]string // "zfs list" -> stdout
 }
 
 func (r *Runner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -24,6 +25,11 @@ func (r *Runner) Run(_ context.Context, name string, args ...string) ([]byte, er
 	for prefix, stderr := range r.Fail {
 		if strings.HasPrefix(line, prefix) {
 			return nil, &execx.Error{Cmd: name, Args: args, Stderr: stderr, Err: context.Canceled}
+		}
+	}
+	for prefix, out := range r.Out {
+		if strings.HasPrefix(line, prefix) {
+			return []byte(out), nil
 		}
 	}
 	return nil, nil

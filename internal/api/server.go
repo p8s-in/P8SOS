@@ -27,6 +27,11 @@ type VMService interface {
 	Stop(ctx context.Context, name string, force bool) (vm.VM, error)
 	Reboot(ctx context.Context, name string) (vm.VM, error)
 	Delete(ctx context.Context, name string) error
+	Resize(ctx context.Context, name string, r vm.ResizeRequest) (vm.VM, error)
+	Snapshots(ctx context.Context, name string) ([]vm.Snapshot, error)
+	CreateSnapshot(ctx context.Context, name, snap string) (vm.Snapshot, error)
+	Rollback(ctx context.Context, name, snap string, destroyNewer bool) (vm.VM, error)
+	DeleteSnapshot(ctx context.Context, name, snap string) error
 }
 
 type Server struct {
@@ -52,6 +57,11 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("POST /api/v1/vms/{name}/stop", s.stopVM)
 	auth.HandleFunc("POST /api/v1/vms/{name}/reboot", s.rebootVM)
 	auth.HandleFunc("DELETE /api/v1/vms/{name}", s.deleteVM)
+	auth.HandleFunc("PATCH /api/v1/vms/{name}", s.resizeVM)
+	auth.HandleFunc("GET /api/v1/vms/{name}/snapshots", s.listSnapshots)
+	auth.HandleFunc("POST /api/v1/vms/{name}/snapshots", s.createSnapshot)
+	auth.HandleFunc("POST /api/v1/vms/{name}/snapshots/{snap}/rollback", s.rollback)
+	auth.HandleFunc("DELETE /api/v1/vms/{name}/snapshots/{snap}", s.deleteSnapshot)
 	auth.HandleFunc("GET /api/v1/host", s.hostInfo)
 	mux.Handle("/api/v1/", s.requireToken(auth))
 	if s.UI != nil {
@@ -155,6 +165,66 @@ func (s *Server) rebootVM(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) deleteVM(w http.ResponseWriter, r *http.Request) {
 	if err := s.VMs.Delete(r.Context(), r.PathValue("name")); err != nil {
+		s.fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) resizeVM(w http.ResponseWriter, r *http.Request) {
+	var req vm.ResizeRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	v, err := s.VMs.Resize(r.Context(), r.PathValue("name"), req)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
+}
+
+func (s *Server) listSnapshots(w http.ResponseWriter, r *http.Request) {
+	snaps, err := s.VMs.Snapshots(r.Context(), r.PathValue("name"))
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"snapshots": snaps})
+}
+
+func (s *Server) createSnapshot(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name string `json:"name"`
+	}
+	if r.ContentLength != 0 && !decode(w, r, &body) {
+		return
+	}
+	sn, err := s.VMs.CreateSnapshot(r.Context(), r.PathValue("name"), body.Name)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, sn)
+}
+
+func (s *Server) rollback(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		DestroyNewer bool `json:"destroy_newer"`
+	}
+	if r.ContentLength != 0 && !decode(w, r, &body) {
+		return
+	}
+	v, err := s.VMs.Rollback(r.Context(), r.PathValue("name"), r.PathValue("snap"), body.DestroyNewer)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
+}
+
+func (s *Server) deleteSnapshot(w http.ResponseWriter, r *http.Request) {
+	if err := s.VMs.DeleteSnapshot(r.Context(), r.PathValue("name"), r.PathValue("snap")); err != nil {
 		s.fail(w, err)
 		return
 	}

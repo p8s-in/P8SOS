@@ -17,6 +17,9 @@ type fakeHV struct {
 	doms      map[string][]byte
 	state     map[string]virt.State
 	failStart bool
+	noAgent   bool
+	frozen    int
+	thawed    int
 	auto      map[string]bool
 }
 
@@ -95,6 +98,21 @@ func (h *fakeHV) Autostart(_ context.Context, n string) (bool, error) {
 	defer h.mu.Unlock()
 	return h.auto[n], nil
 }
+func (h *fakeHV) FSFreeze(_ context.Context, n string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.noAgent {
+		return errors.New("guest agent is not responding")
+	}
+	h.frozen++
+	return nil
+}
+func (h *fakeHV) FSThaw(_ context.Context, n string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.thawed++
+	return nil
+}
 func (h *fakeHV) Addresses(_ context.Context, n string) ([]string, error) {
 	return []string{"192.168.122.50"}, nil
 }
@@ -108,17 +126,68 @@ func (h *fakeHV) List(context.Context) ([]string, error) {
 	return out, nil
 }
 
-type fakeDisks struct{ live map[string]bool }
+type fakeDisks struct {
+	live  map[string]bool
+	snaps map[string][]Snapshot // vm -> oldest first
+	size  map[string]int
+}
 
-func (d *fakeDisks) CloneDisk(_ context.Context, _, vm string, _ int) (string, error) {
+func (d *fakeDisks) Snapshot(_ context.Context, vm, name string) error {
+	if d.snaps == nil {
+		d.snaps = map[string][]Snapshot{}
+	}
+	d.snaps[vm] = append(d.snaps[vm], Snapshot{Name: name, CreatedAt: "2026-10-12T10:00:00Z"})
+	return nil
+}
+func (d *fakeDisks) Snapshots(_ context.Context, vm string) ([]Snapshot, error) {
+	return append([]Snapshot{}, d.snaps[vm]...), nil
+}
+func (d *fakeDisks) Rollback(_ context.Context, vm, name string, destroyNewer bool) error {
+	l := d.snaps[vm]
+	for i, s := range l {
+		if s.Name == name {
+			if i != len(l)-1 && !destroyNewer {
+				return errors.New("cannot rollback: more recent snapshots exist")
+			}
+			d.snaps[vm] = l[:i+1]
+			return nil
+		}
+	}
+	return errors.New("no such snapshot")
+}
+func (d *fakeDisks) DestroySnapshot(_ context.Context, vm, name string) error {
+	l := d.snaps[vm]
+	for i, s := range l {
+		if s.Name == name {
+			d.snaps[vm] = append(l[:i:i], l[i+1:]...)
+			return nil
+		}
+	}
+	return errors.New("no such snapshot")
+}
+func (d *fakeDisks) ResizeDisk(_ context.Context, vm string, gb int) error {
+	if d.size == nil {
+		d.size = map[string]int{}
+	}
+	d.size[vm] = gb
+	return nil
+}
+func (d *fakeDisks) DiskSizeGB(_ context.Context, vm string) (int, error) { return d.size[vm], nil }
+
+func (d *fakeDisks) CloneDisk(_ context.Context, _, vm string, sizeGB int) (string, error) {
 	if d.live[vm] {
 		return "", errors.New("zfs clone: dataset already exists") // like real ZFS
 	}
 	d.live[vm] = true
+	_ = d.ResizeDisk(context.Background(), vm, sizeGB)
 	return "/dev/zvol/tank/vms/" + vm + "-disk0", nil
 }
-func (d *fakeDisks) DestroyDisk(_ context.Context, vm string) error { delete(d.live, vm); return nil }
-func (d *fakeDisks) SnapshotExists(context.Context, string) bool    { return true }
+func (d *fakeDisks) DestroyDisk(_ context.Context, vm string) error {
+	delete(d.live, vm)
+	delete(d.snaps, vm)
+	return nil
+}
+func (d *fakeDisks) SnapshotExists(context.Context, string) bool { return true }
 
 type fakeSeeds struct{ live map[string]bool }
 
@@ -331,5 +400,110 @@ func TestNetworks(t *testing.T) {
 	spec, _ = virt.ParseDomainXML(hv.doms["p8s-nat1"])
 	if spec.Bridge != "vmbr0" {
 		t.Fatalf("nat VM attached to %q, want vmbr0", spec.Bridge)
+	}
+}
+
+func TestSnapshots(t *testing.T) {
+	ctx := context.Background()
+	svc, hv, disks, _ := newSvc()
+	if _, err := svc.Create(ctx, CreateRequest{Name: "web1", Template: "debian-13", DiskGB: 10}); err != nil {
+		t.Fatal(err)
+	}
+	// Running VM: filesystems frozen and thawed around the snapshot.
+	sn, err := svc.CreateSnapshot(ctx, "web1", "before-upgrade")
+	if err != nil || sn.Name != "before-upgrade" || hv.frozen != 1 || hv.thawed != 1 {
+		t.Fatalf("snapshot: %v %+v frozen=%d thawed=%d", err, sn, hv.frozen, hv.thawed)
+	}
+	// No guest agent: still works (crash-consistent), nothing to thaw.
+	hv.noAgent = true
+	auto, err := svc.CreateSnapshot(ctx, "web1", "")
+	if err != nil || !strings.HasPrefix(auto.Name, "snap-") || hv.thawed != 1 {
+		t.Fatalf("auto-named snapshot: %v %+v thawed=%d", err, auto, hv.thawed)
+	}
+	if _, err := svc.CreateSnapshot(ctx, "web1", "before-upgrade"); !errors.Is(err, ErrExists) {
+		t.Fatalf("duplicate: %v", err)
+	}
+	if _, err := svc.CreateSnapshot(ctx, "web1", "Bad Name"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("bad name: %v", err)
+	}
+	if _, err := svc.CreateSnapshot(ctx, "nope", "x"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing vm: %v", err)
+	}
+	list, _ := svc.Snapshots(ctx, "web1")
+	if len(list) != 2 {
+		t.Fatalf("list %+v", list)
+	}
+
+	// Rollback needs a stopped VM, and confirmation when newer snapshots exist.
+	if _, err := svc.Rollback(ctx, "web1", "before-upgrade", false); !errors.Is(err, ErrConflict) {
+		t.Fatalf("rollback running: %v", err)
+	}
+	_, _ = svc.Stop(ctx, "web1", true)
+	if _, err := svc.Rollback(ctx, "web1", "before-upgrade", false); !errors.Is(err, ErrConflict) ||
+		!strings.Contains(err.Error(), auto.Name) {
+		t.Fatalf("rollback past newer snapshot: %v", err)
+	}
+	if _, err := svc.Rollback(ctx, "web1", "missing", true); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("rollback missing: %v", err)
+	}
+	disks.size["p8s-web1"] = 8 // the snapshot was taken when the disk was smaller
+	v, err := svc.Rollback(ctx, "web1", "before-upgrade", true)
+	if err != nil || v.DiskGB != 8 {
+		t.Fatalf("rollback: %v %+v", err, v)
+	}
+	if list, _ = svc.Snapshots(ctx, "web1"); len(list) != 1 {
+		t.Fatalf("newer snapshot should be gone: %+v", list)
+	}
+
+	if err := svc.DeleteSnapshot(ctx, "web1", "missing"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("delete missing: %v", err)
+	}
+	if err := svc.DeleteSnapshot(ctx, "web1", "before-upgrade"); err != nil {
+		t.Fatal(err)
+	}
+	if list, _ = svc.Snapshots(ctx, "web1"); len(list) != 0 {
+		t.Fatalf("after delete: %+v", list)
+	}
+}
+
+func TestSnapshotLimit(t *testing.T) {
+	ctx := context.Background()
+	svc, _, disks, _ := newSvc()
+	_, _ = svc.Create(ctx, CreateRequest{Name: "web1", Template: "debian-13"})
+	for i := 0; i < MaxSnapshots; i++ {
+		_ = disks.Snapshot(ctx, "p8s-web1", "s"+strings.Repeat("x", i))
+	}
+	if _, err := svc.CreateSnapshot(ctx, "web1", "one-more"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("over limit: %v", err)
+	}
+}
+
+func TestResize(t *testing.T) {
+	ctx := context.Background()
+	svc, hv, disks, _ := newSvc()
+	if _, err := svc.Create(ctx, CreateRequest{Name: "web1", Template: "debian-13", VCPUs: 1, MemoryMiB: 1024, DiskGB: 10}); err != nil {
+		t.Fatal(err)
+	}
+	_ = hv.SetAutostart(ctx, "p8s-web1", true)
+	if _, err := svc.Resize(ctx, "web1", ResizeRequest{VCPUs: 2}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("resize running: %v", err)
+	}
+	_, _ = svc.Stop(ctx, "web1", true)
+	for _, bad := range []ResizeRequest{{VCPUs: 99}, {MemoryMiB: 100}, {DiskGB: 5}, {DiskGB: 9999}} {
+		if _, err := svc.Resize(ctx, "web1", bad); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("resize %+v: %v", bad, err)
+		}
+	}
+	v, err := svc.Resize(ctx, "web1", ResizeRequest{VCPUs: 4, MemoryMiB: 4096, DiskGB: 30})
+	if err != nil || v.VCPUs != 4 || v.MemoryMiB != 4096 || v.DiskGB != 30 || disks.size["p8s-web1"] != 30 {
+		t.Fatalf("resize: %v %+v size=%d", err, v, disks.size["p8s-web1"])
+	}
+	// Only memory: the rest stays, and the VM keeps its identity.
+	v2, err := svc.Resize(ctx, "web1", ResizeRequest{MemoryMiB: 2048})
+	if err != nil || v2.VCPUs != 4 || v2.DiskGB != 30 || v2.MemoryMiB != 2048 || v2.UUID != v.UUID || v2.MAC != v.MAC || !v2.Autostart {
+		t.Fatalf("partial resize: %v %+v", err, v2)
+	}
+	if v, _ = svc.Start(ctx, "web1"); v.State != virt.Running {
+		t.Fatalf("start after resize: %s", v.State)
 	}
 }

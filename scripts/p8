@@ -26,6 +26,12 @@ p8 — manage P8S OS virtual machines
   p8 reboot NAME                   restart the guest (like pressing reset politely)
   p8 kill NAME                     power off immediately
   p8 delete NAME                   remove VM and its disk (asks first; -y to skip)
+  p8 resize NAME cpus=N ram=MB disk=GB
+                                   change size (any of the three; disk only grows)
+  p8 snap NAME [SNAPNAME]          take a snapshot of the VM's disk (instant)
+  p8 snaps NAME                    list snapshots
+  p8 rollback NAME SNAPNAME        undo everything since that snapshot (asks first)
+  p8 unsnap NAME SNAPNAME          delete a snapshot
   p8 ip NAME                       the VM's IP address
   p8 ssh NAME                      log into the VM as user 'debian'
   p8 console NAME                  serial console (exit with Ctrl+])
@@ -41,6 +47,8 @@ p8 — manage P8S OS virtual machines
 Examples:
   p8 create web1 2 2048 20
   p8 create web2 2 2048 20 --lan
+  p8 snap web1 before-upgrade
+  p8 resize web1 cpus=4 ram=4096 disk=40
   p8 ssh web1
 EOF
 }
@@ -62,6 +70,29 @@ call() {
 
 # The API reports the IP (from libvirt DHCP leases / guest agent / ARP).
 vm_ip() { call GET "/vms/$1" 2>/dev/null | jq -r '.ip // empty'; }
+
+vm_state() { call GET "/vms/$1" 2>/dev/null | jq -r '.state // empty'; }
+
+# stop_for NAME WHY: make sure the VM is stopped (asks first). Sets WAS_RUNNING.
+stop_for() {
+  WAS_RUNNING=0
+  local st; st=$(vm_state "$1")
+  [[ -n $st ]] || { call GET "/vms/$1" >/dev/null; exit 1; }
+  [[ $st == stopped ]] && return 0
+  if [[ ${YES:-0} != 1 ]]; then
+    read -r -p "$1 is $st. Shut it down to $2? It starts again afterwards. [y/N] " a
+    [[ $a == [yY]* ]] || { echo "cancelled"; exit 0; }
+  fi
+  WAS_RUNNING=1
+  call POST "/vms/$1/stop" >/dev/null || exit 1
+  echo -n "shutting down $1 "
+  for _ in $(seq 30); do [[ $(vm_state "$1") == stopped ]] && { echo; return 0; }; echo -n .; sleep 2; done
+  echo " (not responding, powering off)"
+  call POST "/vms/$1/stop" '{"force":true}' >/dev/null || exit 1
+}
+start_again() { [[ $WAS_RUNNING == 1 ]] && call POST "/vms/$1/start" >/dev/null && green "✔ $1 started again"; true; }
+
+human() { awk -v b="$1" 'BEGIN { if (b >= 2^30) printf "%.1f GB", b/2^30; else if (b >= 2^20) printf "%d MB", b/2^20; else print "<1 MB" }'; }
 
 table() {
   jq -r '(["NAME","STATE","IP","NET","CPUS","RAM_MB","DISK_GB","AUTOSTART","TEMPLATE"]),
@@ -112,6 +143,62 @@ case $cmd in
     fi
     call DELETE "/vms/$1" >/dev/null || exit 1
     green "✔ $1 deleted" ;;
+
+  resize)
+    need "${1:-}"; n=$1; shift
+    req='{}'
+    for kv in "$@"; do
+      v=${kv#*=}; [[ $v =~ ^[0-9]+$ ]] || { red "bad value in '$kv'. Use: cpus=4 ram=4096 disk=40"; exit 1; }
+      case ${kv%%=*} in
+        cpus|cpu) req=$(jq -c --argjson v "$v" '.vcpus=$v' <<<"$req") ;;
+        ram|mem|memory) req=$(jq -c --argjson v "$v" '.memory_mib=$v' <<<"$req") ;;
+        disk) req=$(jq -c --argjson v "$v" '.disk_gb=$v' <<<"$req") ;;
+        *) red "unknown '$kv'. Use: cpus=N ram=MB disk=GB"; exit 1 ;;
+      esac
+    done
+    [[ $req != '{}' ]] || { red "say what to change, e.g.  p8 resize $n cpus=2 ram=4096 disk=30"; exit 1; }
+    cur=$(call GET "/vms/$n") || exit 1
+    d=$(jq -r '.disk_gb // 0' <<<"$req")
+    (( d == 0 || d >= $(jq -r .disk_gb <<<"$cur") )) ||
+      { red "disks can only grow: $n has $(jq -r .disk_gb <<<"$cur") GB (shrinking would destroy data)"; exit 1; }
+    stop_for "$n" resize
+    body=$(call PATCH "/vms/$n" "$req") || { start_again "$n"; exit 1; }
+    green "✔ $n is now $(jq -r '"\(.vcpus) CPU, \(.memory_mib) MB, \(.disk_gb) GB"' <<<"$body")"
+    start_again "$n" ;;
+
+  snap|snapshot)
+    need "${1:-}"
+    req='{}'; [[ -n ${2:-} ]] && req=$(jq -nc --arg s "$2" '{name:$s}')
+    body=$(call POST "/vms/$1/snapshots" "$req") || exit 1
+    green "✔ snapshot $(jq -r .name <<<"$body") of $1 saved. Undo later with: p8 rollback $1 $(jq -r .name <<<"$body")" ;;
+
+  snaps|snapshots)
+    need "${1:-}"; body=$(call GET "/vms/$1/snapshots") || exit 1
+    [[ $(jq '.snapshots | length' <<<"$body") == 0 ]] && { echo "No snapshots of $1 yet. Take one: p8 snap $1 before-upgrade"; exit 0; }
+    printf '%-30s %-24s %s\n' NAME CREATED SIZE
+    jq -r '.snapshots[] | [.name, (.created_at | sub("T"; " ") | sub("Z"; " UTC")), .used_bytes] | @tsv' <<<"$body" |
+      while IFS=$'\t' read -r sn c u; do printf '%-30s %-24s %s\n' "$sn" "$c" "$(human "$u")"; done ;;
+
+  rollback)
+    need "${1:-}"; [[ -n ${2:-} ]] || { red "which snapshot?  p8 snaps $1"; exit 1; }
+    body=$(call GET "/vms/$1/snapshots") || exit 1
+    newer=$(jq -r --arg s "$2" '.snapshots | (map(.name) | index($s)) as $i | if $i == null then "MISSING" else .[$i+1:] | map(.name) | join(", ") end' <<<"$body")
+    [[ $newer == MISSING ]] && { red "$1 has no snapshot '$2'. See: p8 snaps $1"; exit 1; }
+    if [[ ${3:-} != -y ]]; then
+      echo "This puts $1's disk back to snapshot '$2'. Everything written since is lost."
+      [[ -n $newer ]] && echo "These newer snapshots are deleted too: $newer"
+      read -r -p "Continue? [y/N] " a; [[ $a == [yY]* ]] || { echo "cancelled"; exit 0; }
+    fi
+    YES=1 stop_for "$1" "roll back"
+    req=$(jq -nc --argjson d "$([[ -n $newer ]] && echo true || echo false)" '{destroy_newer:$d}')
+    call POST "/vms/$1/snapshots/$2/rollback" "$req" >/dev/null || { start_again "$1"; exit 1; }
+    green "✔ $1 is back at snapshot '$2'"
+    start_again "$1" ;;
+
+  unsnap)
+    need "${1:-}"; [[ -n ${2:-} ]] || { red "which snapshot?  p8 snaps $1"; exit 1; }
+    call DELETE "/vms/$1/snapshots/$2" >/dev/null || exit 1
+    green "✔ snapshot $2 of $1 deleted" ;;
 
   ip)
     need "${1:-}"; ip=$(vm_ip "$1")
