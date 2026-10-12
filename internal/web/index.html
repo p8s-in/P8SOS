@@ -451,7 +451,7 @@ dialog form.uform{padding:0}
 
 <dialog id="dlgBackups" class="wide"><div class="dlg-body">
   <h2>All backups</h2>
-  <div class="sub">Every VM's backups, including VMs that were deleted. Recreate a deleted VM, or make a copy under a new name.</div>
+  <div class="sub">Every backup, including those of deleted VMs and containers. Recreate one, or make a copy under a new name.</div>
   <table class="snaps"><tbody id="gBackups"></tbody></table>
   <div class="dlg-actions"><button class="btn" id="gClose">Close</button></div>
 </div></dialog>
@@ -749,7 +749,7 @@ function renderShell(){
   licLoaded = false; // license.js: Subscription button + notice once we know who's signed in
   $("#bAudit").onclick = openAudit;
   $("#bMe").onclick = openAccount;
-  $("#bBackups").onclick = openAllBackups;
+  $("#bBackups").onclick = () => openAllBackups();
   $("#bIsos").onclick = openIsos;
   $("#bNew").onclick = openCreate;
   startPolling();
@@ -1744,5 +1744,6 @@ document.addEventListener("DOMContentLoaded", render); // after cloud.js has loa
 <script src="/license.js"></script>
 <script src="/node.js"></script>
 <script src="/containers.js"></script>
+<script src="/offsite.js"></script>
 </body>
 </html>

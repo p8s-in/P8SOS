@@ -142,6 +142,9 @@ func (s *Service) runBackup(ctx context.Context, b *backup.Store, name string, k
 			msg += fmt.Sprintf(", %d old one(s) removed", n)
 		}
 	}
+	if s.AfterBackup != nil {
+		s.AfterBackup("ct", name, bm.ID)
+	}
 	return msg, nil
 }
 

@@ -44,6 +44,7 @@ import (
 	"p8sos/internal/license"
 	"p8sos/internal/mail"
 	"p8sos/internal/metrics"
+	"p8sos/internal/offsite"
 	"p8sos/internal/portfwd"
 	"p8sos/internal/storage"
 	"p8sos/internal/support"
@@ -275,6 +276,17 @@ func serve(args []string) error {
 		}
 	}
 	go runFirewalls(ctx, log, svc)
+
+	// off-site copies of backups (folder, S3-compatible storage, another server over SSH)
+	off := &offsite.Manager{File: filepath.Join(cfg.DataDir, "offsite.json"), BackupDir: cfg.BackupDir,
+		KeyFile: filepath.Join(cfg.DataDir, "offsite", "id_ed25519"), Log: log, Jobs: svc.Jobs,
+		HTTP:    &http.Client{Transport: &http.Transport{Proxy: http.ProxyFromEnvironment, ResponseHeaderTimeout: 2 * time.Minute}},
+		Allowed: func() bool { return lic.Allows(license.FeatOffsite) }}
+	svc.AfterBackup = off.Enqueue
+	if cts != nil {
+		cts.AfterBackup = off.Enqueue
+	}
+	go off.Run(ctx, 6*time.Hour)
 	go svc.RunSchedule(ctx, cfg.BackupTime, nil)
 
 	apiSrv := &api.Server{
@@ -299,6 +311,7 @@ func serve(args []string) error {
 		License:  lic,
 		Updates:  upd,
 		CTs:      cts,
+		Offsite:  off,
 		Node: &tasks.Node{
 			Tasks: &tasks.Manager{Dir: filepath.Join(cfg.DataDir, "tasks"), Scripts: scriptsDir(), Run: run},
 			Run:   run, Pool: strings.SplitN(cfg.VMDataset, "/", 2)[0], DataDir: cfg.DataDir,

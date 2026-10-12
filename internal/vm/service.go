@@ -81,6 +81,8 @@ type Service struct {
 	// OtherBackup runs the daily backup of a non-VM guest whose schedule is
 	// kept under "ct:NAME" (containers); nil = such entries are skipped.
 	OtherBackup func(ctx context.Context, key string, keep int) error
+	// AfterBackup is told about every finished backup (off-site copies); nil = nothing.
+	AfterBackup func(kind, guest, id string)
 
 	locks    sync.Map // name -> *sync.Mutex; serializes ops per VM
 	memSched sync.Map // backup schedules when ScheduleFile is empty (tests)

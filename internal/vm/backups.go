@@ -119,6 +119,9 @@ func (s *Service) runBackup(ctx context.Context, name string, keep int, p jobs.P
 			msg += fmt.Sprintf(", %d old one(s) removed", n)
 		}
 	}
+	if s.AfterBackup != nil {
+		s.AfterBackup("vm", name, m.ID)
+	}
 	return msg, nil
 }
 

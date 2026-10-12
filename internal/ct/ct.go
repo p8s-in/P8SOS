@@ -144,6 +144,8 @@ type Service struct {
 	BridgeUp func(bridge string) bool
 	// Refresh re-applies the firewall (public address pinning) after a restore; nil = none.
 	Refresh func(ctx context.Context) error
+	// AfterBackup is told about every finished backup (off-site copies); nil = nothing.
+	AfterBackup func(kind, guest, id string)
 
 	mu    sync.Mutex
 	metas map[string]*meta

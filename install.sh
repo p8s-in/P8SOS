@@ -56,6 +56,7 @@ say "Installing KVM, libvirt and ZFS (ZFS builds a kernel module: 3-10 min)"
 if zpool list -H "$POOL" >/dev/null 2>&1 && command -v virsh >/dev/null && command -v cloud-localds >/dev/null; then
   ok "already installed, pool '$POOL' exists"
   command -v zstd >/dev/null || apt-get install -y zstd >/dev/null 2>&1 || true  # backups compress with it (newer versions)
+  command -v ssh >/dev/null || apt-get install -y openssh-client >/dev/null 2>&1 || true  # off-site copies to another server
 else
   P8S_BRIDGE=$BRIDGE bash "$REPO/scripts/bootstrap-debian13.sh" $DEV
 fi

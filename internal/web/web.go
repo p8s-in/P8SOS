@@ -25,6 +25,8 @@ var (
 	nodeJS []byte
 	//go:embed containers.js
 	containersJS []byte
+	//go:embed offsite.js
+	offsiteJS []byte
 	//go:embed terminal.html
 	terminalPage []byte
 	//go:embed xterm.min.js
@@ -51,6 +53,7 @@ var assets = map[string]asset{
 	"/license.js":        {licenseJS, "text/javascript; charset=utf-8", "no-cache"},
 	"/node.js":           {nodeJS, "text/javascript; charset=utf-8", "no-cache"},
 	"/containers.js":     {containersJS, "text/javascript; charset=utf-8", "no-cache"},
+	"/offsite.js":        {offsiteJS, "text/javascript; charset=utf-8", "no-cache"},
 	"/terminal":          {terminalPage, "text/html; charset=utf-8", "no-cache"},
 	"/xterm.min.js":      {xtermJS, "text/javascript; charset=utf-8", "public, max-age=86400"},
 	"/xterm-fit.min.js":  {xtermFitJS, "text/javascript; charset=utf-8", "public, max-age=86400"},

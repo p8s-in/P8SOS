@@ -27,6 +27,7 @@ import (
 	"p8sos/internal/license"
 	"p8sos/internal/mail"
 	"p8sos/internal/metrics"
+	"p8sos/internal/offsite"
 	"p8sos/internal/support"
 	"p8sos/internal/tasks"
 	"p8sos/internal/tunnel"
@@ -112,6 +113,8 @@ type Server struct {
 	Node *tasks.Node
 	// CTs are the containers (LXC); nil = not available.
 	CTs *ct.Service
+	// Offsite copies backups to other places; nil = not available.
+	Offsite *offsite.Manager
 	// SSHPorts lists guest -> SSH port on this server; nil = off.
 	SSHPorts func() map[string]int
 
@@ -248,6 +251,11 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("GET /api/v1/containers/{name}/backups", s.ctBackups)
 	auth.HandleFunc("POST /api/v1/containers/{name}/backups", s.ctBackup)
 	auth.HandleFunc("GET /api/v1/ct-backups", s.ctBackups)
+	auth.HandleFunc("GET /api/v1/offsite", s.getOffsite)
+	auth.HandleFunc("PUT /api/v1/offsite/targets/{name}", s.putOffsite)
+	auth.HandleFunc("DELETE /api/v1/offsite/targets/{name}", s.deleteOffsite)
+	auth.HandleFunc("GET /api/v1/offsite/targets/{name}/backups", s.offsiteBackups)
+	auth.HandleFunc("POST /api/v1/offsite/targets/{name}/{action}", s.offsiteAction)
 	auth.HandleFunc("GET /api/v1/containers/{name}/backup-schedule", s.ctSchedule)
 	auth.HandleFunc("PUT /api/v1/containers/{name}/backup-schedule", s.ctSchedule)
 	auth.HandleFunc("DELETE /api/v1/ct-backups/{name}/{id}", s.ctDeleteBackup)

@@ -111,6 +111,9 @@ func (s *Store) paths(vm, id, comp string) (data, meta string) {
 	return base + ext(comp), base + ".json"
 }
 
+// Files returns where a backup's data and metadata live.
+func (s *Store) Files(m Meta) (data, meta string) { return s.paths(m.VM, m.ID, m.Compression) }
+
 // Save streams the existing snapshot dom-disk0@snap into a compressed file and
 // writes its metadata. m.VM and m.ID must be set.
 func (s *Store) Save(ctx context.Context, dom, snap string, m Meta) (Meta, error) {

@@ -361,6 +361,18 @@ VMs show `"os_type"` and `"drivers_iso"`. See [windows.md](windows.md).
 | POST | `/api/v1/ct-backups/{name}/{id}/restore` | `{"name"}` restore as a new container (202 + job); counts against the quota |
 | GET | `/api/v1/ct-templates` | installed container templates |
 
+### Off-site backups (admins)
+
+| Method | Path | |
+|---|---|---|
+| GET | `/api/v1/offsite` | places with status (secrets hidden: `has_secret`, `has_passphrase`), this server's `ssh_public_key` |
+| PUT | `/api/v1/offsite/targets/{name}` | `{"type":"dir|s3|ssh","enabled","keep","path","endpoint","region","bucket","prefix","access_key","secret_key","virtual_host","host","user","port","remote_dir","passphrase"}`; empty secret/passphrase keep the saved ones |
+| DELETE | `/api/v1/offsite/targets/{name}` | forget the place (what is stored there stays) |
+| POST | `/api/v1/offsite/targets/{name}/test` | write, read back and delete a small file |
+| POST | `/api/v1/offsite/targets/{name}/sync` | copy every missing backup now (202 + job) |
+| GET | `/api/v1/offsite/targets/{name}/backups` | what is stored there (`local`: also on this server) |
+| POST | `/api/v1/offsite/targets/{name}/fetch` | `{"kind":"vm|ct","guest","id"}` download it back (202 + job), then restore as usual |
+
 Names are shared with VMs (a container and a VM can't have the same name). See [containers.md](containers.md).
 
 ### Server page (admins)
