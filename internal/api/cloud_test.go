@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -18,8 +19,10 @@ import (
 
 	"p8sos/internal/billing"
 	"p8sos/internal/cloud"
+	"p8sos/internal/ct"
 	"p8sos/internal/mail"
 	"p8sos/internal/support"
+	"p8sos/internal/testfake"
 	"p8sos/internal/vm"
 )
 
@@ -120,6 +123,13 @@ func TestCloud(t *testing.T) {
 		s.Razorpay = func(st cloud.Settings) *billing.Razorpay {
 			return &billing.Razorpay{KeyID: st.RazorpayKeyID, KeySecret: st.RazorpayKeySecret, Base: rz.URL}
 		}
+		run := &testfake.Runner{Out: map[string]string{
+			"zfs list -H -t snapshot -o name,p8s:label": "tank/p8s/ct-templates/debian-13@base\tDebian 13\n",
+			"lxc-info -n": "RUNNING\n",
+		}}
+		_ = os.MkdirAll(filepath.Join(dir, "ct", "ct1"), 0o755)
+		s.CTs = &ct.Service{Run: run, Pool: "tank", MountDir: filepath.Join(dir, "ct"), LXCDir: filepath.Join(dir, "lxc"),
+			MetaFile: filepath.Join(dir, "containers.json"), Bridge: "virbr0", Chown: func(string, int, int) error { return nil }}
 	})
 
 	// sign-up is closed until an admin exists and opens it
@@ -220,6 +230,21 @@ func TestCloud(t *testing.T) {
 		t.Fatalf("billing after create %v", bil)
 	}
 	m.req("PATCH", "/api/v1/vms/c1", carol, `{"memory_mib":2048}`, 400) // plan servers: no free resize
+
+	// containers use the same plans and billing
+	m.req("POST", "/api/v1/containers", carol, `{"name":"ct1","template":"debian-13","vcpus":1}`, 400) // must pick a plan
+	cn := m.req("POST", "/api/v1/containers", carol, `{"name":"ct1","template":"debian-13","plan":"s1","vcpus":8}`, 201)
+	if cn["vcpus"] != 1.0 || cn["owner"] != "carol" {
+		t.Fatalf("plan size not applied to container: %v", cn)
+	}
+	if b := m.req("GET", "/api/v1/billing", carol, "", 200); len(b["servers"].([]any)) != 2 {
+		t.Fatalf("container not billed: %v", b)
+	}
+	m.req("PATCH", "/api/v1/containers/ct1", carol, `{"memory_mib":2048}`, 400)
+	m.req("DELETE", "/api/v1/containers/ct1", carol, "", 204)
+	if b := m.req("GET", "/api/v1/billing", carol, "", 200); len(b["servers"].([]any)) != 1 {
+		t.Fatalf("deleted container still billed: %v", b)
+	}
 
 	// admin: customers overview, manual payment with invoice
 	cu := m.req("GET", "/api/v1/billing/customers", boss, "", 200)["customers"].([]any)

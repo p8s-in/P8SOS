@@ -179,6 +179,9 @@ func (s *Server) usage(vms []vm.VM, owner string) Usage {
 					u.VCPUs += c.VCPUs
 					u.MemoryMiB += c.MemoryMiB
 					u.DiskGB += c.DiskGB
+					if c.PublicIP != "" {
+						u.PublicIPs++
+					}
 				}
 			}
 		}

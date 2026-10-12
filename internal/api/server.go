@@ -248,6 +248,8 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("GET /api/v1/containers/{name}/backups", s.ctBackups)
 	auth.HandleFunc("POST /api/v1/containers/{name}/backups", s.ctBackup)
 	auth.HandleFunc("GET /api/v1/ct-backups", s.ctBackups)
+	auth.HandleFunc("GET /api/v1/containers/{name}/backup-schedule", s.ctSchedule)
+	auth.HandleFunc("PUT /api/v1/containers/{name}/backup-schedule", s.ctSchedule)
 	auth.HandleFunc("DELETE /api/v1/ct-backups/{name}/{id}", s.ctDeleteBackup)
 	auth.HandleFunc("POST /api/v1/ct-backups/{name}/{id}/restore", s.ctRestore)
 	auth.HandleFunc("PUT /api/v1/containers/{name}/firewall", s.ctFirewall)
@@ -715,11 +717,23 @@ type scheduleView struct {
 }
 
 func (s *Server) getSchedule(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
 	if _, ok := s.vmFor(w, r); !ok {
 		return
 	}
-	sch, err := s.VMs.GetSchedule(name)
+	s.showSchedule(w, r, r.PathValue("name"))
+}
+
+func (s *Server) putSchedule(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.vmFor(w, r); !ok {
+		return
+	}
+	s.saveSchedule(w, r, r.PathValue("name"))
+}
+
+// showSchedule / saveSchedule serve the daily backup of a VM (key = name)
+// or a container (key = "ct:NAME"); the caller checked access.
+func (s *Server) showSchedule(w http.ResponseWriter, r *http.Request, key string) {
+	sch, err := s.VMs.GetSchedule(key)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -731,8 +745,7 @@ func (s *Server) getSchedule(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, scheduleView{Daily: sch.Daily, Keep: keep, At: s.BackupTime})
 }
 
-func (s *Server) putSchedule(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
+func (s *Server) saveSchedule(w http.ResponseWriter, r *http.Request, key string) {
 	var body struct {
 		Daily bool `json:"daily"`
 		Keep  int  `json:"keep"`
@@ -740,13 +753,10 @@ func (s *Server) putSchedule(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &body) {
 		return
 	}
-	if _, ok := s.vmFor(w, r); !ok {
-		return
-	}
 	if body.Daily && body.Keep == 0 {
 		body.Keep = s.BackupKeep
 	}
-	if err := s.VMs.SetSchedule(name, vm.Schedule{Daily: body.Daily, Keep: body.Keep}); err != nil {
+	if err := s.VMs.SetSchedule(key, vm.Schedule{Daily: body.Daily, Keep: body.Keep}); err != nil {
 		s.fail(w, r, err)
 		return
 	}

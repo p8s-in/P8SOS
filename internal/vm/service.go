@@ -78,6 +78,9 @@ type Service struct {
 	// OtherGuests lists non-VM guests (containers) that share the firewall
 	// table; their settings are kept under their Name (e.g. "ct:web2").
 	OtherGuests func(ctx context.Context) ([]firewall.VM, error)
+	// OtherBackup runs the daily backup of a non-VM guest whose schedule is
+	// kept under "ct:NAME" (containers); nil = such entries are skipped.
+	OtherBackup func(ctx context.Context, key string, keep int) error
 
 	locks    sync.Map // name -> *sync.Mutex; serializes ops per VM
 	memSched sync.Map // backup schedules when ScheduleFile is empty (tests)

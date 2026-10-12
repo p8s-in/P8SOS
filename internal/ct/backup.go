@@ -12,6 +12,7 @@ import (
 
 	"p8sos/internal/backup"
 	"p8sos/internal/execx"
+	"p8sos/internal/ippool"
 	"p8sos/internal/jobs"
 	"p8sos/internal/vm"
 )
@@ -123,11 +124,15 @@ func (s *Service) runBackup(ctx context.Context, b *backup.Store, name string, k
 	defer func() { _, _ = s.zfs(context.WithoutCancel(ctx), "destroy", s.dataset(name)+"@"+snap) }()
 
 	p("copying the disk")
-	bm, err := b.Save(ctx, name, snap, backup.Meta{
+	meta := backup.Meta{
 		ID: id, VM: name, Template: m.Template, User: "root", Network: m.Network, OSType: "ct",
 		VCPUs: m.VCPUs, MemoryMiB: m.MemoryMiB, DiskGB: m.DiskGB, Owner: m.Owner,
 		Consistent: !running || frozen,
-	})
+	}
+	if l, ok := s.lease(name); ok && m.Network == vm.NetPublic {
+		meta.Pool, meta.PublicIP = l.Pool, l.IP
+	}
+	bm, err := b.Save(ctx, name, snap, meta)
 	if err != nil {
 		return "", err
 	}
@@ -170,18 +175,31 @@ func (s *Service) StartRestore(ctx context.Context, name, id, newName string, ex
 }
 
 func (s *Service) runRestore(ctx context.Context, b *backup.Store, bm backup.Meta, name string, p jobs.Progress) (string, error) {
-	br, err := s.bridgeFor(bm.Network)
+	var lease *ippool.Lease
+	if bm.Network == vm.NetPublic { // same address again if it is free
+		bm.Network = vm.NetNAT
+		if s.Pools != nil && bm.Pool != "" {
+			if l, err := s.takeIP(bm.Pool, name, bm.PublicIP); err == nil {
+				lease, bm.Network = &l, vm.NetPublic
+			} else {
+				p("no public address (" + err.Error() + "): using the private network")
+			}
+		}
+	}
+	br, err := s.bridgeFor(name, bm.Network)
 	if err != nil { // home network gone: fall back to the private one
 		bm.Network, br = vm.NetNAT, s.Bridge
 	}
 	p("unpacking the disk")
 	ds := s.dataset(name)
 	if err := b.Restore(ctx, bm, name, false); err != nil {
+		s.releaseIP(name)
 		return "", err
 	}
 	undo := func() {
 		_, _ = s.zfs(context.Background(), "destroy", "-r", ds)
 		_ = os.RemoveAll(s.confDir(name))
+		s.releaseIP(name)
 	}
 	if _, err := s.zfs(ctx, "set", "mountpoint="+s.rootfs(name), fmt.Sprintf("refquota=%dG", bm.DiskGB), ds); err != nil {
 		undo()
@@ -197,7 +215,14 @@ func (s *Service) runRestore(ctx context.Context, b *backup.Store, bm backup.Met
 			return "", err
 		}
 	}
-	m := &meta{Template: bm.Template, VCPUs: bm.VCPUs, MemoryMiB: bm.MemoryMiB, DiskGB: bm.DiskGB, MAC: newMAC(),
+	mac := newMAC()
+	if bm.Pool != "" { // the address inside was the old one (or none now)
+		if err := s.writeNet(name, mac, lease); err != nil {
+			undo()
+			return "", fmt.Errorf("network setup: %w", err)
+		}
+	}
+	m := &meta{Template: bm.Template, VCPUs: bm.VCPUs, MemoryMiB: bm.MemoryMiB, DiskGB: bm.DiskGB, MAC: mac,
 		Network: bm.Network, Owner: bm.Owner, Autostart: true, Created: s.now().UTC().Format(time.RFC3339)}
 	if err := s.writeConfig(name, m, br); err != nil {
 		undo()
@@ -206,6 +231,9 @@ func (s *Service) runRestore(ctx context.Context, b *backup.Store, bm backup.Met
 	if err := s.put(name, m); err != nil {
 		undo()
 		return "", err
+	}
+	if lease != nil && s.Refresh != nil {
+		_ = s.Refresh(context.WithoutCancel(ctx))
 	}
 	p("starting")
 	if err := s.start(ctx, name); err != nil {

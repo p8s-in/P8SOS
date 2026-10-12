@@ -17,7 +17,8 @@ document.body.insertAdjacentHTML("beforeend", `
     <div class="inline" style="flex-wrap:wrap;margin-top:0"><select id="ctAddSel" style="flex:1;min-width:180px"></select><button class="btn primary" type="button" id="ctAddGo">Add</button></div>
     <div class="hint" id="ctAddStatus"></div>
   </div>
-  <div class="row">
+  <div id="ctPlanBox" hidden><label>Size and price</label><div id="ctPlans" class="plans"></div></div>
+  <div class="row" id="ctSizeRow">
     <div><label for="ctCPU">CPUs</label><input id="ctCPU" type="number" min="1" value="1"></div>
     <div><label for="ctRAM">RAM (MB)</label><input id="ctRAM" type="number" min="64" step="64" value="512"></div>
     <div><label for="ctDisk">Disk (GB)</label><input id="ctDisk" type="number" min="1" value="8"></div>
@@ -46,8 +47,11 @@ document.body.insertAdjacentHTML("beforeend", `
   <div class="inline"><input id="cmSnapName" placeholder="name (optional)" style="flex:1"><button class="btn" id="cmSnap">Take snapshot</button></div>
   <table class="snaps"><tbody id="cmSnaps"></tbody></table>
   <h3>Backups</h3>
-  <div class="inline"><span class="sub" style="flex:1">A full copy of the disk in the backup folder (works while it runs). Comes back as a new container.</span>
-    <button class="btn" id="cmBackup">Back up now</button></div>
+  <div class="sub">A full copy of the disk in the backup folder (works while it runs). Comes back as a new container.</div>
+  <div class="inline">
+    <label style="display:flex;gap:6px;align-items:center;font-weight:400;margin:0;white-space:nowrap"><input id="cmAutoB" type="checkbox" style="width:auto"> Every day at <span id="cmAutoAt">02:30</span>, keep</label>
+    <input id="cmKeep" type="number" min="1" max="365" value="7" style="flex:0 0 64px" aria-label="Backups to keep">
+    <span class="spacer"></span><button class="btn" id="cmBackup">Back up now</button></div>
   <table class="snaps"><tbody id="cmBackups"></tbody></table>
   <div id="cmFwBox"></div>
   <h3>SSH</h3>
@@ -97,7 +101,7 @@ function renderCTs(){
     const used = c.disk_used ? (c.disk_used < 107374182 ? "<0.1" : (c.disk_used / 1073741824).toFixed(1)) + " of " : "";
     return `<tr data-ct="${esc(c.name)}">
       <td data-k="State"><span class="state ${esc(c.state)}"><span class="dot"></span>${b ? "working…" : esc(c.state)}</span></td>
-      <td data-k="Name"><b>${esc(c.name)}</b><div class="sub">container · ${esc(ctTplLabel(c.template))}${c.network === "lan" ? " · home network" : ""}${isAdmin() && c.owner ? ` · <b>${esc(c.owner)}</b>` : ""}</div></td>
+      <td data-k="Name"><b>${esc(c.name)}</b><div class="sub">container · ${esc(ctTplLabel(c.template))}${c.network === "lan" ? " · home network" : ""}${c.public_ip ? ` · public <span class="mono">${esc(c.public_ip)}</span>` : ""}${isAdmin() && c.owner ? ` · <b>${esc(c.owner)}</b>` : ""}</div></td>
       <td data-k="IP">${ip}${typeof sshLine === "function" ? sshLine(c.name, "root") : ""}</td><td data-k="CPU">${c.vcpus}</td><td data-k="RAM">${gb(c.memory_mib)}</td>
       <td data-k="Disk">${used}${c.disk_gb} GB</td><td data-k="Autostart">${c.autostart ? "yes" : "no"}</td>
       <td><div class="actions">${main}<button class="btn" data-c="manage" ${dis}>Manage</button>${more}</div></td></tr>`;
@@ -176,6 +180,10 @@ async function openCreateCT(){
   await loadCTTemplates();
   const lan = isAdmin() ? !!host?.networks?.includes("lan") : !!me?.lan;
   $("#ctNet").innerHTML = `<option value="nat">Private (NAT) — reaches the internet</option>` + (lan ? `<option value="lan">Home network — address from your router</option>` : "");
+  const pools = (await call("GET", "/ippools").catch(() => ({pools: []}))).pools || [];
+  for (const p of pools) $("#ctNet").insertAdjacentHTML("beforeend",
+    `<option value="pool:${esc(p.name)}" ${p.free ? "" : "disabled"}>Public IP — ${esc(p.name)} (${p.free} free)</option>`);
+  await loadCTPlans();
   $("#ctKeys").value = !isAdmin() && me?.ssh_keys?.length ? me.ssh_keys.join("\n") : "";
   $("#ctOwnerBox").hidden = !(isAdmin() && me?.accounts_on);
   if (!$("#ctOwnerBox").hidden) {
@@ -196,13 +204,37 @@ $("#ctAddGo").onclick = async () => {
 };
 $("#dlgCT").addEventListener("close", () => clearTimeout(ctAddTimer));
 
+/* P8S Cloud plans: the same sizes and prices as VMs */
+let ctPlanList = [], ctPlan = null;
+async function loadCTPlans(){
+  ctPlan = null;
+  try { const r = await call("GET", "/plans"); ctPlanList = r.plans || []; if (r.currency && typeof cloudCur !== "undefined") cloudCur = r.currency; }
+  catch { ctPlanList = []; }
+  $("#ctPlanBox").hidden = !ctPlanList.length;
+  if (!ctPlanList.length) { $("#ctSizeRow").hidden = false; return; }
+  $("#ctPlans").innerHTML = ctPlanList.map(p => `<div class="plan" data-ctplan="${esc(p.id)}" tabindex="0">
+      <b>${esc(p.name)}${p.hidden ? ' <span class="pill">hidden</span>' : ""}</b>
+      <div class="price">${esc(money(p.price_monthly))}<span class="sub">/mo</span></div>
+      <div class="sub">${p.vcpus} CPU · ${gb(p.memory_mib)} · ${p.disk_gb} GB${p.public_ip ? " · public IP" : ""}</div></div>`).join("")
+    + (isAdmin() ? `<div class="plan" data-ctplan="" tabindex="0"><b>Custom</b><div class="sub">any size, not billed</div></div>` : "");
+  pickCTPlan(isAdmin() ? "" : ctPlanList[0].id);
+}
+function pickCTPlan(id){
+  ctPlan = ctPlanList.find(p => p.id === id) || null;
+  for (const el of document.querySelectorAll("#ctPlans .plan")) el.classList.toggle("sel", el.dataset.ctplan === (ctPlan?.id || ""));
+  $("#ctSizeRow").hidden = !!ctPlan;
+  $("#ctNet").disabled = !!ctPlan?.public_ip;
+}
+document.addEventListener("click", e => { const p = e.target.closest("#ctPlans .plan"); if (p) pickCTPlan(p.dataset.ctplan); });
+
 $("#fCT").addEventListener("submit", async e => {
   if (e.submitter?.value !== "ok") return;
   e.preventDefault();
   const body = {name: $("#ctName").value.trim(), template: $("#ctTpl").value, vcpus: +$("#ctCPU").value, memory_mib: +$("#ctRAM").value,
-    disk_gb: +$("#ctDisk").value, network: $("#ctNet").value, root_password: $("#ctPw").value,
+    disk_gb: +$("#ctDisk").value, ...($("#ctNet").value.startsWith("pool:") ? {ip_pool: $("#ctNet").value.slice(5)} : {network: $("#ctNet").value}), root_password: $("#ctPw").value,
     ssh_keys: $("#ctKeys").value.split("\n").map(s => s.trim()).filter(Boolean), start: $("#ctStart").checked};
   if (!$("#ctOwnerBox").hidden && $("#ctOwner").value) body.owner = $("#ctOwner").value;
+  if (ctPlan) { body.plan = ctPlan.id; delete body.vcpus; delete body.memory_mib; delete body.disk_gb; if (ctPlan.public_ip) { delete body.ip_pool; delete body.network; } }
   if (!body.root_password && !body.ssh_keys.length && !confirm("No password and no SSH key: you can still use the browser console. Create anyway?")) return;
   $("#ctGo").disabled = true;
   try {
@@ -252,6 +284,9 @@ async function loadCTSnaps(){
 }
 
 async function loadCTBackups(){
+  call("GET", `/containers/${encodeURIComponent(ctCur)}/backup-schedule`).then(sch => {
+    $("#cmAutoB").checked = sch.daily; $("#cmKeep").value = sch.keep; $("#cmAutoAt").textContent = sch.at || "";
+  }).catch(() => {});
   try {
     const l = (await call("GET", `/containers/${encodeURIComponent(ctCur)}/backups`)).backups;
     $("#cmBackups").innerHTML = l.length ? l.map(b => `<tr data-id="${esc(b.id)}"><td><b>${esc(new Date(b.created_at).toLocaleString())}</b>
@@ -260,6 +295,15 @@ async function loadCTBackups(){
       : `<tr><td class="sub">No backups yet.</td></tr>`;
   } catch (err) { $("#cmBackups").innerHTML = `<tr><td class="sub">${esc(err.message)}</td></tr>`; }
 }
+async function saveCTSchedule(){
+  const name = ctCur;
+  try {
+    const s = await call("PUT", `/containers/${encodeURIComponent(name)}/backup-schedule`, {daily: $("#cmAutoB").checked, keep: +$("#cmKeep").value || 7});
+    toast(s.daily ? `${name}: daily backup at ${s.at}, keeping ${s.keep}` : `${name}: daily backup off`);
+  } catch (err) { toast(err.message, true); }
+}
+$("#cmAutoB").onchange = saveCTSchedule;
+$("#cmKeep").onchange = () => { if ($("#cmAutoB").checked) saveCTSchedule(); };
 $("#cmBackup").onclick = async () => {
   const name = ctCur;
   try { const j = await call("POST", `/containers/${encodeURIComponent(name)}/backups`); trackJob(j, () => { if (ctCur === name) loadCTBackups(); }); }

@@ -9,6 +9,8 @@ P8S once, and every VM created with **Public IP** gets the next free address.
 - CLI: `p8 ippool add dc1 203.0.113.8/29 203.0.113.9` then
   `p8 create web1 2 2048 20 --ip dc1`; `p8 ippools` shows who has which address.
 
+Containers get addresses from the same pools (**+ Create CT → Network → Public IP**).
+
 The address is set inside the VM by cloud-init (static, no DHCP): address,
 gateway and DNS. For VMs installed from an ISO, Manage shows the values to type
 into the installer. Deleting the VM returns its address to the pool; a deleted

@@ -15,6 +15,7 @@ package ct
 
 import (
 	"p8sos/internal/backup"
+	"p8sos/internal/ippool"
 	"p8sos/internal/jobs"
 
 	"context"
@@ -52,7 +53,8 @@ type Container struct {
 	DiskUsed  int64  `json:"disk_used,omitempty"` // bytes
 	IP        string `json:"ip,omitempty"`
 	MAC       string `json:"mac"`
-	Network   string `json:"network"` // nat or lan
+	Network   string `json:"network"` // nat, lan or public
+	PublicIP  string `json:"public_ip,omitempty"`
 	Owner     string `json:"owner,omitempty"`
 	Autostart bool   `json:"autostart"`
 	Created   string `json:"created"`
@@ -73,6 +75,8 @@ type CreateRequest struct {
 	MemoryMiB     int      `json:"memory_mib"`
 	DiskGB        int      `json:"disk_gb"`
 	Network       string   `json:"network"`
+	IPPool        string   `json:"ip_pool"` // public address from this pool (network "public")
+	Plan          string   `json:"plan"`    // P8S Cloud plan (sizes come from it; the API fills them in)
 	Owner         string   `json:"owner"`
 	RootPassword  string   `json:"root_password"`
 	SSHKeys       []string `json:"ssh_keys"`
@@ -135,6 +139,11 @@ type Service struct {
 	// Jobs runs them. Either nil = no container backups.
 	Backups *backup.Store
 	Jobs    *jobs.Manager
+	// Pools are the public IP pools (shared with VMs); BridgeUp checks a pool's bridge.
+	Pools    *ippool.Store
+	BridgeUp func(bridge string) bool
+	// Refresh re-applies the firewall (public address pinning) after a restore; nil = none.
+	Refresh func(ctx context.Context) error
 
 	mu    sync.Mutex
 	metas map[string]*meta
@@ -276,8 +285,14 @@ func newMAC() string {
 	return fmt.Sprintf("52:54:00:%02x:%02x:%02x", b[0], b[1], b[2])
 }
 
-func (s *Service) bridgeFor(network string) (string, error) {
+func (s *Service) bridgeFor(name, network string) (string, error) {
 	switch network {
+	case vm.NetPublic:
+		l, ok := s.lease(name)
+		if !ok {
+			return "", fmt.Errorf("%w: container %q has no public address any more", vm.ErrInvalid, name)
+		}
+		return l.Bridge, nil
 	case "", vm.NetNAT:
 		return s.Bridge, nil
 	case vm.NetLAN:
@@ -286,7 +301,7 @@ func (s *Service) bridgeFor(network string) (string, error) {
 		}
 		return s.LANBridge, nil
 	}
-	return "", fmt.Errorf("%w: network must be nat or lan", vm.ErrInvalid)
+	return "", fmt.Errorf("%w: network must be nat, lan or public", vm.ErrInvalid)
 }
 
 func (s *Service) validate(r *CreateRequest) error {
@@ -327,9 +342,13 @@ func (s *Service) Create(ctx context.Context, r CreateRequest) (Container, error
 	if err := s.validate(&r); err != nil {
 		return Container{}, err
 	}
-	br, err := s.bridgeFor(r.Network)
-	if err != nil {
+	if err := s.checkPool(&r); err != nil {
 		return Container{}, err
+	}
+	if r.Network != vm.NetPublic {
+		if _, err := s.bridgeFor(r.Name, r.Network); err != nil {
+			return Container{}, err
+		}
 	}
 	if r.Network == "" {
 		r.Network = vm.NetNAT
@@ -339,6 +358,19 @@ func (s *Service) Create(ctx context.Context, r CreateRequest) (Container, error
 	}
 	if !s.hasTemplate(ctx, r.Template) {
 		return Container{}, fmt.Errorf("%w: no container template %q (add one on the Server page)", vm.ErrInvalid, r.Template)
+	}
+	var lease *ippool.Lease
+	if r.Network == vm.NetPublic {
+		l, err := s.takeIP(r.IPPool, r.Name, "")
+		if err != nil {
+			return Container{}, err
+		}
+		lease = &l
+	}
+	br, err := s.bridgeFor(r.Name, r.Network)
+	if err != nil {
+		s.releaseIP(r.Name)
+		return Container{}, err
 	}
 	keys := r.SSHKeys
 	if len(keys) == 0 && !r.NoDefaultKeys {
@@ -350,11 +382,13 @@ func (s *Service) Create(ctx context.Context, r CreateRequest) (Container, error
 	ds := s.dataset(r.Name)
 	if _, err := s.zfs(ctx, "clone", "-p", "-o", "mountpoint="+s.rootfs(r.Name), "-o", fmt.Sprintf("refquota=%dG", r.DiskGB),
 		s.tplRoot()+"/"+r.Template+"@base", ds); err != nil {
+		s.releaseIP(r.Name)
 		return Container{}, fmt.Errorf("create the container's disk: %w", err)
 	}
 	undo := func() {
 		_, _ = s.zfs(context.Background(), "destroy", "-r", ds)
 		_ = os.RemoveAll(s.confDir(r.Name))
+		s.releaseIP(r.Name)
 	}
 	if err := s.seed(r.Name, keys, r.RootPassword); err != nil {
 		undo()
@@ -366,6 +400,12 @@ func (s *Service) Create(ctx context.Context, r CreateRequest) (Container, error
 	if err := s.prepare(r.Name, keys, r.RootPassword); err != nil {
 		undo()
 		return Container{}, fmt.Errorf("prepare the container: %w", err)
+	}
+	if lease != nil {
+		if err := s.writeNet(r.Name, m.MAC, lease); err != nil {
+			undo()
+			return Container{}, fmt.Errorf("network setup: %w", err)
+		}
 	}
 	m.NeedsSSH, m.RootLogin = true, r.RootPassword != ""
 	if err := s.writeConfig(r.Name, m, br); err != nil {
@@ -460,6 +500,13 @@ func (s *Service) config(name string, m *meta, bridge string) string {
 	fmt.Fprintf(&b, "lxc.rootfs.path = dir:%s\n", s.rootfs(name))
 	b.WriteString("lxc.apparmor.profile = generated\nlxc.apparmor.allow_nesting = 0\n")
 	fmt.Fprintf(&b, "lxc.net.0.type = veth\nlxc.net.0.link = %s\nlxc.net.0.flags = up\nlxc.net.0.name = eth0\nlxc.net.0.hwaddr = %s\n", bridge, m.MAC)
+	fmt.Fprintf(&b, "lxc.net.0.veth.pair = %s\n", HostPort(name)) // fixed name: the firewall pins public addresses to it
+	if l, ok := s.lease(name); ok && m.Network == vm.NetPublic {
+		fmt.Fprintf(&b, "lxc.net.0.ipv4.address = %s/%d\n", l.IP, l.Prefix)
+		if !l.OnLink {
+			fmt.Fprintf(&b, "lxc.net.0.ipv4.gateway = %s\n", l.Gateway)
+		}
+	}
 	fmt.Fprintf(&b, "lxc.cgroup2.memory.max = %dM\n", m.MemoryMiB)
 	fmt.Fprintf(&b, "lxc.cgroup2.memory.swap.max = %dM\n", min(m.MemoryMiB, 512))
 	fmt.Fprintf(&b, "lxc.cgroup2.cpu.max = %d 100000\n", m.VCPUs*100000)
@@ -521,6 +568,9 @@ func (s *Service) view(ctx context.Context, name string, m meta) Container {
 		DiskGB: m.DiskGB, MAC: m.MAC, Network: m.Network, Owner: m.Owner, Autostart: m.Autostart, Created: m.Created, User: "root"}
 	if c.State == "running" {
 		c.IP = s.ip(ctx, name)
+	}
+	if l, ok := s.lease(name); ok && m.Network == vm.NetPublic {
+		c.PublicIP = l.IP
 	}
 	c.DiskUsed = s.used(ctx, name)
 	return c
@@ -601,7 +651,7 @@ func (s *Service) Start(ctx context.Context, name string) (Container, error) {
 		return s.view(ctx, name, m), nil
 	}
 	// re-write the config: limits or the bridge may have changed
-	br, err := s.bridgeFor(m.Network)
+	br, err := s.bridgeFor(name, m.Network)
 	if err != nil {
 		return Container{}, err
 	}
@@ -655,6 +705,7 @@ func (s *Service) Delete(ctx context.Context, name string) error {
 		return err
 	}
 	_ = os.RemoveAll(s.confDir(name))
+	s.releaseIP(name)
 	return s.put(name, nil)
 }
 
@@ -691,7 +742,7 @@ func (s *Service) Resize(ctx context.Context, name string, r ResizeRequest) (Con
 		_, _ = s.Run.Run(ctx, "lxc-cgroup", "-n", name, "memory.max", fmt.Sprintf("%d", int64(n.MemoryMiB)<<20))
 		_, _ = s.Run.Run(ctx, "lxc-cgroup", "-n", name, "cpu.max", fmt.Sprintf("%d 100000", n.VCPUs*100000))
 	}
-	br, err := s.bridgeFor(n.Network)
+	br, err := s.bridgeFor(name, n.Network)
 	if err != nil {
 		br = s.Bridge
 	}

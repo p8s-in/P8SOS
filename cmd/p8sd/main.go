@@ -132,7 +132,6 @@ func serve(args []string) error {
 	} else if len(need) > 0 {
 		log.Info("VM definitions upgraded (display, faster disk and network); power them off and start them to apply", "vms", strings.Join(need, ","))
 	}
-	go svc.RunSchedule(ctx, cfg.BackupTime, nil)
 	go runGuard(ctx, log, run, cfg)
 	virsh := &virt.Virsh{Run: run, URI: cfg.LibvirtURI}
 	mc := &metrics.Collector{
@@ -240,7 +239,7 @@ func serve(args []string) error {
 			LXCDir: "/var/lib/lxc", MetaFile: filepath.Join(cfg.DataDir, "containers.json"), Bridge: cfg.Bridge,
 			LANBridge: cfg.LANBridge, LANUp: svc.LANAvailable, SSHKeys: cfg.SSHKeys,
 			Limits:  ct.Limits{MaxVCPUs: cfg.MaxVCPUs, MaxMemoryMiB: cfg.MaxMemoryMiB, MaxDiskGB: cfg.MaxDiskGB},
-			Backups: svc.Backups, Jobs: svc.Jobs}
+			Backups: svc.Backups, Jobs: svc.Jobs, Pools: pools, BridgeUp: svc.BridgeUp, Refresh: svc.ApplyFirewalls}
 		go func() { // after the server boots: start containers marked autostart (not on every p8sd restart)
 			if !newBoot(filepath.Join(cfg.DataDir, "ct-boot-id")) {
 				return
@@ -258,12 +257,25 @@ func serve(args []string) error {
 			}
 			out := make([]firewall.VM, 0, len(list))
 			for _, c := range list {
-				out = append(out, firewall.VM{Name: "ct:" + c.Name, MAC: c.MAC})
+				e := firewall.VM{Name: "ct:" + c.Name, MAC: c.MAC}
+				if c.PublicIP != "" { // pin the address to its veth (fixed name, also before it starts)
+					e.LockIP, e.Ports = c.PublicIP, []string{ct.HostPort(c.Name)}
+				}
+				out = append(out, e)
 			}
 			return out, nil
 		}
+		svc.OtherBackup = func(ctx context.Context, key string, keep int) error {
+			name, ok := strings.CutPrefix(key, "ct:")
+			if !ok {
+				return nil
+			}
+			_, err := cts.StartBackup(ctx, name, keep)
+			return err
+		}
 	}
 	go runFirewalls(ctx, log, svc)
+	go svc.RunSchedule(ctx, cfg.BackupTime, nil)
 
 	apiSrv := &api.Server{
 		VMs: svc, Templates: cfg.Templates, Tokens: cfg.Tokens, Version: version, Log: log,

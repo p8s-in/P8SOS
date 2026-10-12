@@ -30,6 +30,9 @@ cheap Linux servers (websites, bots, databases, VPNs). Windows or a custom kerne
 | Owners / quotas | same as VMs: customers see only theirs; a container counts as one server in the quota |
 
 | Backups | Manage → **Back up now**: processes frozen for an instant (`lxc-freeze`), ZFS snapshot, `zfs send` + zstd into `<backup dir>/_ct/NAME/`. **Restore as new…** brings it back as a new container (new MAC, hostname set); it can take the old name once the original is deleted |
+| Daily backups | Manage → Backups → "Every day at …, keep N" (same time as VM backups; schedule saved as `ct:NAME`) |
+| Public IP | Create CT → Network → **Public IP — pool**: address from the same pools as VMs, set in the LXC config, the cloud-init seed and the distro's own files (netplan, systemd-networkd, ifupdown, NetworkManager, ifcfg). Pinned to the container (anti-spoofing) on its fixed host port `vc…` |
+| P8S Cloud | Customers pick a plan like for VMs; billed per hour, stopped when suspended, no free resize |
 | Firewall | Manage → **Firewall**: the same rules as for VMs (SSH / Web / Ping / custom, optional source), in the same nftables table, matched by the container's MAC; saved as `ct:NAME` in `firewall.json` |
 
 Files: config `/var/lib/lxc/NAME/config` (written by p8sd), log `/var/lib/lxc/NAME/lxc.log`,
@@ -37,6 +40,5 @@ list `/var/lib/p8s/containers.json`. Shell on the server: `p8 ct enter NAME`.
 
 ## Not yet (next steps)
 
-- Container backups in the nightly schedule (backups are on demand for now), public IPs from pools
-- P8S Cloud plans for containers (customers can't create containers while priced plans exist)
+- Separate (cheaper) plans for containers; plans currently are shared with VMs
 - Moving containers between servers (with clustering)

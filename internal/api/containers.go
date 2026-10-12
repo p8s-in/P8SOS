@@ -83,20 +83,33 @@ func (s *Server) createCT(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, "exists", fmt.Sprintf("a VM is already called %q", req.Name))
 		return
 	}
+	// P8S Cloud plans size containers like VMs (same plans, same billing)
+	vr := vm.CreateRequest{Plan: req.Plan, IPPool: req.IPPool, Network: req.Network, VCPUs: req.VCPUs, MemoryMiB: req.MemoryMiB, DiskGB: req.DiskGB}
+	plan, ok := s.applyPlan(w, r, &vr)
+	if !ok {
+		return
+	}
+	req.IPPool, req.Network, req.VCPUs, req.MemoryMiB, req.DiskGB = vr.IPPool, vr.Network, vr.VCPUs, vr.MemoryMiB, vr.DiskGB
 	if !p.Admin {
-		if s.Cloud != nil && len(s.Cloud.Plans()) > 0 {
-			writeErr(w, http.StatusForbidden, "forbidden", "containers aren't sold as plans yet; ask your provider")
-			return
-		}
 		req.Owner = p.Name
 		if req.Network == vm.NetLAN && !p.Quota.LAN {
 			writeErr(w, http.StatusForbidden, "forbidden", "your plan doesn't include the LAN network; use nat")
 			return
 		}
 		d := Usage{VMs: 1, VCPUs: max(req.VCPUs, 1), MemoryMiB: max(req.MemoryMiB, 512), DiskGB: max(req.DiskGB, 8)}
+		if req.IPPool != "" {
+			if !s.customerPool(req.IPPool) {
+				writeErr(w, http.StatusNotFound, "not_found", fmt.Sprintf("no ip pool %q for customers", req.IPPool))
+				return
+			}
+			d.PublicIPs = 1
+		}
 		defer s.quotaLock(p.Name)()
 		if err := s.checkQuota(r.Context(), p, d); err != nil {
 			s.fail(w, r, err)
+			return
+		}
+		if !s.canAfford(w, r, p.Name, plan) {
 			return
 		}
 	} else if req.Owner != "" {
@@ -122,6 +135,14 @@ func (s *Server) createCT(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
+	if c.PublicIP != "" {
+		s.reapplyFirewall(r.Context())
+	}
+	ip := c.PublicIP
+	if ip == "" {
+		ip = c.IP
+	}
+	s.afterCreate(r, vm.VM{Name: c.Name, Owner: c.Owner, IP: ip, User: "root"}, plan)
 	w.Header().Set("Location", "/api/v1/containers/"+c.Name)
 	if err != nil { // made, but didn't start
 		writeJSON(w, http.StatusCreated, map[string]any{"container": c, "warning": err.Error()})
@@ -173,8 +194,12 @@ func (s *Server) ctPower(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteCT(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.ctFor(w, r); !ok {
+	c, ok := s.ctFor(w, r)
+	if !ok {
 		return
+	}
+	if c.PublicIP != "" {
+		defer s.reapplyFirewall(r.Context()) // drop its address pinning
 	}
 	if err := s.CTs.Delete(r.Context(), r.PathValue("name")); err != nil {
 		s.fail(w, r, err)
@@ -182,6 +207,12 @@ func (s *Server) deleteCT(w http.ResponseWriter, r *http.Request) {
 	}
 	if g, ok := s.VMs.(guestFirewalls); ok {
 		_ = g.DropGuestFirewall(r.Context(), "ct:"+r.PathValue("name"))
+	}
+	_ = s.VMs.SetSchedule("ct:"+r.PathValue("name"), vm.Schedule{}) // backups stay, the daily run goes
+	if s.Billing != nil {                                           // stop charging
+		if err := s.Billing.Unsubscribe(r.PathValue("name")); err != nil && s.Log != nil {
+			s.Log.Error("stop billing of deleted container", "container", r.PathValue("name"), "err", err)
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -225,6 +256,12 @@ func (s *Server) resizeCT(w http.ResponseWriter, r *http.Request) {
 	c, ok := s.ctFor(w, r)
 	if !ok {
 		return
+	}
+	if s.Billing != nil && !who(r).Admin {
+		if _, billed := s.Billing.Sub(c.Name); billed {
+			writeErr(w, http.StatusBadRequest, "invalid", "this container is on a plan; to change its size, ask support (plan changes are coming)")
+			return
+		}
 	}
 	var req ct.ResizeRequest
 	if !decode(w, r, &req) {
@@ -568,4 +605,26 @@ func (s *Server) ctRestore(w http.ResponseWriter, r *http.Request) {
 	s.noteJob(r, j.ID)
 	w.Header().Set("Location", "/api/v1/jobs/"+j.ID)
 	writeJSON(w, http.StatusAccepted, j)
+}
+
+func (s *Server) ctSchedule(w http.ResponseWriter, r *http.Request) {
+	c, ok := s.ctFor(w, r)
+	if !ok {
+		return
+	}
+	if r.Method == http.MethodGet {
+		s.showSchedule(w, r, "ct:"+c.Name)
+	} else {
+		s.saveSchedule(w, r, "ct:"+c.Name)
+	}
+}
+
+// reapplyFirewall rebuilds the firewall table (public address pinning
+// changed); best effort, the 5-minute refresh catches up otherwise.
+func (s *Server) reapplyFirewall(ctx context.Context) {
+	if f, ok := s.VMs.(interface{ ApplyFirewalls(context.Context) error }); ok {
+		if err := f.ApplyFirewalls(context.WithoutCancel(ctx)); err != nil && s.Log != nil {
+			s.Log.Warn("firewall", "err", err)
+		}
+	}
 }

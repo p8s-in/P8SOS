@@ -901,6 +901,17 @@ func (s *Server) BillingTick(ctx context.Context) error {
 					}
 				}
 			}
+			if s.CTs != nil {
+				if all, lerr := s.CTs.List(ctx); lerr == nil {
+					for _, c := range all {
+						if c.Owner == e.User && c.State == "running" {
+							if _, serr := s.CTs.Stop(ctx, c.Name, false); serr == nil {
+								stopped = append(stopped, c.Name)
+							}
+						}
+					}
+				}
+			}
 			if s.Log != nil {
 				s.Log.Warn("customer suspended for unpaid balance", "user", e.User, "balance", e.Balance, "stopped", stopped)
 			}

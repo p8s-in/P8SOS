@@ -412,6 +412,19 @@ func (s *Service) RunScheduledBackups(ctx context.Context) []string {
 		if !m[n].Daily {
 			continue
 		}
+		if strings.Contains(n, ":") { // another kind of guest, e.g. "ct:web2"
+			if s.OtherBackup == nil {
+				continue
+			}
+			if err := s.OtherBackup(ctx, n, m[n].Keep); err != nil {
+				if !errors.Is(err, ErrNotFound) {
+					s.logErr("scheduled backup of "+n, err)
+				}
+				continue
+			}
+			started = append(started, n)
+			continue
+		}
 		if _, err := s.startBackup(ctx, n, m[n].Keep); err != nil {
 			if !errors.Is(err, ErrNotFound) {
 				s.logErr("scheduled backup of "+n, err)

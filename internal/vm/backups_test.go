@@ -3,6 +3,7 @@ package vm
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -177,5 +178,26 @@ func TestBackupsOff(t *testing.T) {
 	svc, _, _, _ := newSvc()
 	if _, err := svc.StartBackup(context.Background(), "x"); !errors.Is(err, ErrConflict) {
 		t.Fatalf("got %v", err)
+	}
+}
+
+func TestBackupScheduleOtherGuests(t *testing.T) {
+	ctx := context.Background()
+	svc, _, _, _ := newSvc()
+	withBackups(t, svc)
+	svc.ScheduleFile = filepath.Join(t.TempDir(), "schedule.json")
+	if err := svc.SetSchedule("ct:web2", Schedule{Daily: true, Keep: 3}); err != nil {
+		t.Fatal(err)
+	}
+	if got := svc.RunScheduledBackups(ctx); len(got) != 0 {
+		t.Fatalf("no hook but started %v", got)
+	}
+	var called []string
+	svc.OtherBackup = func(_ context.Context, key string, keep int) error {
+		called = append(called, fmt.Sprintf("%s/%d", key, keep))
+		return nil
+	}
+	if got := svc.RunScheduledBackups(ctx); len(got) != 1 || len(called) != 1 || called[0] != "ct:web2/3" {
+		t.Fatalf("started %v called %v", got, called)
 	}
 }
