@@ -153,6 +153,7 @@ install -m 0755 "$REPO/scripts/make-template.sh" /usr/local/share/p8s/make-templ
 install -m 0755 "$REPO/scripts/storage.sh" /usr/local/share/p8s/storage.sh
 install -m 0755 "$REPO/scripts/os-upgrade.sh" /usr/local/share/p8s/os-upgrade.sh
 install -m 0755 "$REPO/scripts/make-ct-template.sh" /usr/local/share/p8s/make-ct-template.sh
+install -m 0755 "$REPO/scripts/tune.sh" /usr/local/share/p8s/tune.sh
 ok "installed /usr/local/bin/p8sd and the 'p8' command"
 
 # ---------------------------------------------------------------------------
@@ -214,6 +215,9 @@ curl -kfs https://127.0.0.1:8006/api/v1/health >/dev/null || { journalctl -u p8s
 plog=$(journalctl -u p8sd --since "$since" --no-pager)
 grep -q "snapshot missing" <<<"$plog" && die "p8sd can't see the template snapshot"
 ok "p8sd running: $(curl -kfs https://127.0.0.1:8006/api/v1/health)"
+
+# Host tuning: ZFS cache limit, KSM, vhost_net, low swappiness
+bash "$REPO/scripts/tune.sh" | sed 's/^/  /' || echo "  note: tuning not applied"
 
 # P8S OS name on the boot menu, login screen and SSH welcome (Debian stays underneath)
 bash "$REPO/scripts/branding.sh" >/dev/null 2>&1 || echo "  note: branding not applied"

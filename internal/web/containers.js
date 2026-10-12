@@ -45,6 +45,11 @@ document.body.insertAdjacentHTML("beforeend", `
   <h3>Snapshots</h3>
   <div class="inline"><input id="cmSnapName" placeholder="name (optional)" style="flex:1"><button class="btn" id="cmSnap">Take snapshot</button></div>
   <table class="snaps"><tbody id="cmSnaps"></tbody></table>
+  <h3>Backups</h3>
+  <div class="inline"><span class="sub" style="flex:1">A full copy of the disk in the backup folder (works while it runs). Comes back as a new container.</span>
+    <button class="btn" id="cmBackup">Back up now</button></div>
+  <table class="snaps"><tbody id="cmBackups"></tbody></table>
+  <div id="cmFwBox"></div>
   <h3>SSH</h3>
   <div class="inline"><span class="sub" style="flex:1" id="cmSSHHint">The SSH server is installed by itself on the first start (needs internet). If SSH doesn't answer, install or repair it here.</span>
     <button class="btn" id="cmSSH">Install / repair SSH</button></div>
@@ -54,6 +59,8 @@ document.body.insertAdjacentHTML("beforeend", `
   <div id="cmOwnerBox" hidden><h3>Owner</h3><div class="inline"><select id="cmOwner" style="flex:1"></select><button class="btn" id="cmOwnerGo">Change</button></div></div>
   <div class="dlg-actions"><button class="btn danger" id="cmDel">Delete container…</button><span class="spacer"></span><button class="btn" id="cmClose">Close</button></div>
 </div></dialog>`);
+
+const ctFw = fwPanel($("#cmFwBox"), () => `/containers/${encodeURIComponent(ctCur)}`, () => ctCur, "container");
 
 /* ---------- data ---------- */
 async function loadCTs(){
@@ -214,7 +221,7 @@ async function openCTManage(name){
   if (!ctTpls.length) { try { ctTpls = (await call("GET", "/ct-templates")).templates; } catch {} }
   renderCTManage();
   $("#dlgCTM").showModal();
-  loadCTSnaps();
+  loadCTSnaps(); loadCTBackups(); ctFw.load();
   $("#cmOwnerBox").hidden = !(isAdmin() && me?.accounts_on);
   if (!$("#cmOwnerBox").hidden) {
     try { userList = (await call("GET", "/users")).users; } catch {}
@@ -243,6 +250,35 @@ async function loadCTSnaps(){
       : `<tr><td class="sub">No snapshots yet. A snapshot is instant and lets you undo changes later.</td></tr>`;
   } catch (err) { $("#cmSnaps").innerHTML = `<tr><td class="sub">${esc(err.message)}</td></tr>`; }
 }
+
+async function loadCTBackups(){
+  try {
+    const l = (await call("GET", `/containers/${encodeURIComponent(ctCur)}/backups`)).backups;
+    $("#cmBackups").innerHTML = l.length ? l.map(b => `<tr data-id="${esc(b.id)}"><td><b>${esc(new Date(b.created_at).toLocaleString())}</b>
+      <div class="sub">${fmtBytes(b.bytes)}${b.consistent ? "" : " · taken while busy (crash-consistent)"}</div></td>
+      <td style="text-align:right"><button class="btn" data-br>Restore as new…</button> <button class="btn danger" data-bd>Delete</button></td></tr>`).join("")
+      : `<tr><td class="sub">No backups yet.</td></tr>`;
+  } catch (err) { $("#cmBackups").innerHTML = `<tr><td class="sub">${esc(err.message)}</td></tr>`; }
+}
+$("#cmBackup").onclick = async () => {
+  const name = ctCur;
+  try { const j = await call("POST", `/containers/${encodeURIComponent(name)}/backups`); trackJob(j, () => { if (ctCur === name) loadCTBackups(); }); }
+  catch (err) { toast(err.message, true); }
+};
+$("#cmBackups").addEventListener("click", async e => {
+  const tr = e.target.closest("tr[data-id]"); if (!tr) return;
+  const path = `/ct-backups/${encodeURIComponent(ctCur)}/${encodeURIComponent(tr.dataset.id)}`;
+  try {
+    if (e.target.closest("[data-br]")) {
+      const n = prompt("Name for the restored container:", ctCur + "-restored");
+      if (!n) return;
+      trackJob(await call("POST", path + "/restore", {name: n.trim()}));
+    } else if (e.target.closest("[data-bd]")) {
+      if (!confirm("Delete this backup? It can't be undone.")) return;
+      await call("DELETE", path); loadCTBackups();
+    }
+  } catch (err) { toast(err.message, true); }
+});
 
 $("#cmSnaps").addEventListener("click", async e => {
   const r = e.target.closest("[data-sr]"), d = e.target.closest("[data-sd]");

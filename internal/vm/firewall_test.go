@@ -67,3 +67,31 @@ func TestFirewall(t *testing.T) {
 		t.Fatalf("rules left after delete: %+v", applied)
 	}
 }
+
+func TestGuestFirewall(t *testing.T) {
+	ctx := context.Background()
+	svc, _, _, _ := newSvc()
+	svc.FirewallFile = filepath.Join(t.TempDir(), "firewall.json")
+	var applied []firewall.VM
+	svc.Firewall = func(_ context.Context, vms []firewall.VM) error { applied = vms; return nil }
+	svc.OtherGuests = func(context.Context) ([]firewall.VM, error) {
+		return []firewall.VM{{Name: "ct:web2", MAC: "52:54:00:01:02:03"}, {Name: "ct:db", MAC: "52:54:00:01:02:04"}}, nil
+	}
+	if _, err := svc.SetGuestFirewall(ctx, "ct:web2", firewall.Settings{Enabled: true, Rules: []firewall.Rule{{Proto: "tcp", Ports: "80,443"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if len(applied) != 1 || applied[0].Name != "ct:web2" || applied[0].MAC != "52:54:00:01:02:03" || applied[0].FW.Rules[0].Ports != "80,443" {
+		t.Fatalf("applied %+v", applied)
+	}
+	if fw, err := svc.GuestFirewall("ct:web2"); err != nil || !fw.Enabled {
+		t.Fatalf("saved %+v %v", fw, err)
+	}
+	if err := svc.DropGuestFirewall(ctx, "ct:web2"); err != nil || len(applied) != 0 {
+		t.Fatalf("drop: %v %+v", err, applied)
+	}
+	// a broken container list must not silently drop container firewalls
+	svc.OtherGuests = func(context.Context) ([]firewall.VM, error) { return nil, errors.New("lxc down") }
+	if err := svc.ApplyFirewalls(ctx); err == nil {
+		t.Fatal("want error")
+	}
+}

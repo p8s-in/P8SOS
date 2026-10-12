@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 
 	"p8sos/internal/console"
 	"p8sos/internal/ct"
+	"p8sos/internal/firewall"
 	"p8sos/internal/vm"
 )
 
@@ -178,7 +180,45 @@ func (s *Server) deleteCT(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
+	if g, ok := s.VMs.(guestFirewalls); ok {
+		_ = g.DropGuestFirewall(r.Context(), "ct:"+r.PathValue("name"))
+	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// guestFirewalls is the shared VM/container firewall (vm.Service).
+type guestFirewalls interface {
+	GuestFirewall(key string) (firewall.Settings, error)
+	SetGuestFirewall(ctx context.Context, key string, fw firewall.Settings) (firewall.Settings, error)
+	DropGuestFirewall(ctx context.Context, key string) error
+}
+
+func (s *Server) ctFirewall(w http.ResponseWriter, r *http.Request) {
+	c, ok := s.ctFor(w, r)
+	if !ok {
+		return
+	}
+	g, ok := s.VMs.(guestFirewalls)
+	if !ok {
+		writeErr(w, http.StatusNotFound, "not_found", "the firewall is not available on this host")
+		return
+	}
+	var fw firewall.Settings
+	var err error
+	if r.Method == http.MethodGet {
+		fw, err = g.GuestFirewall("ct:" + c.Name)
+	} else {
+		var body firewall.Settings
+		if !decode(w, r, &body) {
+			return
+		}
+		fw, err = g.SetGuestFirewall(r.Context(), "ct:"+c.Name, body)
+	}
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, fw)
 }
 
 func (s *Server) resizeCT(w http.ResponseWriter, r *http.Request) {
@@ -427,4 +467,105 @@ func (s *Server) ctSetupSSH(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"output": out})
+}
+
+// --- container backups (stored next to VM backups; restored as a container) ---
+
+func (s *Server) ctBackups(w http.ResponseWriter, r *http.Request) {
+	if !s.ctOn(w) {
+		return
+	}
+	name := r.PathValue("name")
+	if name != "" {
+		if _, ok := s.ctFor(w, r); !ok {
+			return
+		}
+	}
+	b, err := s.CTs.ListBackups(name)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	p, out := who(r), []vm.Backup{}
+	for _, m := range b {
+		if mayUse(p, m.Owner) {
+			out = append(out, m)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"backups": out})
+}
+
+func (s *Server) ctBackup(w http.ResponseWriter, r *http.Request) {
+	c, ok := s.ctFor(w, r)
+	if !ok {
+		return
+	}
+	j, err := s.CTs.StartBackup(r.Context(), c.Name, 0)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.noteJob(r, j.ID)
+	w.Header().Set("Location", "/api/v1/jobs/"+j.ID)
+	writeJSON(w, http.StatusAccepted, j)
+}
+
+// ctBackupFor finds a container backup the caller may use.
+func (s *Server) ctBackupFor(w http.ResponseWriter, r *http.Request) (vm.Backup, bool) {
+	if !s.ctOn(w) {
+		return vm.Backup{}, false
+	}
+	b, err := s.CTs.ListBackups(r.PathValue("name"))
+	if err == nil {
+		for _, m := range b {
+			if m.ID == r.PathValue("id") && mayUse(who(r), m.Owner) {
+				return m, true
+			}
+		}
+		err = fmt.Errorf("%w: backup %s of %s", vm.ErrNotFound, r.PathValue("id"), r.PathValue("name"))
+	}
+	s.fail(w, r, err)
+	return vm.Backup{}, false
+}
+
+func (s *Server) ctDeleteBackup(w http.ResponseWriter, r *http.Request) {
+	m, ok := s.ctBackupFor(w, r)
+	if !ok {
+		return
+	}
+	if err := s.CTs.DeleteBackup(m.VM, m.ID); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) ctRestore(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name string `json:"name"` // new container name; empty = the original (once deleted)
+	}
+	if r.ContentLength != 0 && !decode(w, r, &body) {
+		return
+	}
+	m, ok := s.ctBackupFor(w, r)
+	if !ok || s.suspended(w, r) {
+		return
+	}
+	p := who(r)
+	if !p.Admin {
+		defer s.quotaLock(p.Name)()
+		if err := s.checkQuota(r.Context(), p, Usage{VMs: 1, VCPUs: m.VCPUs, MemoryMiB: m.MemoryMiB, DiskGB: m.DiskGB}); err != nil {
+			s.fail(w, r, err)
+			return
+		}
+	}
+	vmExists := func(n string) bool { _, err := s.VMs.Get(r.Context(), n); return err == nil }
+	j, err := s.CTs.StartRestore(r.Context(), m.VM, m.ID, body.Name, vmExists)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.noteJob(r, j.ID)
+	w.Header().Set("Location", "/api/v1/jobs/"+j.ID)
+	writeJSON(w, http.StatusAccepted, j)
 }

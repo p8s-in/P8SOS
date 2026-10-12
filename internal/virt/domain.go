@@ -39,7 +39,16 @@ type Spec struct {
 	// Video is the display adapter read back from a domain (DomainXML always
 	// writes VideoModel).
 	Video string
+	// DefVersion is read back from a domain (DomainXML always writes the current one).
+	DefVersion int
 }
+
+// DefVersion is the version of the VM definitions DomainXML writes. Older
+// definitions are re-rendered at start-up (vm.UpgradeDomains); they pick up
+// the change at their next power-on.
+//
+//	1 VGA display; 2 I/O thread + multi-queue virtio disk and network
+const DefVersion = 2
 
 // VideoModel is the display adapter every P8S VM gets.
 const VideoModel = "vga"
@@ -56,8 +65,9 @@ type domainXML struct {
 		Unit  string `xml:"unit,attr"`
 		Value int    `xml:",chardata"`
 	} `xml:"memory"`
-	VCPU int `xml:"vcpu"`
-	OS   struct {
+	VCPU      int `xml:"vcpu"`
+	IOThreads int `xml:"iothreads,omitempty"`
+	OS        struct {
 		Firmware string `xml:"firmware,attr,omitempty"` // "efi" = UEFI (libvirt picks OVMF)
 		Type     struct {
 			Arch    string `xml:"arch,attr"`
@@ -127,11 +137,12 @@ type clockXML struct {
 }
 
 type metaXML struct {
-	OSType    string `xml:"os_type,omitempty"`
-	Template  string `xml:"template"`
-	DiskGB    int    `xml:"disk_gb"`
-	CreatedAt string `xml:"created_at"`
-	Owner     string `xml:"owner,omitempty"`
+	DefVersion int    `xml:"def_version,omitempty"`
+	OSType     string `xml:"os_type,omitempty"`
+	Template   string `xml:"template"`
+	DiskGB     int    `xml:"disk_gb"`
+	CreatedAt  string `xml:"created_at"`
+	Owner      string `xml:"owner,omitempty"`
 }
 
 type devicesXML struct {
@@ -192,10 +203,13 @@ type diskXML struct {
 	Type   string `xml:"type,attr"`
 	Device string `xml:"device,attr"`
 	Driver struct {
-		Name    string `xml:"name,attr"`
-		Type    string `xml:"type,attr"`
-		Cache   string `xml:"cache,attr,omitempty"`
-		Discard string `xml:"discard,attr,omitempty"`
+		Name     string `xml:"name,attr"`
+		Type     string `xml:"type,attr"`
+		Cache    string `xml:"cache,attr,omitempty"`
+		IO       string `xml:"io,attr,omitempty"`
+		Discard  string `xml:"discard,attr,omitempty"`
+		IOThread int    `xml:"iothread,attr,omitempty"`
+		Queues   int    `xml:"queues,attr,omitempty"`
 	} `xml:"driver"`
 	Source struct {
 		Dev  string `xml:"dev,attr,omitempty"`
@@ -219,6 +233,10 @@ type ifaceXML struct {
 	Model struct {
 		Type string `xml:"type,attr"`
 	} `xml:"model"`
+	Driver *struct {
+		Name   string `xml:"name,attr"`
+		Queues int    `xml:"queues,attr,omitempty"`
+	} `xml:"driver"`
 }
 
 // MetadataXML is the P8S metadata element of a spec, for updating a running
@@ -242,7 +260,7 @@ func DomainXML(s Spec) ([]byte, error) {
 	d.Type = "kvm"
 	d.Name = s.Name
 	d.UUID = s.UUID
-	d.Metadata.VM = metaXML{OSType: s.OSType, Template: s.Template, DiskGB: s.DiskGB, CreatedAt: s.CreatedAt, Owner: s.Owner}
+	d.Metadata.VM = metaXML{DefVersion: DefVersion, OSType: s.OSType, Template: s.Template, DiskGB: s.DiskGB, CreatedAt: s.CreatedAt, Owner: s.Owner}
 	win := s.OSType == "windows" || s.OSType == "windows11"
 	uefi := s.OSType == "windows11"
 	d.Memory.Unit, d.Memory.Value = "MiB", s.MemoryMiB
@@ -301,8 +319,14 @@ func DomainXML(s Spec) ([]byte, error) {
 	root.Driver.Name, root.Driver.Type, root.Driver.Cache, root.Driver.Discard = "qemu", "raw", "none", "unmap"
 	root.Source.Dev = s.DiskPath
 	root.Target.Dev, root.Target.Bus = "vda", "virtio"
+	// queues: one per vCPU (up to 8) so disk I/O isn't funnelled through one CPU
+	queues := min(max(s.VCPUs, 1), 8)
 	if win { // the Windows installer has no virtio driver
 		root.Target.Dev, root.Target.Bus = "sdc", "sata"
+	} else {
+		// its own I/O thread (disk work off the vCPU threads) and native AIO
+		d.IOThreads = 1
+		root.Driver.IO, root.Driver.IOThread, root.Driver.Queues = "native", 1, queues
 	}
 	d.Devices.Disks = append(d.Devices.Disks, root)
 
@@ -336,6 +360,11 @@ func DomainXML(s Spec) ([]byte, error) {
 	nic.Model.Type = "virtio"
 	if win {
 		nic.Model.Type = "e1000e"
+	} else if queues > 1 { // vhost-net in the kernel, one queue per vCPU
+		nic.Driver = &struct {
+			Name   string `xml:"name,attr"`
+			Queues int    `xml:"queues,attr,omitempty"`
+		}{"vhost", queues}
 	}
 	d.Devices.Interfaces = []ifaceXML{nic}
 
@@ -390,15 +419,16 @@ func ParseDomainXML(b []byte) (Spec, error) {
 		return Spec{}, err
 	}
 	s := Spec{
-		Name:      d.Name,
-		UUID:      d.UUID,
-		VCPUs:     d.VCPU,
-		MemoryMiB: toMiB(d.Memory.Value, d.Memory.Unit),
-		Template:  d.Metadata.VM.Template,
-		DiskGB:    d.Metadata.VM.DiskGB,
-		CreatedAt: d.Metadata.VM.CreatedAt,
-		OSType:    d.Metadata.VM.OSType,
-		Owner:     d.Metadata.VM.Owner,
+		Name:       d.Name,
+		UUID:       d.UUID,
+		VCPUs:      d.VCPU,
+		MemoryMiB:  toMiB(d.Memory.Value, d.Memory.Unit),
+		Template:   d.Metadata.VM.Template,
+		DiskGB:     d.Metadata.VM.DiskGB,
+		CreatedAt:  d.Metadata.VM.CreatedAt,
+		OSType:     d.Metadata.VM.OSType,
+		Owner:      d.Metadata.VM.Owner,
+		DefVersion: d.Metadata.VM.DefVersion,
 	}
 	if d.Devices.Video != nil {
 		s.Video = d.Devices.Video.Model.Type

@@ -14,6 +14,9 @@
 package ct
 
 import (
+	"p8sos/internal/backup"
+	"p8sos/internal/jobs"
+
 	"context"
 	"crypto/rand"
 	"encoding/json"
@@ -128,6 +131,10 @@ type Service struct {
 	SSHKeys   []string // host default keys (admins' containers)
 	Chown     func(path string, uid, gid int) error
 	Now       func() time.Time
+	// Backups is the VM backup store (container backups go under its Dir/_ct);
+	// Jobs runs them. Either nil = no container backups.
+	Backups *backup.Store
+	Jobs    *jobs.Manager
 
 	mu    sync.Mutex
 	metas map[string]*meta

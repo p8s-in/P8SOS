@@ -75,6 +75,9 @@ type Service struct {
 	FirewallFile string        // per-VM firewall settings (JSON); empty = in memory only
 	// Firewall loads the per-VM firewall rules (nftables); nil = not enforced (tests).
 	Firewall func(ctx context.Context, vms []firewall.VM) error
+	// OtherGuests lists non-VM guests (containers) that share the firewall
+	// table; their settings are kept under their Name (e.g. "ct:web2").
+	OtherGuests func(ctx context.Context) ([]firewall.VM, error)
 
 	locks    sync.Map // name -> *sync.Mutex; serializes ops per VM
 	memSched sync.Map // backup schedules when ScheduleFile is empty (tests)
@@ -417,19 +420,36 @@ func (s *Service) List(ctx context.Context) ([]VM, error) {
 	if err != nil {
 		return nil, err
 	}
-	vms := []VM{}
+	// Each lookup is a few libvirt round trips; do them side by side so the
+	// dashboard's list stays quick with many VMs.
+	var doms []string
 	for _, n := range names {
-		if !strings.HasPrefix(n, Prefix) {
-			continue
+		if strings.HasPrefix(n, Prefix) {
+			doms = append(doms, n)
 		}
-		v, err := s.get(ctx, n)
-		if errors.Is(err, ErrNotFound) {
+	}
+	res := make([]VM, len(doms))
+	errs := make([]error, len(doms))
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 8)
+	for i, n := range doms {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer func() { <-sem; wg.Done() }()
+			res[i], errs[i] = s.get(ctx, n)
+		}()
+	}
+	wg.Wait()
+	vms := []VM{}
+	for i := range doms {
+		if errors.Is(errs[i], ErrNotFound) {
 			continue // deleted between list and get
 		}
-		if err != nil {
-			return nil, err
+		if errs[i] != nil {
+			return nil, errs[i]
 		}
-		vms = append(vms, v)
+		vms = append(vms, res[i])
 	}
 	sort.Slice(vms, func(i, j int) bool { return vms[i].Name < vms[j].Name })
 	return vms, nil

@@ -353,6 +353,11 @@ VMs show `"os_type"` and `"drivers_iso"`. See [windows.md](windows.md).
 | POST | `/api/v1/containers/{name}/password` | `{"user","password"}` (running) |
 | PUT | `/api/v1/containers/{name}/owner` | `{"owner"}` (admins) |
 | POST | `/api/v1/containers/{name}/console` | one-time ticket for `GET /api/v1/terminal?ticket=` (WebSocket: binary = terminal bytes, text = `{"cols","rows"}`) |
+| GET / PUT | `/api/v1/containers/{name}/firewall` | same body as the VM firewall `{"enabled","rules":[{"proto","ports","source","comment"}]}` |
+| GET / POST | `/api/v1/containers/{name}/backups` | list / start a backup (202 + job, follow `/api/v1/jobs/{id}`) |
+| GET | `/api/v1/ct-backups` | every container backup the caller may see (also of deleted containers) |
+| DELETE | `/api/v1/ct-backups/{name}/{id}` | delete a backup |
+| POST | `/api/v1/ct-backups/{name}/{id}/restore` | `{"name"}` restore as a new container (202 + job); counts against the quota |
 | GET | `/api/v1/ct-templates` | installed container templates |
 
 Names are shared with VMs (a container and a VM can't have the same name). See [containers.md](containers.md).

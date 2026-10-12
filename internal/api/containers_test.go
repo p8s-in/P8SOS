@@ -76,6 +76,20 @@ func TestContainersAPI(t *testing.T) {
 		t.Fatalf("bogus ticket %d", code)
 	}
 
+	// firewall and backups follow the same access rules
+	m.req("PUT", "/api/v1/containers/c1/firewall", bob, `{"enabled":true,"rules":[]}`, 404)
+	m.req("PUT", "/api/v1/containers/c1/firewall", alice, `{"enabled":true,"rules":[{"proto":"tcp","ports":"x"}]}`, 400)
+	m.req("PUT", "/api/v1/containers/c1/firewall", alice, `{"enabled":true,"rules":[{"proto":"tcp","ports":"22"}]}`, 200)
+	if v := m.req("GET", "/api/v1/containers/c1/firewall", alice, "", 200); v["enabled"] != true {
+		t.Fatalf("firewall %v", v)
+	}
+	m.req("GET", "/api/v1/containers/c1/backups", bob, "", 404)
+	if v := m.req("GET", "/api/v1/containers/c1/backups", alice, "", 200); len(v["backups"].([]any)) != 0 {
+		t.Fatalf("backups %v", v)
+	}
+	m.req("POST", "/api/v1/containers/c1/backups", alice, "", 409) // no backup folder in this test
+	m.req("POST", "/api/v1/ct-backups/c1/20261012-100000/restore", alice, `{"name":"c9"}`, 404)
+
 	m.req("DELETE", "/api/v1/containers/c1", alice, "", 204)
 	m.req("GET", "/api/v1/containers/c1", alice, "", 404)
 }

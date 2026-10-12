@@ -130,11 +130,10 @@ func serve(args []string) error {
 	if need, err := svc.UpgradeDomains(ctx); err != nil {
 		log.Warn("upgrade VM definitions", "err", err)
 	} else if len(need) > 0 {
-		log.Info("VM definitions upgraded (VGA display); power them off and start them to apply", "vms", strings.Join(need, ","))
+		log.Info("VM definitions upgraded (display, faster disk and network); power them off and start them to apply", "vms", strings.Join(need, ","))
 	}
 	go svc.RunSchedule(ctx, cfg.BackupTime, nil)
 	go runGuard(ctx, log, run, cfg)
-	go runFirewalls(ctx, log, svc)
 	virsh := &virt.Virsh{Run: run, URI: cfg.LibvirtURI}
 	mc := &metrics.Collector{
 		Stats: func(ctx context.Context) (map[string]metrics.Raw, error) {
@@ -240,7 +239,8 @@ func serve(args []string) error {
 		cts = &ct.Service{Run: run, Pool: strings.SplitN(cfg.VMDataset, "/", 2)[0], MountDir: filepath.Join(cfg.DataDir, "ct"),
 			LXCDir: "/var/lib/lxc", MetaFile: filepath.Join(cfg.DataDir, "containers.json"), Bridge: cfg.Bridge,
 			LANBridge: cfg.LANBridge, LANUp: svc.LANAvailable, SSHKeys: cfg.SSHKeys,
-			Limits: ct.Limits{MaxVCPUs: cfg.MaxVCPUs, MaxMemoryMiB: cfg.MaxMemoryMiB, MaxDiskGB: cfg.MaxDiskGB}}
+			Limits:  ct.Limits{MaxVCPUs: cfg.MaxVCPUs, MaxMemoryMiB: cfg.MaxMemoryMiB, MaxDiskGB: cfg.MaxDiskGB},
+			Backups: svc.Backups, Jobs: svc.Jobs}
 		go func() { // after the server boots: start containers marked autostart (not on every p8sd restart)
 			if !newBoot(filepath.Join(cfg.DataDir, "ct-boot-id")) {
 				return
@@ -250,6 +250,20 @@ func serve(args []string) error {
 	} else {
 		log.Warn("containers are off: lxc is not installed (sudo bash update.sh installs it)")
 	}
+	if cts != nil { // containers share the VM firewall table, keyed "ct:NAME"
+		svc.OtherGuests = func(ctx context.Context) ([]firewall.VM, error) {
+			list, err := cts.List(ctx)
+			if err != nil {
+				return nil, err
+			}
+			out := make([]firewall.VM, 0, len(list))
+			for _, c := range list {
+				out = append(out, firewall.VM{Name: "ct:" + c.Name, MAC: c.MAC})
+			}
+			return out, nil
+		}
+	}
+	go runFirewalls(ctx, log, svc)
 
 	apiSrv := &api.Server{
 		VMs: svc, Templates: cfg.Templates, Tokens: cfg.Tokens, Version: version, Log: log,

@@ -60,6 +60,10 @@ type Store struct {
 	// Compressor is "zstd" or "gzip"; empty = zstd when installed, else gzip.
 	Compressor string
 	Now        func() time.Time
+	// Disk maps a guest to its dataset; nil = <Dataset>/<dom>-disk0 (VM zvols).
+	Disk func(dom string) string
+	// RecvOpts are the zfs receive -o options; nil = volmode=dev (VM zvols).
+	RecvOpts []string
 }
 
 func (s *Store) cmd(ctx context.Context, name string, args ...string) *exec.Cmd {
@@ -95,7 +99,12 @@ func (s *Store) NewID() string {
 	return now().UTC().Format("20060102-150405")
 }
 
-func (s *Store) disk(dom string) string { return s.Dataset + "/" + dom + "-disk0" }
+func (s *Store) disk(dom string) string {
+	if s.Disk != nil {
+		return s.Disk(dom)
+	}
+	return s.Dataset + "/" + dom + "-disk0"
+}
 
 func (s *Store) paths(vm, id, comp string) (data, meta string) {
 	base := filepath.Join(s.Dir, vm, vm+"-"+id)
@@ -309,7 +318,15 @@ func (s *Store) Restore(ctx context.Context, m Meta, dom string, replace bool) e
 		dec = s.cmd(ctx, "zstd", "-q", "-d", "-c")
 	}
 	// volmode=dev like the template, so the host doesn't scan the guest's partitions.
-	recv := s.cmd(ctx, "zfs", "receive", "-u", "-o", "volmode=dev", tmp)
+	opts := s.RecvOpts
+	if opts == nil {
+		opts = []string{"volmode=dev"}
+	}
+	args := []string{"receive", "-u"}
+	for _, o := range opts {
+		args = append(args, "-o", o)
+	}
+	recv := s.cmd(ctx, "zfs", append(args, tmp)...)
 	if err := pipe(dec, recv, f, io.Discard); err != nil {
 		_, _ = s.Run.Run(context.WithoutCancel(ctx), "zfs", "destroy", "-r", tmp)
 		return fmt.Errorf("restore stream: %w", err)

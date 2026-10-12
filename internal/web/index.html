@@ -276,17 +276,7 @@ dialog form.uform{padding:0}
     </div>
   </div>
 
-  <h3>Firewall</h3>
-  <div class="sub">Off: anything can connect to this VM. On: only what is listed below gets in;
-    everything the VM starts itself (updates, downloads) keeps working.</div>
-  <label class="check"><input id="mFwOn" type="checkbox"> Only allow the incoming traffic below</label>
-  <table class="snaps fw"><tbody id="mFwRules"></tbody></table>
-  <div class="inline" style="flex-wrap:wrap">
-    <button class="btn" data-fwp="ssh">+ SSH</button><button class="btn" data-fwp="web">+ Web</button>
-    <button class="btn" data-fwp="ping">+ Ping</button><button class="btn" data-fwp="custom">+ Custom</button>
-    <span class="spacer"></span><button class="btn primary" id="mFwSave">Save firewall</button>
-  </div>
-  <div class="hint" id="mFwHint"></div>
+  <div id="mFwBox"></div>
 
   <h3>Change password</h3>
   <div class="sub" id="mPwHint">Sets a login password inside the VM (needs it running and fully booted).</div>
@@ -1031,7 +1021,6 @@ async function openManage(name){
   $("#dlgManage").showModal();
   $("#mBackups").innerHTML = `<tr><td class="muted">Loading…</td></tr>`;
   $("#mCharts").innerHTML = "";
-  $("#mFwRules").innerHTML = `<tr><td class="muted">Loading…</td></tr>`;
   $("#mSites").innerHTML = ""; $("#mSiteName").value = ""; $("#mSitePort").value = 80; $("#mSiteTLS").checked = false;
   await Promise.all([loadSnaps(), loadBackups(), loadVMCharts(), loadFirewall(), loadSites()]);
 }
@@ -1187,61 +1176,77 @@ $("#mSites").addEventListener("click", async e => {
   catch (err) { toast(err.message, true); b.disabled = false; }
 });
 
-/* ---------- per-VM firewall ---------- */
-let fwRules = [];
-async function loadFirewall(){
-  try {
-    const fw = await call("GET", `/vms/${encodeURIComponent(mName)}/firewall`);
-    $("#mFwOn").checked = fw.enabled; fwRules = fw.rules || [];
-  } catch (err) { toast(err.message, true); fwRules = []; }
-  renderFw();
-}
-function renderFw(){
-  $("#mFwRules").innerHTML = fwRules.length ? fwRules.map((r, i) => `<tr data-i="${i}">
+/* ---------- firewall (VMs and containers share it) ---------- */
+// fwPanel draws the firewall editor into box; base() is the guest's API path,
+// name() its display name, what "VM"/"container".
+function fwPanel(box, base, name, what){
+  let rules = [];
+  box.innerHTML = `<h3>Firewall</h3>
+  <div class="sub">Off: anything can connect to this ${what}. On: only what is listed below gets in;
+    everything the ${what} starts itself (updates, downloads) keeps working.</div>
+  <label class="check"><input data-fw="on" type="checkbox"> Only allow the incoming traffic below</label>
+  <table class="snaps fw"><tbody data-fw="rules"></tbody></table>
+  <div class="inline" style="flex-wrap:wrap">
+    <button class="btn" data-fwp="ssh">+ SSH</button><button class="btn" data-fwp="web">+ Web</button>
+    <button class="btn" data-fwp="ping">+ Ping</button><button class="btn" data-fwp="custom">+ Custom</button>
+    <span class="spacer"></span><button class="btn primary" data-fw="save">Save firewall</button>
+  </div>
+  <div class="hint" data-fw="hint"></div>`;
+  const on = box.querySelector('[data-fw="on"]'), body = box.querySelector('[data-fw="rules"]'),
+    hint = box.querySelector('[data-fw="hint"]'), save = box.querySelector('[data-fw="save"]');
+  function draw(){
+    body.innerHTML = rules.length ? rules.map((r, i) => `<tr data-i="${i}">
     <td><select data-k="proto" aria-label="Protocol">${["tcp", "udp", "icmp"].map(p => `<option value="${p}" ${r.proto === p ? "selected" : ""}>${p === "icmp" ? "ping" : p.toUpperCase()}</option>`).join("")}</select></td>
     <td><input data-k="ports" value="${esc(r.ports || "")}" placeholder="22 or 80,443" aria-label="Ports" ${r.proto === "icmp" ? "disabled" : ""}></td>
     <td><input data-k="source" value="${esc(r.source || "")}" placeholder="from anywhere" aria-label="Allowed source"></td>
     <td><input data-k="comment" value="${esc(r.comment || "")}" placeholder="note" aria-label="Note"></td>
     <td><button class="btn danger" data-fwdel title="Remove rule">✕</button></td></tr>`).join("")
     : `<tr><td class="muted">No rules. With the firewall on, nothing can connect in (not even SSH).</td></tr>`;
-  const v = vms.find(x => x.name === mName);
-  $("#mFwHint").textContent = $("#mFwOn").checked && !fwRules.some(r => r.proto === "tcp" && /(^|,)22(,|$)/.test(r.ports || ""))
-    ? "Heads-up: without a rule for port 22 you can't SSH in — use the Console instead." : "";
-}
-function readFw(){
-  for (const tr of $("#mFwRules").querySelectorAll("tr[data-i]")) {
-    const r = fwRules[+tr.dataset.i];
-    for (const el of tr.querySelectorAll("[data-k]")) r[el.dataset.k] = el.value.trim();
+    hint.textContent = on.checked && !rules.some(r => r.proto === "tcp" && /(^|,)22(,|$)/.test(r.ports || ""))
+      ? "Heads-up: without a rule for port 22 you can't SSH in — use the Console instead." : "";
   }
+  function read(){
+    for (const tr of body.querySelectorAll("tr[data-i]")) {
+      const r = rules[+tr.dataset.i];
+      for (const el of tr.querySelectorAll("[data-k]")) r[el.dataset.k] = el.value.trim();
+    }
+  }
+  body.addEventListener("change", e => { if (e.target.dataset.k === "proto") { read(); draw(); } });
+  body.addEventListener("click", e => {
+    if (!e.target.closest("[data-fwdel]")) return;
+    read(); rules.splice(+e.target.closest("tr").dataset.i, 1); draw();
+  });
+  box.addEventListener("click", e => {
+    const b = e.target.closest("[data-fwp]"); if (!b) return;
+    read();
+    const add = {ssh: [{proto: "tcp", ports: "22", comment: "SSH"}], web: [{proto: "tcp", ports: "80,443", comment: "Web"}],
+      ping: [{proto: "icmp", comment: "Ping"}], custom: [{proto: "tcp", ports: ""}]}[b.dataset.fwp];
+    rules.push(...add.map(r => ({source: "", ...r})));
+    draw();
+    if (b.dataset.fwp === "custom") body.querySelector('tr:last-child [data-k="ports"]')?.focus();
+  });
+  on.onchange = draw;
+  save.onclick = async () => {
+    read(); save.disabled = true;
+    try {
+      const fw = await call("PUT", base() + "/firewall", {enabled: on.checked,
+        rules: rules.map(r => ({proto: r.proto, ports: r.proto === "icmp" ? "" : r.ports, source: r.source, comment: r.comment}))});
+      rules = fw.rules; on.checked = fw.enabled; draw();
+      toast(fw.enabled ? `Firewall on for ${name()}: ${fw.rules.length} rule(s)` : `Firewall off for ${name()}`);
+    } catch (err) { toast(err.message, true); }
+    save.disabled = false;
+  };
+  return {
+    async load(){
+      body.innerHTML = `<tr><td class="muted">Loading…</td></tr>`;
+      try { const fw = await call("GET", base() + "/firewall"); on.checked = fw.enabled; rules = fw.rules || []; }
+      catch (err) { toast(err.message, true); rules = []; }
+      draw();
+    },
+  };
 }
-$("#mFwRules").addEventListener("change", e => {
-  if (e.target.dataset.k === "proto") { readFw(); renderFw(); }
-});
-$("#mFwRules").addEventListener("click", e => {
-  if (!e.target.closest("[data-fwdel]")) return;
-  readFw(); fwRules.splice(+e.target.closest("tr").dataset.i, 1); renderFw();
-});
-$("#dlgManage").addEventListener("click", e => {
-  const b = e.target.closest("[data-fwp]"); if (!b) return;
-  readFw();
-  const add = {ssh: [{proto: "tcp", ports: "22", comment: "SSH"}], web: [{proto: "tcp", ports: "80,443", comment: "Web"}],
-    ping: [{proto: "icmp", comment: "Ping"}], custom: [{proto: "tcp", ports: ""}]}[b.dataset.fwp];
-  fwRules.push(...add.map(r => ({source: "", ...r})));
-  renderFw();
-  if (b.dataset.fwp === "custom") $("#mFwRules").querySelector('tr:last-child [data-k="ports"]')?.focus();
-});
-$("#mFwOn").onchange = renderFw;
-$("#mFwSave").onclick = async () => {
-  readFw();
-  const go = $("#mFwSave"); go.disabled = true;
-  try {
-    const fw = await call("PUT", `/vms/${encodeURIComponent(mName)}/firewall`, {enabled: $("#mFwOn").checked,
-      rules: fwRules.map(r => ({proto: r.proto, ports: r.proto === "icmp" ? "" : r.ports, source: r.source, comment: r.comment}))});
-    fwRules = fw.rules; $("#mFwOn").checked = fw.enabled; renderFw();
-    toast(fw.enabled ? `Firewall on for ${mName}: ${fw.rules.length} rule(s)` : `Firewall off for ${mName}`);
-  } catch (err) { toast(err.message, true); }
-  go.disabled = false;
-};
+const vmFw = fwPanel($("#mFwBox"), () => `/vms/${encodeURIComponent(mName)}`, () => mName, "VM");
+function loadFirewall(){ return vmFw.load(); }
 
 /* ---------- usage charts (inline SVG, no library) ---------- */
 const fmtPct = v => v.toFixed(v < 10 ? 1 : 0) + "%";
@@ -1695,22 +1700,41 @@ $("#acKeysGo").onclick = async () => {
 
 /* ---------- polling ---------- */
 let tick = 0;
-async function refresh(withHost){
+async function refresh(withHost, background){
   if (!token) return;
   try {
-    vms = (await call("GET", "/vms")).vms;
-    sshPorts = (await call("GET", "/ssh-ports").catch(() => ({}))).ports || {};
-    if (typeof loadCTs === "function") await loadCTs();
+    // independent lookups run side by side
+    const [v, sp] = await Promise.all([call("GET", "/vms"), call("GET", "/ssh-ports").catch(() => ({})),
+      typeof loadCTs === "function" ? loadCTs() : null]);
+    vms = v.vms; sshPorts = sp.ports || {};
     if (withHost || tick % 4 === 0 || !me) me = await call("GET", "/me");
     if (isAdmin() && (withHost || tick % 4 === 0)) { host = await call("GET", "/host").catch(() => null); await loadHostMetrics(); }
     if (withHost && !templates.length) templates = (await call("GET", "/templates").catch(() => ({templates: []}))).templates;
     if (!version) { const h = await fetch(API + "/health").then(r => r.json()).catch(() => ({})); version = h.version || ""; }
     if ($("#hVer")) $("#hVer").textContent = version ? "p8sd " + version : "";
-    render();
+    smoothRender(!background);
   } catch (err) { if (token && err.code !== 401) toast(err.message, true); }
   tick++;
 }
-function startPolling(){ stopPolling(); refresh(true); timer = setInterval(() => { if (!document.hidden) refresh(); }, 4000); }
+// Background polls only redraw when something changed, and never while a
+// menu is open or text is selected (the redraw would close/clear it).
+let lastSig = "", renderPending = false;
+function busyUI(){
+  if (document.querySelector("details.menu[open]")) return true;
+  const sel = window.getSelection && window.getSelection();
+  return !!(sel && !sel.isCollapsed && $("#app").contains(sel.anchorNode));
+}
+function smoothRender(force){
+  const sig = JSON.stringify([vms, sshPorts, typeof cts !== "undefined" ? cts : 0, me, host, hostPts && hostPts.length,
+    hostPts && hostPts[hostPts.length - 1]]);
+  if (!force && sig === lastSig && !renderPending) return;
+  if (!force && busyUI()) { renderPending = true; return; }
+  if (force) for (const m of document.querySelectorAll("details.menu[open]")) m.open = false;
+  lastSig = sig; renderPending = false;
+  render();
+}
+document.addEventListener("toggle", e => { if (renderPending && !busyUI()) smoothRender(true); }, true);
+function startPolling(){ stopPolling(); refresh(true); timer = setInterval(() => { if (!document.hidden) refresh(false, true); }, 4000); }
 function stopPolling(){ if (timer) clearInterval(timer); timer = null; }
 document.addEventListener("visibilitychange", () => { if (!document.hidden && token) refresh(true); });
 

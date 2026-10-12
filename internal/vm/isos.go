@@ -310,7 +310,7 @@ func (s *Service) UpgradeDomains(ctx context.Context) (needRestart []string, err
 			continue
 		}
 		sp, err := virt.ParseDomainXML(b)
-		if err != nil || sp.Video == virt.VideoModel {
+		if err != nil || (sp.Video == virt.VideoModel && sp.DefVersion >= virt.DefVersion) {
 			continue
 		}
 		unlock := s.lock(dom)

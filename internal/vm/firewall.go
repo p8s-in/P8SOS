@@ -80,6 +80,28 @@ func (s *Service) SetFirewall(ctx context.Context, name string, fw firewall.Sett
 	if _, err := s.state(ctx, Prefix+name); err != nil {
 		return firewall.Settings{}, err
 	}
+	return s.SetGuestFirewall(ctx, name, fw)
+}
+
+// GuestFirewall returns the firewall saved under key (a VM name, or
+// "ct:NAME" for a container). The caller checks that the guest exists.
+func (s *Service) GuestFirewall(key string) (firewall.Settings, error) {
+	fwMu.Lock()
+	defer fwMu.Unlock()
+	m, err := s.loadFirewalls()
+	if err != nil {
+		return firewall.Settings{}, err
+	}
+	fw := m[key]
+	if fw.Rules == nil {
+		fw.Rules = []firewall.Rule{}
+	}
+	return fw, nil
+}
+
+// SetGuestFirewall saves and applies the firewall under key. If the rules
+// can't be applied, nothing changes (no firewall that only looks on).
+func (s *Service) SetGuestFirewall(ctx context.Context, key string, fw firewall.Settings) (firewall.Settings, error) {
 	fw, err := firewall.Validate(fw)
 	if err != nil {
 		return firewall.Settings{}, fmt.Errorf("%w: %v", ErrInvalid, errors.Unwrap(err))
@@ -90,17 +112,22 @@ func (s *Service) SetFirewall(ctx context.Context, name string, fw firewall.Sett
 	if err != nil {
 		return firewall.Settings{}, err
 	}
-	old, had := m[name]
-	m[name] = fw
+	old, had := m[key]
+	m[key] = fw
 	if err := s.applyFirewalls(ctx, m); err != nil {
 		if had {
-			m[name] = old
+			m[key] = old
 		} else {
-			delete(m, name)
+			delete(m, key)
 		}
 		return firewall.Settings{}, fmt.Errorf("the firewall could not be switched on, nothing was changed: %w", err)
 	}
 	return fw, s.saveFirewalls(m)
+}
+
+// DropGuestFirewall forgets a deleted guest's firewall.
+func (s *Service) DropGuestFirewall(ctx context.Context, key string) error {
+	return s.dropFirewall(ctx, key)
 }
 
 // ApplyFirewalls rebuilds the nftables table from the saved settings (p8sd
@@ -134,6 +161,18 @@ func (s *Service) applyFirewalls(ctx context.Context, m map[string]firewall.Sett
 		}
 		if e.FW.Enabled || e.LockIP != "" {
 			list = append(list, e)
+		}
+	}
+	if s.OtherGuests != nil {
+		others, err := s.OtherGuests(ctx)
+		if err != nil {
+			return err
+		}
+		for _, e := range others {
+			e.FW = m[e.Name]
+			if e.FW.Enabled || e.LockIP != "" {
+				list = append(list, e)
+			}
 		}
 	}
 	return s.Firewall(ctx, list)

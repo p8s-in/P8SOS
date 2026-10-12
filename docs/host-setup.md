@@ -58,6 +58,20 @@ sudo systemctl enable --now p8sd
 journalctl -u p8sd -f
 ```
 
+## Performance tuning
+
+`install.sh` / `update.sh` run `scripts/tune.sh` (safe to run again: `sudo bash /usr/local/share/p8s/tune.sh`):
+
+| Setting | Why |
+|---|---|
+| ZFS ARC max = 10% of RAM (1-16 GB), `/etc/modprobe.d/zfs.conf` | the disk cache no longer takes the RAM your VMs need (a value you set yourself is kept) |
+| KSM on (`/etc/tmpfiles.d/p8s-ksm.conf`) | identical memory pages of similar VMs are shared: more VMs per GB |
+| `vhost_net` loaded at boot | VM networking handled in the kernel |
+| `vm.swappiness=10`, larger inotify/AIO limits (`/etc/sysctl.d/90-p8s.conf`) | running guests stay in RAM; many guests don't hit limits |
+
+New and re-defined Linux VMs also get an I/O thread, `io=native` and one disk/network queue per vCPU
+(up to 8). Existing VMs pick this up when they are powered off and started again.
+
 ## 5. Smoke test
 
 Follow the example session in [api.md](api.md). Then:

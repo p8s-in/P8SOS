@@ -13,7 +13,7 @@ cheap Linux servers (websites, bots, databases, VPNs). Windows or a custom kerne
 2. **+ Create CT** in the top bar: name, template, CPUs, RAM, disk, network, root password and/or SSH keys.
    CLI: `p8 ct create web2 1 512 8 --os debian-13 --root-password`.
 3. It shows in the sidebar (box icon) and in the **Containers** table: Console (a terminal in the browser),
-   Shutdown, Manage (resources, snapshots, password, owner), Reboot / Force off / Delete under **⋯**.
+   Shutdown, Manage (resources, snapshots, backups, firewall, SSH, password, owner), Reboot / Force off / Delete under **⋯**.
 4. SSH in with `ssh root@<ip>` (cloud-init installs and starts the SSH server on first boot).
 
 ## How it works
@@ -29,11 +29,14 @@ cheap Linux servers (websites, bots, databases, VPNs). Windows or a custom kerne
 | Autostart | containers marked "start with the server" are started by p8sd after a reboot |
 | Owners / quotas | same as VMs: customers see only theirs; a container counts as one server in the quota |
 
+| Backups | Manage → **Back up now**: processes frozen for an instant (`lxc-freeze`), ZFS snapshot, `zfs send` + zstd into `<backup dir>/_ct/NAME/`. **Restore as new…** brings it back as a new container (new MAC, hostname set); it can take the old name once the original is deleted |
+| Firewall | Manage → **Firewall**: the same rules as for VMs (SSH / Web / Ping / custom, optional source), in the same nftables table, matched by the container's MAC; saved as `ct:NAME` in `firewall.json` |
+
 Files: config `/var/lib/lxc/NAME/config` (written by p8sd), log `/var/lib/lxc/NAME/lxc.log`,
 list `/var/lib/p8s/containers.json`. Shell on the server: `p8 ct enter NAME`.
 
 ## Not yet (next steps)
 
-- Backups of containers (snapshots work), firewall per container, public IPs from pools
+- Container backups in the nightly schedule (backups are on demand for now), public IPs from pools
 - P8S Cloud plans for containers (customers can't create containers while priced plans exist)
 - Moving containers between servers (with clustering)

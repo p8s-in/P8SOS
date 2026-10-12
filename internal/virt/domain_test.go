@@ -10,7 +10,7 @@ func TestDomainXMLRoundTrip(t *testing.T) {
 	in := Spec{
 		Name: "p8s-web1", UUID: "4b1c2d3e-0000-4000-8000-000000000001", VCPUs: 2, MemoryMiB: 2048,
 		DiskGB: 20, DiskPath: "/dev/zvol/tank/vms/p8s-web1-disk0", SeedISO: "/var/lib/p8s/seeds/p8s-web1-seed.iso",
-		Bridge: "vmbr0", MAC: "52:54:00:aa:bb:cc", Template: "debian-13", CreatedAt: "2026-10-10T12:00:00Z", Video: VideoModel,
+		Bridge: "vmbr0", MAC: "52:54:00:aa:bb:cc", Template: "debian-13", CreatedAt: "2026-10-10T12:00:00Z", Video: VideoModel, DefVersion: DefVersion,
 	}
 	b, err := DomainXML(in)
 	if err != nil {
@@ -85,7 +85,7 @@ func TestDomainXMLInstallISO(t *testing.T) {
 	for _, os := range []string{"linux", "windows"} {
 		in := Spec{Name: "p8s-win1", UUID: "4b1c2d3e-0000-4000-8000-000000000002", VCPUs: 2, MemoryMiB: 4096, DiskGB: 64,
 			DiskPath: "/dev/zvol/tank/vms/p8s-win1-disk0", InstallISO: "/var/lib/p8s/isos/install.iso", OSType: os,
-			Bridge: "virbr0", MAC: "52:54:00:aa:bb:dd", Template: "iso:install.iso", CreatedAt: "2026-10-12T12:00:00Z", Video: VideoModel}
+			Bridge: "virbr0", MAC: "52:54:00:aa:bb:dd", Template: "iso:install.iso", CreatedAt: "2026-10-12T12:00:00Z", Video: VideoModel, DefVersion: DefVersion}
 		b, err := DomainXML(in)
 		if err != nil {
 			t.Fatal(err)
@@ -157,6 +157,27 @@ func TestWindows11Domain(t *testing.T) {
 		x, _ = DomainXML(s)
 		if strings.Contains(string(x), "efi") || strings.Contains(string(x), "<tpm") {
 			t.Fatalf("%s got UEFI/TPM:\n%s", os, x)
+		}
+	}
+}
+
+func TestFastIO(t *testing.T) {
+	s := Spec{Name: "p8s-fast", VCPUs: 4, MemoryMiB: 4096, DiskGB: 20, DiskPath: "/dev/zvol/tank/p8s/vms/p8s-fast-disk0",
+		Bridge: "virbr0", MAC: "52:54:00:aa:bb:01", Template: "debian-13", OSType: "linux"}
+	x, err := DomainXML(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`<iothreads>1</iothreads>`, `io="native"`, `iothread="1"`, `queues="4"`, `<driver name="vhost" queues="4">`} {
+		if !strings.Contains(string(x), want) {
+			t.Fatalf("linux missing %s in\n%s", want, x)
+		}
+	}
+	s.OSType = "windows"
+	x, _ = DomainXML(s)
+	for _, bad := range []string{"iothread", `io="native"`, "queues="} {
+		if strings.Contains(string(x), bad) {
+			t.Fatalf("windows got %s:\n%s", bad, x)
 		}
 	}
 }

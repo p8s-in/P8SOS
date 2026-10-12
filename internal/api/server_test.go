@@ -23,6 +23,7 @@ import (
 
 type fakeVMs struct {
 	fw      firewall.Settings
+	gfw     map[string]firewall.Settings
 	created vm.CreateRequest
 	sched   vm.Schedule
 }
@@ -400,4 +401,21 @@ func TestConsoleWebSocket(t *testing.T) {
 	if resp2.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("reused ticket: %d", resp2.StatusCode)
 	}
+}
+
+func (f *fakeVMs) GuestFirewall(key string) (firewall.Settings, error) { return f.gfw[key], nil }
+func (f *fakeVMs) SetGuestFirewall(_ context.Context, key string, fw firewall.Settings) (firewall.Settings, error) {
+	fw, err := firewall.Validate(fw)
+	if err != nil {
+		return fw, fmt.Errorf("%w: %v", vm.ErrInvalid, err)
+	}
+	if f.gfw == nil {
+		f.gfw = map[string]firewall.Settings{}
+	}
+	f.gfw[key] = fw
+	return fw, nil
+}
+func (f *fakeVMs) DropGuestFirewall(_ context.Context, key string) error {
+	delete(f.gfw, key)
+	return nil
 }
