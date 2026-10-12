@@ -2,6 +2,7 @@ package vm
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"sync"
@@ -198,10 +199,14 @@ func (d *fakeDisks) DestroyDisk(_ context.Context, vm string) error {
 }
 func (d *fakeDisks) SnapshotExists(context.Context, string) bool { return true }
 
-type fakeSeeds struct{ live map[string]bool }
+type fakeSeeds struct {
+	live map[string]bool
+	last cloudinit.Spec
+}
 
-func (s *fakeSeeds) Build(_ context.Context, vm string, _ cloudinit.Spec) (string, error) {
+func (s *fakeSeeds) Build(_ context.Context, vm string, sp cloudinit.Spec) (string, error) {
 	s.live[vm] = true
+	s.last = sp
 	return "/var/lib/p8s/seeds/" + vm + "-seed.iso", nil
 }
 func (s *fakeSeeds) Remove(vm string) error { delete(s.live, vm); return nil }
@@ -542,5 +547,38 @@ func TestConsoleAndPassword(t *testing.T) {
 	}
 	if _, err := svc.ConsoleAddr(ctx, "nope"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("console of missing VM: %v", err)
+	}
+}
+
+func TestRootPassword(t *testing.T) {
+	ctx := context.Background()
+	svc, _, _, seeds := newSvc()
+	v, err := svc.Create(ctx, CreateRequest{Name: "vps1", Template: "debian-13", RootPassword: "Sup3r-secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(seeds.last.RootPasswordHash, "$6$") || !seeds.last.RootSSHPassword {
+		t.Fatalf("seed spec %+v", seeds.last)
+	}
+	if b, _ := json.Marshal(v); strings.Contains(string(b), "Sup3r") || strings.Contains(string(b), "$6$") {
+		t.Fatalf("password leaked in VM object: %s", b)
+	}
+	off := false
+	if _, err := svc.Create(ctx, CreateRequest{Name: "vps2", Template: "debian-13", RootPassword: "Sup3r-secret", SSHPasswordAuth: &off}); err != nil || seeds.last.RootSSHPassword {
+		t.Fatalf("ssh password opt-out: %v %+v", err, seeds.last)
+	}
+	if _, err := svc.Create(ctx, CreateRequest{Name: "vps3", Template: "debian-13"}); err != nil || seeds.last.RootPasswordHash != "" {
+		t.Fatalf("no password: %v %+v", err, seeds.last)
+	}
+	on := true
+	for _, bad := range []CreateRequest{
+		{Name: "bad1", Template: "debian-13", RootPassword: "short"},
+		{Name: "bad2", Template: "debian-13", RootPassword: "two\nlines-here"},
+		{Name: "bad3", Template: "debian-13", RootPassword: "longenough", UserData: "#cloud-config\n"},
+		{Name: "bad4", Template: "debian-13", SSHPasswordAuth: &on},
+	} {
+		if _, err := svc.Create(ctx, bad); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: want invalid, got %v", bad.Name, err)
+		}
 	}
 }

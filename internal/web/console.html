@@ -51,9 +51,9 @@ textarea{min-height:80px;font-family:ui-monospace,Menlo,Consolas,monospace}
 
 <dialog id="dlgPw"><form method="dialog" id="fPw">
   <h2>Set login password</h2>
-  <div class="sub">VMs are created with SSH keys only, so no account has a password. Set one here to log in on
-    this screen. Needs the VM to be fully booted.</div>
-  <label for="pwUser">User</label><input id="pwUser" value="debian" autocomplete="off" pattern="[a-z_][a-z0-9_\-]{0,31}" required>
+  <div class="sub">Sets (or changes) an account's password so you can log in on this screen.
+    Needs the VM to be fully booted.</div>
+  <label for="pwUser">User</label><input id="pwUser" value="root" autocomplete="off" pattern="[a-z_][a-z0-9_\-]{0,31}" required>
   <label for="pw1">Password</label><input id="pw1" type="password" minlength="8" maxlength="128" autocomplete="new-password" required>
   <label for="pw2">Repeat password</label><input id="pw2" type="password" minlength="8" maxlength="128" autocomplete="new-password" required>
   <div class="dlg-actions"><button class="btn" value="cancel" formnovalidate>Cancel</button><button class="btn primary" value="ok">Set password</button></div>

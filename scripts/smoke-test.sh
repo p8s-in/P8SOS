@@ -82,8 +82,10 @@ step "3. create $NAME"
 keys='[]'
 if [[ -f $PUBKEY ]]; then keys=$(jq -Rc '[.]' <"$PUBKEY"); else echo "  (no $PUBKEY; SSH check will be skipped)"; fi
 t0=$(date +%s)
-api POST /vms '{"name":"'"$NAME"'","template":"'"$TEMPLATE"'","vcpus":2,"memory_mib":1024,"disk_gb":10,"ssh_keys":'"$keys"'}'
-expect "create VM" 201
+api POST /vms '{"name":"x'"$NAME"'","template":"'"$TEMPLATE"'","root_password":"short"}'; expect "too-short root password" 400
+api POST /vms '{"name":"'"$NAME"'","template":"'"$TEMPLATE"'","vcpus":2,"memory_mib":1024,"disk_gb":10,"ssh_keys":'"$keys"',"root_password":"Smoke-root-pw-1"}'
+expect "create VM (with root password)" 201
+[[ $BODY != *Smoke-root-pw-1* ]] && ok "password not echoed by the API" || bad "API response contains the password"
 echo "        took $(( $(date +%s) - t0 ))s"
 [[ $(jq -r .state <<<"$BODY") == running ]] && ok "state is running" || bad "state: $BODY"
 api POST /vms '{"name":"'"$NAME"'","template":"'"$TEMPLATE"'"}'; expect "duplicate name" 409
@@ -124,6 +126,9 @@ if [[ -n $ip && $keys != '[]' ]]; then
     [[ ${g[0]} == "$NAME" ]] && ok "hostname is $NAME" || bad "hostname is '${g[0]}'"
     sz=${g[1]//[^0-9]/}; [[ $sz -ge 9 ]] && ok "root fs grew to ${sz}G" || bad "root fs is ${sz}G, expected ~10G"
     [[ ${g[2]} == active ]] && ok "qemu-guest-agent active" || bad "qemu-guest-agent: ${g[2]:-unknown}"
+    r=$(ssh "${ssh_opts[@]}" "debian@$ip" 'sudo getent shadow root | cut -d: -f2 | cut -c1-3; sudo sshd -T 2>/dev/null | grep -i "^permitrootlogin"' 2>/dev/null)
+    [[ $(head -1 <<<"$r") == '$6$' ]] && ok "root password set (SHA-512 hash in /etc/shadow)" || bad "root password not set: $r"
+    [[ $(tail -1 <<<"$r") == "permitrootlogin yes" ]] && ok "SSH allows root password login" || bad "sshd: $(tail -1 <<<"$r")"
 
     # Reboot: the guest's boot_id changes once it has really restarted.
     b1=$(ssh "${ssh_opts[@]}" "debian@$ip" cat /proc/sys/kernel/random/boot_id 2>/dev/null)

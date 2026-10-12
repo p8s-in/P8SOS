@@ -83,9 +83,14 @@ type CreateRequest struct {
 	DiskGB    int      `json:"disk_gb"`
 	SSHKeys   []string `json:"ssh_keys"`
 	UserData  string   `json:"user_data,omitempty"`
-	Network   string   `json:"network,omitempty"`   // "nat" (default) or "lan"
-	Start     *bool    `json:"start,omitempty"`     // default true
-	Autostart *bool    `json:"autostart,omitempty"` // default true: start when the host boots
+	Network   string   `json:"network,omitempty"` // "nat" (default) or "lan"
+	// RootPassword sets root's password (8-128 chars). It is stored only as a
+	// SHA-512 crypt hash inside the VM's seed and never returned by the API.
+	RootPassword string `json:"root_password,omitempty"`
+	// SSHPasswordAuth allows SSH logins as root with RootPassword (default true when one is set).
+	SSHPasswordAuth *bool `json:"ssh_password_auth,omitempty"`
+	Start           *bool `json:"start,omitempty"`     // default true
+	Autostart       *bool `json:"autostart,omitempty"` // default true: start when the host boots
 }
 
 // Network names a VM can be attached to.
@@ -180,6 +185,16 @@ func (s *Service) validate(r *CreateRequest) (config.Template, error) {
 	default:
 		errs = append(errs, `network must be "nat" or "lan"`)
 	}
+	if r.RootPassword != "" {
+		if len(r.RootPassword) < 8 || len(r.RootPassword) > 128 || strings.ContainsAny(r.RootPassword, "\n\r\x00") {
+			errs = append(errs, "root_password must be 8-128 characters on one line")
+		}
+		if r.UserData != "" {
+			errs = append(errs, "root_password can't be combined with user_data (set the password in your cloud-config)")
+		}
+	} else if r.SSHPasswordAuth != nil && *r.SSHPasswordAuth {
+		errs = append(errs, "ssh_password_auth needs a root_password")
+	}
 	if r.UserData != "" && !strings.HasPrefix(r.UserData, "#cloud-config") {
 		errs = append(errs, "user_data must start with #cloud-config")
 	}
@@ -234,9 +249,12 @@ func (s *Service) Create(ctx context.Context, r CreateRequest) (VM, error) {
 	if len(keys) == 0 {
 		keys = s.SSHKeys
 	}
-	seed, err := s.Seeds.Build(ctx, dom, cloudinit.Spec{
-		InstanceID: uuid, Hostname: r.Name, SSHKeys: keys, UserData: r.UserData,
-	})
+	ci := cloudinit.Spec{InstanceID: uuid, Hostname: r.Name, SSHKeys: keys, UserData: r.UserData}
+	if r.RootPassword != "" {
+		ci.RootPasswordHash = cloudinit.HashPassword(r.RootPassword)
+		ci.RootSSHPassword = r.SSHPasswordAuth == nil || *r.SSHPasswordAuth
+	}
+	seed, err := s.Seeds.Build(ctx, dom, ci)
 	if err != nil {
 		rollback()
 		return VM{}, err

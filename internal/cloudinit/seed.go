@@ -16,6 +16,10 @@ type Spec struct {
 	Hostname   string
 	SSHKeys    []string
 	UserData   string // optional raw #cloud-config; replaces the generated one
+	// RootPasswordHash ($6$ crypt) sets root's password; empty = root stays locked.
+	RootPasswordHash string
+	// RootSSHPassword also allows SSH logins as root with that password.
+	RootSSHPassword bool
 }
 
 type Builder struct {
@@ -81,7 +85,21 @@ func UserData(s Spec) string {
 			fmt.Fprintf(&sb, "  - %q\n", strings.TrimSpace(k))
 		}
 	}
+	if s.RootPasswordHash != "" {
+		// Like a VPS: root gets the chosen password (and the SSH keys).
+		sb.WriteString("disable_root: false\n")
+		fmt.Fprintf(&sb, "chpasswd:\n  expire: false\n  users:\n    - {name: root, password: %q, type: hash}\n", s.RootPasswordHash)
+		if s.RootSSHPassword {
+			sb.WriteString("ssh_pwauth: true\n")
+			sb.WriteString("write_files:\n  - path: /etc/ssh/sshd_config.d/10-p8s-root.conf\n    permissions: '0644'\n" +
+				"    content: |\n      # P8S OS: root may log in over SSH with its password (chosen when the VM was created). Listed first so it wins.\n" +
+				"      PermitRootLogin yes\n      PasswordAuthentication yes\n")
+		}
+	}
 	sb.WriteString("package_update: true\npackages:\n  - qemu-guest-agent\n")
 	sb.WriteString("runcmd:\n  - [systemctl, enable, --now, qemu-guest-agent]\n")
+	if s.RootSSHPassword && s.RootPasswordHash != "" {
+		sb.WriteString("  - [systemctl, reload-or-restart, ssh]\n")
+	}
 	return sb.String()
 }

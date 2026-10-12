@@ -86,6 +86,13 @@ p8 resize web1 cpus=4 ram=4096 disk=40
 In the dashboard: **Manage** on a VM. Resizing and rolling back need the VM stopped;
 `p8` stops and restarts it for you after asking.
 
+## Root password (like a VPS)
+
+When creating a VM you can set a **root password** (dashboard: *Root password* fields; command line:
+`p8 create web3 2 2048 20 --root-password`). By default SSH login as root with that password is
+allowed (`ssh root@<VM IP>`); untick the box for console-only. Change any password later:
+dashboard **Manage → Change password**, or `p8 passwd web3` (root) / `p8 passwd web3 debian`.
+
 ## 8. Console (the VM's screen in your browser)
 
 Dashboard → **Console** on a running VM opens its screen in a new tab: you see it boot and can

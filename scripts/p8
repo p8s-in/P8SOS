@@ -17,9 +17,10 @@ usage() {
 p8 — manage P8S OS virtual machines
 
   p8 list                          show all VMs
-  p8 create NAME [CPUS] [RAM_MB] [DISK_GB] [--lan]
+  p8 create NAME [CPUS] [RAM_MB] [DISK_GB] [--lan] [--root-password]
                                    make a VM (default 1 CPU, 1024 MB, template size)
                                    --lan: on your home network, IP from your router
+                                   --root-password: asks for a root password (SSH login allowed)
   p8 show NAME                     details of one VM
   p8 start NAME                    power on
   p8 stop NAME                     shut down politely (like pressing the power button)
@@ -32,6 +33,7 @@ p8 — manage P8S OS virtual machines
   p8 snaps NAME                    list snapshots
   p8 rollback NAME SNAPNAME        undo everything since that snapshot (asks first)
   p8 unsnap NAME SNAPNAME          delete a snapshot
+  p8 passwd NAME [USER]            set/change a password inside the VM (default user root)
   p8 ip NAME                       the VM's IP address
   p8 ssh NAME                      log into the VM as user 'debian'
   p8 console NAME                  serial console (exit with Ctrl+])
@@ -71,6 +73,16 @@ call() {
 # The API reports the IP (from libvirt DHCP leases / guest agent / ARP).
 vm_ip() { call GET "/vms/$1" 2>/dev/null | jq -r '.ip // empty'; }
 
+# ask_password PROMPT -> prints the password (asked twice, hidden)
+ask_password() {
+  local a b
+  read -r -s -p "$1: " a; echo >&2
+  read -r -s -p "repeat: " b; echo >&2
+  [[ $a == "$b" ]] || { red "the passwords don't match"; return 1; }
+  (( ${#a} >= 8 )) || { red "use at least 8 characters"; return 1; }
+  printf '%s' "$a"
+}
+
 vm_state() { call GET "/vms/$1" 2>/dev/null | jq -r '.state // empty'; }
 
 # stop_for NAME WHY: make sure the VM is stopped (asks first). Sets WAS_RUNNING.
@@ -109,8 +121,8 @@ case $cmd in
     table <<<"$body" ;;
 
   create|new)
-    net=nat; args=()
-    for a in "$@"; do case $a in --lan) net=lan ;; --nat) net=nat ;; *) args+=("$a") ;; esac; done
+    net=nat; args=(); askpw=0
+    for a in "$@"; do case $a in --lan) net=lan ;; --nat) net=nat ;; --root-password|--password) askpw=1 ;; *) args+=("$a") ;; esac; done
     set -- "${args[@]}"
     need "${1:-}"
     keys='[]'
@@ -118,11 +130,16 @@ case $cmd in
     req=$(jq -nc --arg n "$1" --argjson k "$keys" --arg c "${2:-0}" --arg m "${3:-0}" --arg d "${4:-0}" \
       --arg net "$net" \
       '{name:$n, template:"debian-13", vcpus:($c|tonumber), memory_mib:($m|tonumber), disk_gb:($d|tonumber), ssh_keys:$k, network:$net}')
+    if (( askpw )); then
+      pw=$(ask_password "root password for $1") || exit 1
+      req=$(jq -c --arg p "$pw" '. + {root_password: $p, ssh_password_auth: true}' <<<"$req")
+    fi
     echo "Creating $1 ..."
     body=$(call POST /vms "$req") || exit 1
     green "✔ $1 is $(jq -r .state <<<"$body") ($(jq -r '"\(.vcpus) CPU, \(.memory_mib) MB, \(.disk_gb) GB, network \(.network)"' <<<"$body"))"
     echo "  It needs ~30-60 s to boot. Then:  p8 ssh $1"
     [[ $net == lan ]] && echo "  Its IP comes from your router; other computers at home can reach it directly."
+    (( askpw )) && echo "  Log in as root with your password: on the console, or  ssh root@<its IP>"
     true ;;
 
   show|get)
@@ -199,6 +216,12 @@ case $cmd in
     need "${1:-}"; [[ -n ${2:-} ]] || { red "which snapshot?  p8 snaps $1"; exit 1; }
     call DELETE "/vms/$1/snapshots/$2" >/dev/null || exit 1
     green "✔ snapshot $2 of $1 deleted" ;;
+
+  passwd|password)
+    need "${1:-}"; u=${2:-root}
+    pw=$(ask_password "new password for $u on $1") || exit 1
+    call POST "/vms/$1/password" "$(jq -nc --arg u "$u" --arg p "$pw" '{user:$u, password:$p}')" >/dev/null || exit 1
+    green "✔ password for $u on $1 changed" ;;
 
   ip)
     need "${1:-}"; ip=$(vm_ip "$1")

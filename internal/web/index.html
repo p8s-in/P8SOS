@@ -106,6 +106,13 @@ dialog.wide{width:min(620px,calc(100vw - 32px))}
       <option value="4096">4 GB</option><option value="8192">8 GB</option><option value="16384">16 GB</option></select></div>
     <div><label for="cDisk">Disk (GB)</label><input id="cDisk" type="number" min="1" value="10"></div>
   </div>
+  <label for="cPw">Root password <span class="muted">(optional)</span></label>
+  <div class="row" style="grid-template-columns:1fr 1fr">
+    <input id="cPw" type="password" minlength="8" maxlength="128" placeholder="8+ characters" autocomplete="new-password">
+    <input id="cPw2" type="password" minlength="8" maxlength="128" placeholder="repeat" autocomplete="new-password" aria-label="Repeat root password">
+  </div>
+  <label style="display:flex;gap:8px;align-items:center;font-weight:400;margin-top:8px"><input id="cPwSSH" type="checkbox" style="width:auto" checked> Allow SSH login as root with this password</label>
+  <div class="hint">Leave empty to log in with SSH keys only (safest). You can set or change passwords later under Manage.</div>
   <label for="cKeys">SSH public key <span class="muted">(optional)</span></label>
   <textarea id="cKeys" placeholder="ssh-ed25519 AAAA… — leave empty to use the host's default key"></textarea>
   <div class="dlg-actions">
@@ -138,6 +145,14 @@ dialog.wide{width:min(620px,calc(100vw - 32px))}
   </div>
   <div class="hint">Disks can only grow. The VM's filesystem grows to the new size when it boots.</div>
   <div class="inline"><span class="spacer"></span><button class="btn primary" id="mRzGo">Apply</button></div>
+
+  <h3>Change password</h3>
+  <div class="sub" id="mPwHint">Sets a login password inside the VM (needs it running and fully booted).</div>
+  <div class="inline">
+    <input id="mPwUser" value="root" style="flex:0 0 110px" aria-label="User" autocomplete="off" pattern="[a-z_][a-z0-9_\-]{0,31}">
+    <input id="mPw" type="password" minlength="8" maxlength="128" placeholder="new password (8+)" autocomplete="new-password">
+    <button class="btn" id="mPwGo">Set</button>
+  </div>
 
   <h3>Snapshots</h3>
   <div class="sub">A snapshot saves the VM's disk as it is right now, in an instant. Take one before
@@ -300,7 +315,7 @@ async function openCreate(){
   $("#cTpl").innerHTML = templates.map(t => `<option value="${esc(t.name)}" data-min="${t.min_disk_gb}">${esc(t.name)}</option>`).join("");
   const min = templates[0]?.min_disk_gb || 1;
   $("#cDisk").min = min; if (+$("#cDisk").value < min) $("#cDisk").value = Math.max(10, min);
-  $("#cName").value = ""; $("#cKeys").value = "";
+  $("#cName").value = ""; $("#cKeys").value = ""; $("#cPw").value = $("#cPw2").value = ""; $("#cPwSSH").checked = true;
   host = await call("GET", "/host").catch(() => host);
   const lan = !!host?.networks?.includes("lan");
   $("#cNet").querySelector('[value="lan"]').disabled = !lan;
@@ -322,10 +337,13 @@ $("#fCreate").onsubmit = async e => {
   e.preventDefault();
   const name = $("#cName").value.trim();
   const keys = $("#cKeys").value.split("\n").map(s => s.trim()).filter(Boolean);
+  const pw = $("#cPw").value;
+  if (pw !== $("#cPw2").value) return toast("The root passwords don't match", true);
   const go = $("#cGo"); go.disabled = true; go.textContent = "Creating…";
   try {
     await call("POST", "/vms", {name, template: $("#cTpl").value, vcpus: +$("#cCpu").value,
-      memory_mib: +$("#cMem").value, disk_gb: +$("#cDisk").value, ssh_keys: keys, network: $("#cNet").value});
+      memory_mib: +$("#cMem").value, disk_gb: +$("#cDisk").value, ssh_keys: keys, network: $("#cNet").value,
+      ...(pw ? {root_password: pw, ssh_password_auth: $("#cPwSSH").checked} : {})});
     $("#dlgCreate").close(); toast(`${name} created — it gets an IP in ~30-60 s`); refresh();
   } catch (err) { toast(err.message, true); }
   go.disabled = false; go.textContent = "Create";
@@ -355,7 +373,7 @@ async function openManage(name){
   mName = name; mVM = null; snaps = [];
   const v = vms.find(x => x.name === name);
   $("#mCpu").value = v.vcpus; $("#mMem").value = v.memory_mib; $("#mDisk").value = v.disk_gb; $("#mDisk").min = v.disk_gb;
-  $("#mSnapName").value = "";
+  $("#mSnapName").value = ""; $("#mPw").value = "";
   $("#mTitle").textContent = name; $("#mSnaps").dataset.key = ""; $("#mRzHint").dataset.st = "";
   renderManage();
   $("#dlgManage").showModal();
@@ -374,6 +392,8 @@ function renderManage(){
   if ($("#mRzHint").dataset.st !== v.state + mName) $("#mRzHint").innerHTML = stopped ? "Change CPUs, memory or disk size. Takes effect when you start the VM."
     : `Stop the VM first to resize it. <button class="btn" data-m="stop">Stop ${esc(v.name)}</button>`;
   $("#mRzHint").dataset.st = v.state + mName;
+  $("#mPwGo").disabled = !(v.state === "running");
+  $("#mPwHint").textContent = v.state === "running" ? "Sets a login password inside the VM (needs it fully booted)." : "Start the VM to change a password.";
   for (const id of ["#mCpu", "#mMem", "#mDisk", "#mRzGo"]) $(id).disabled = !stopped;
   if (mVM && mVM.disk_gb !== v.disk_gb) { $("#mDisk").value = v.disk_gb; $("#mDisk").min = v.disk_gb; }
   mVM = v;
@@ -438,6 +458,16 @@ $("#mRzGo").onclick = async () => {
   await refresh();
 };
 $("#mClose").onclick = () => $("#dlgManage").close();
+$("#mPwGo").onclick = async () => {
+  const user = $("#mPwUser").value.trim(), password = $("#mPw").value, go = $("#mPwGo");
+  if (password.length < 8) return toast("Passwords need at least 8 characters", true);
+  go.disabled = true;
+  try {
+    await call("POST", `/vms/${encodeURIComponent(mName)}/password`, {user, password});
+    toast(`Password for ${user} on ${mName} changed`); $("#mPw").value = "";
+  } catch (err) { toast(err.message, true); }
+  go.disabled = false;
+};
 
 /* ---------- polling ---------- */
 let tick = 0;

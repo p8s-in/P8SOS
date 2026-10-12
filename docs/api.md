@@ -100,6 +100,8 @@ host capacity for the dashboard. `networks` lists what new VMs can join.
 | ssh_keys    | no       | []                   | OpenSSH public keys                           |
 | user_data   | no       | generated            | must start with `#cloud-config`; replaces the generated config entirely |
 | network     | no       | nat                  | `nat` or `lan`; `lan` needs `sudo p8 lan-setup` once (see `GET /host` → `networks`) |
+| root_password | no     | none (root locked)   | 8–128 chars. Root gets this password (stored only as a SHA-512 crypt hash in the seed; never returned). Can't be combined with `user_data` |
+| ssh_password_auth | no | true if root_password | also allow `ssh root@vm` with that password (`PermitRootLogin yes`) |
 | start       | no       | true                 | define only when false                        |
 | autostart   | no       | true                 | start the VM when the host boots              |
 
