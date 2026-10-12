@@ -22,6 +22,7 @@ func TestDomainXMLRoundTrip(t *testing.T) {
 		`<source dev="/dev/zvol/tank/vms/p8s-web1-disk0">`, `<target dev="vda" bus="virtio">`,
 		`<source bridge="vmbr0">`, `listen="127.0.0.1"`, `xmlns="https://p8s.dev/xmlns/vm/1"`,
 		`org.qemu.guest_agent.0`,
+		`<log file="/var/log/libvirt/qemu/p8s-web1-console.log" append="off">`,
 	} {
 		if !strings.Contains(x, want) {
 			t.Errorf("xml missing %s\n%s", want, x)
@@ -61,5 +62,21 @@ func TestParseState(t *testing.T) {
 		if got := ParseState(in); got != want {
 			t.Errorf("%q: %s != %s", in, got, want)
 		}
+	}
+}
+
+func TestParseIfAddr(t *testing.T) {
+	out := ` Name       MAC address          Protocol     Address
+-------------------------------------------------------------------------------
+ vnet0      52:54:00:3a:91:c4    ipv4         192.168.122.57/24
+ vnet0      52:54:00:3a:91:c4    ipv6         fe80::5054:ff:fe3a:91c4/64
+ lo         00:00:00:00:00:00    ipv4         127.0.0.1/8
+`
+	got := ParseIfAddr(out)
+	if len(got) != 1 || got[0] != "192.168.122.57" {
+		t.Fatalf("got %v", got)
+	}
+	if ParseIfAddr("") != nil {
+		t.Fatal("empty output should give no IPs")
 	}
 }

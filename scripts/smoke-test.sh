@@ -9,7 +9,7 @@
 #               SLOW=1 (3x timeouts, for nested VirtualBox/VMware), IP_TIMEOUT, SSH_TIMEOUT, STOP_TIMEOUT
 set -uo pipefail
 
-URL=${P8S_URL:-http://127.0.0.1:8006/api/v1}
+URL=${P8S_URL:-https://127.0.0.1:8006/api/v1}  # self-signed cert: curl -k
 TOK=${P8S_TOKEN:-$(cat "$HOME/.p8s-token" 2>/dev/null || true)}
 [[ -n $TOK ]] || { echo "No API token: run install.sh, or export P8S_TOKEN=p8s_..." >&2; exit 2; }
 TEMPLATE=${TEMPLATE:-debian-13}
@@ -33,7 +33,7 @@ api() {
   local args=(-s -X "$1" -H "Authorization: Bearer $TOK" -w '\n%{http_code}')
   [[ -n ${3:-} ]] && args+=(-H 'Content-Type: application/json' -d "$3")
   local out
-  out=$(curl "${args[@]}" "$URL$2")
+  out=$(curl -k "${args[@]}" "$URL$2")
   CODE=${out##*$'\n'}
   BODY=${out%$'\n'*}
 }
@@ -57,9 +57,9 @@ sudo -v || exit 2
 echo "p8sd smoke test: url=$URL vm=$NAME template=$TEMPLATE timeouts(ip/ssh/stop)=${IP_TIMEOUT}/${SSH_TIMEOUT}/${STOP_TIMEOUT}s"
 
 step "1. health and auth"
-CODE=$(curl -s -o /dev/null -w '%{http_code}' "$URL/health"); expect "GET /health (no token)" 200
-CODE=$(curl -s -o /dev/null -w '%{http_code}' "$URL/vms"); expect "GET /vms without token" 401
-CODE=$(curl -s -o /dev/null -w '%{http_code}' -H 'Authorization: Bearer wrong' "$URL/vms"); expect "GET /vms with wrong token" 401
+CODE=$(curl -ks -o /dev/null -w '%{http_code}' "$URL/health"); expect "GET /health (no token)" 200
+CODE=$(curl -ks -o /dev/null -w '%{http_code}' "$URL/vms"); expect "GET /vms without token" 401
+CODE=$(curl -ks -o /dev/null -w '%{http_code}' -H 'Authorization: Bearer wrong' "$URL/vms"); expect "GET /vms with wrong token" 401
 api GET /templates; expect "GET /templates" 200
 jq -e --arg t "$TEMPLATE" '.templates[] | select(.name == $t)' <<<"$BODY" >/dev/null \
   && ok "template $TEMPLATE is configured" || { bad "template $TEMPLATE not in config: $BODY"; exit 1; }
@@ -92,16 +92,19 @@ origin=$(sudo zfs get -H -o value origin "$DATASET/$DOM-disk0" 2>/dev/null)
 vs=$(sudo zfs get -H -o value volsize "$DATASET/$DOM-disk0" 2>/dev/null)
 [[ $vs == 10G ]] && ok "zfs: volsize 10G" || bad "zfs: volsize is '$vs', want 10G"
 sudo test -f "$SEED_DIR/$DOM-seed.iso" && ok "seed ISO exists" || bad "seed ISO missing in $SEED_DIR"
+# (capture first: `cmd | grep -q` fails under pipefail when grep exits early)
+info=$(sudo virsh dominfo "$DOM" 2>/dev/null)
+grep -Eq '^Autostart:[[:space:]]+enable' <<<"$info" && ok "autostart on (starts with the host)" || bad "autostart not enabled"
+api GET "/vms/$NAME"; [[ $(jq -r .autostart <<<"$BODY") == true ]] && ok "API reports autostart" || bad "API autostart: $BODY"
 
 step "5. guest boots and cloud-init runs"
 ip=""
 for ((i = 0; i < IP_TIMEOUT; i += 5)); do
-  ip=$( { sudo virsh -q domifaddr "$DOM" 2>/dev/null; sudo virsh -q domifaddr "$DOM" --source arp 2>/dev/null; } \
-        | awk '$3 == "ipv4" {sub(/\/.*/, "", $4); print $4; exit}')
+  api GET "/vms/$NAME"; ip=$(jq -r '.ip // empty' <<<"$BODY")   # the API's own IP lookup
   [[ -n $ip ]] && break
   sleep 5
 done
-[[ -n $ip ]] && ok "guest got IP $ip" || bad "no IP after ${IP_TIMEOUT}s (try: sudo virsh console $DOM)"
+[[ -n $ip ]] && ok "API reports guest IP $ip" || bad "no IP after ${IP_TIMEOUT}s (boot log: p8 bootlog $NAME)"
 if [[ -n $ip && $keys != '[]' ]]; then
   ssh_opts=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -o BatchMode=yes -o LogLevel=ERROR)
   out=""
@@ -115,6 +118,16 @@ if [[ -n $ip && $keys != '[]' ]]; then
     [[ ${g[0]} == "$NAME" ]] && ok "hostname is $NAME" || bad "hostname is '${g[0]}'"
     sz=${g[1]//[^0-9]/}; [[ $sz -ge 9 ]] && ok "root fs grew to ${sz}G" || bad "root fs is ${sz}G, expected ~10G"
     [[ ${g[2]} == active ]] && ok "qemu-guest-agent active" || bad "qemu-guest-agent: ${g[2]:-unknown}"
+
+    # Reboot: the guest's boot_id changes once it has really restarted.
+    b1=$(ssh "${ssh_opts[@]}" "debian@$ip" cat /proc/sys/kernel/random/boot_id 2>/dev/null)
+    api POST "/vms/$NAME/reboot"; expect "reboot" 202
+    b2=""
+    for ((i = 0; i < SSH_TIMEOUT; i += 5)); do
+      sleep 5
+      b2=$(ssh "${ssh_opts[@]}" "debian@$ip" cat /proc/sys/kernel/random/boot_id 2>/dev/null) && [[ -n $b2 && $b2 != "$b1" ]] && break
+    done
+    [[ -n $b2 && $b2 != "$b1" ]] && ok "guest rebooted and is reachable again" || bad "guest did not come back after reboot"
   else
     bad "SSH to debian@$ip failed for ${SSH_TIMEOUT}s"
   fi
@@ -129,6 +142,7 @@ wait_state running 30 && ok "running again" || bad "state $(state)"
 api POST "/vms/$NAME/start"; expect "start again (idempotent)" 200
 api POST "/vms/$NAME/stop" '{"force":true}'; expect "force stop" 202
 [[ $(state) == stopped ]] && ok "stopped immediately" || bad "state $(state)"
+api POST "/vms/$NAME/reboot"; expect "reboot a stopped VM is refused" 409
 
 step "7. delete"
 if [[ ${KEEP:-0} == 1 ]]; then

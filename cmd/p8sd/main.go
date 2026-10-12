@@ -1,6 +1,6 @@
 // Command p8sd is the P8S OS management daemon.
 //
-//	p8sd serve [-config /etc/p8s/p8sd.json]   run the API server
+//	p8sd serve [-config /etc/p8s/p8sd.json]   run the API server + web dashboard
 //	p8sd token [-name admin]                  generate an API token
 //	p8sd version
 package main
@@ -26,9 +26,12 @@ import (
 	"p8sos/internal/cloudinit"
 	"p8sos/internal/config"
 	"p8sos/internal/execx"
+	"p8sos/internal/hostinfo"
 	"p8sos/internal/storage"
+	"p8sos/internal/tlsutil"
 	"p8sos/internal/virt"
 	"p8sos/internal/vm"
+	"p8sos/internal/web"
 )
 
 var version = "0.1.0-dev" // overridden by -ldflags "-X main.version=..."
@@ -76,6 +79,7 @@ func serve(args []string) error {
 		Templates: cfg.Templates,
 		Bridge:    cfg.Bridge,
 		Limits:    vm.Limits{MaxVCPUs: cfg.MaxVCPUs, MaxMemoryMiB: cfg.MaxMemoryMiB, MaxDiskGB: cfg.MaxDiskGB},
+		SSHKeys:   cfg.SSHKeys,
 		Log:       log,
 	}
 
@@ -91,10 +95,17 @@ func serve(args []string) error {
 		Addr: cfg.Listen,
 		Handler: (&api.Server{
 			VMs: svc, Templates: cfg.Templates, Tokens: cfg.Tokens, Version: version, Log: log,
+			Host: func(ctx context.Context) any { return hostinfo.Collect(ctx, run, cfg.VMDataset) },
+			UI:   web.Handler(),
 		}).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		// VM create can take a while (clone + seed + define + start).
 		WriteTimeout: 5 * time.Minute,
+	}
+	if cfg.TLSCert == "" && cfg.TLSAuto {
+		if cfg.TLSCert, cfg.TLSKey, err = tlsutil.Ensure(filepath.Join(cfg.DataDir, "tls")); err != nil {
+			return fmt.Errorf("self-signed TLS: %w", err)
+		}
 	}
 	errc := make(chan error, 1)
 	go func() {

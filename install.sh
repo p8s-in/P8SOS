@@ -8,6 +8,7 @@
 # Options (env): BRIDGE=vmbr0 to put VMs on your LAN instead of libvirt NAT (default virbr0)
 #                NEW_TOKEN=1 to issue a fresh API token
 set -euo pipefail
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH  # admin tools even under plain "su"
 
 REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 DEV=${1:-}
@@ -40,7 +41,8 @@ grep -Eq 'vmx|svm' /proc/cpuinfo || die "No hardware virtualization (VT-x/AMD-V)
 ok "CPU virtualization available"
 if [[ -n $DEV ]]; then
   [[ -b $DEV ]] || die "$DEV is not a disk. Run 'lsblk' to find the empty one (e.g. /dev/sdb, /dev/nvme0n2)."
-  findmnt -rno SOURCE | grep -q "^$DEV" && die "$DEV is in use (mounted). Pick the EMPTY disk."
+  mounted=$(findmnt -rno SOURCE)   # capture first: `cmd | grep -q` misfires under pipefail
+  grep -q "^$DEV" <<<"$mounted" && die "$DEV is in use (mounted). Pick the EMPTY disk."
   ok "storage disk $DEV"
 else
   ok "no disk given: will use a 64 GB file pool (testing only)"
@@ -117,6 +119,12 @@ ok "installed /usr/local/bin/p8sd and the 'p8' command"
 
 # ---------------------------------------------------------------------------
 say "Writing config and API token"
+if [[ ! -f $USER_HOME/.ssh/id_ed25519.pub ]]; then
+  sudo -u "$USER_NAME" mkdir -p "$USER_HOME/.ssh"
+  sudo -u "$USER_NAME" ssh-keygen -q -t ed25519 -N "" -f "$USER_HOME/.ssh/id_ed25519"
+  ok "created SSH key $USER_HOME/.ssh/id_ed25519 (VMs will trust it)"
+fi
+PUBKEY_LINE=$(cat "$USER_HOME/.ssh/id_ed25519.pub")
 have_cfg=0
 if [[ ${NEW_TOKEN:-0} != 1 && -s $TOKEN_FILE && -f $CONF ]] &&
    jq -e '.tokens[0].sha256 | test("^[0-9a-f]{64}$")' "$CONF" >/dev/null 2>&1; then
@@ -128,9 +136,9 @@ if (( ! have_cfg )); then
   T=$(p8sd token -name admin -json)
   mem_mib=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)
   jq -n --argjson t "$T" --arg br "$BRIDGE" --arg snap "$SNAP" --argjson gb "$MIN_GB" \
-        --argjson cpus "$(nproc)" --argjson mem "$mem_mib" --arg ds "$POOL/p8s/vms" '{
-    listen: "127.0.0.1:8006", data_dir: "/var/lib/p8s", libvirt_uri: "qemu:///system",
-    vm_dataset: $ds, bridge: $br,
+        --argjson cpus "$(nproc)" --argjson mem "$mem_mib" --arg ds "$POOL/p8s/vms" --arg key "$PUBKEY_LINE" '{
+    listen: "0.0.0.0:8006", tls_auto: true, data_dir: "/var/lib/p8s", libvirt_uri: "qemu:///system",
+    vm_dataset: $ds, bridge: $br, default_ssh_keys: [$key],
     max_vcpus: $cpus, max_memory_mib: $mem, max_disk_gb: 200,
     tokens: [{name: $t.name, sha256: $t.sha256}],
     templates: [{name: "debian-13", snapshot: $snap, min_disk_gb: $gb, os_variant: "debian13"}]
@@ -141,10 +149,13 @@ if (( ! have_cfg )); then
   ok "config $CONF"
   ok "token saved to $TOKEN_FILE (only $USER_NAME can read it)"
 fi
-if [[ ! -f $USER_HOME/.ssh/id_ed25519.pub ]]; then
-  sudo -u "$USER_NAME" mkdir -p "$USER_HOME/.ssh"
-  sudo -u "$USER_NAME" ssh-keygen -q -t ed25519 -N "" -f "$USER_HOME/.ssh/id_ed25519"
-  ok "created SSH key $USER_HOME/.ssh/id_ed25519 (VMs will trust it)"
+# Upgrade older configs: dashboard on the network over HTTPS, host user's key as default.
+if ! jq -e '.tls_auto == true and .listen == "0.0.0.0:8006" and (.default_ssh_keys | length > 0)' "$CONF" >/dev/null 2>&1; then
+  tmp=$(mktemp)
+  jq --arg key "$PUBKEY_LINE" '.listen = "0.0.0.0:8006" | .tls_auto = true
+      | .default_ssh_keys = ((.default_ssh_keys // []) + [$key] | unique)' "$CONF" > "$tmp" && mv "$tmp" "$CONF"
+  chmod 0600 "$CONF"
+  ok "web dashboard enabled (HTTPS on port 8006)"
 fi
 
 # ---------------------------------------------------------------------------
@@ -153,15 +164,27 @@ since=$(date "+%Y-%m-%d %H:%M:%S")
 systemctl daemon-reload
 systemctl enable p8sd >/dev/null 2>&1
 systemctl restart p8sd
-for _ in $(seq 20); do curl -fs http://127.0.0.1:8006/api/v1/health >/dev/null && break; sleep 0.5; done
-curl -fs http://127.0.0.1:8006/api/v1/health >/dev/null || { journalctl -u p8sd -n 20 --no-pager; die "p8sd did not start"; }
-journalctl -u p8sd --since "$since" --no-pager | grep -q "snapshot missing" && die "p8sd can't see the template snapshot"
-ok "p8sd running: $(curl -fs http://127.0.0.1:8006/api/v1/health)"
+for _ in $(seq 20); do curl -kfs https://127.0.0.1:8006/api/v1/health >/dev/null && break; sleep 0.5; done
+curl -kfs https://127.0.0.1:8006/api/v1/health >/dev/null || { journalctl -u p8sd -n 20 --no-pager; die "p8sd did not start"; }
+plog=$(journalctl -u p8sd --since "$since" --no-pager)
+grep -q "snapshot missing" <<<"$plog" && die "p8sd can't see the template snapshot"
+ok "p8sd running: $(curl -kfs https://127.0.0.1:8006/api/v1/health)"
+
+# Installed from the ISO? Mark first-boot setup as done (also when it was finished by hand).
+if [[ -f /etc/systemd/system/p8s-firstboot.service ]]; then
+  touch /var/lib/p8s/.firstboot-done
+  systemctl disable p8s-firstboot.service >/dev/null 2>&1 || true
+  printf '\n  P8S OS (alpha) is ready.   Dashboard: https://\\4:8006\n\n  Log in as %s, then: p8 status | p8 create web1 | p8 ssh web1 | p8 test\n\n' "$USER_NAME" > /etc/issue
+fi
 
 trap - ERR
+HOST_IP=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i=1;i<NF;i++) if ($i=="src") print $(i+1)}')
 cat <<DONE
 
 $(printf '\033[1;32m')✔ P8S OS is installed.$(printf '\033[0m')
+
+  Web dashboard:  https://${HOST_IP:-<this-host-ip>}:8006
+                  (accept the certificate warning once; sign in with the token: cat ~/.p8s-token)
 
   Next, as $USER_NAME (no sudo):
 

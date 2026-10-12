@@ -2,3 +2,6 @@ bin/
 *.img
 *.iso
 *.qcow2
+dist/
+*.tar.gz
+.write-test

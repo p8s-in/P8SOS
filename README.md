@@ -18,6 +18,8 @@ internal/config/    JSON config
 internal/execx/     command runner (faked in tests)
 deploy/             systemd unit, example config
 install.sh          one-command host install
+update.sh           update an installed host from a newer copy of this folder
+iso/                alpha ISO: build script, installer answers, first-boot setup
 scripts/            p8 CLI, smoke test, host bootstrap, template import
 docs/               api.md, architecture.md, host-setup.md, roadmap.md
 ```
@@ -31,5 +33,6 @@ make build                # bin/p8sd, static binary
 
 **Try it: [USER.md](USER.md)** — Debian 13 VM in VMware/VirtualBox → `sudo bash install.sh /dev/sdb` → `p8 test`.
 Step-by-step manual version: [docs/testing-in-depth.md](docs/testing-in-depth.md).
+**Install on real hardware: [docs/iso.md](docs/iso.md)** — build the P8S OS alpha ISO, write it to USB, install.
 API reference: [docs/api.md](docs/api.md).
 Design decisions: [docs/architecture.md](docs/architecture.md).

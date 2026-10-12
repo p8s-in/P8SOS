@@ -3,7 +3,7 @@
 # Reads the API token from $P8S_TOKEN or ~/.p8s-token (written by install.sh).
 set -uo pipefail
 
-URL=${P8S_URL:-http://127.0.0.1:8006/api/v1}
+URL=${P8S_URL:-https://127.0.0.1:8006/api/v1}  # self-signed cert: curl -k
 TOKEN=${P8S_TOKEN:-$(cat "$HOME/.p8s-token" 2>/dev/null || true)}
 PUBKEY=${PUBKEY:-$HOME/.ssh/id_ed25519.pub}
 SSH_OPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR)
@@ -22,12 +22,15 @@ p8 — manage P8S OS virtual machines
   p8 show NAME                     details of one VM
   p8 start NAME                    power on
   p8 stop NAME                     shut down politely (like pressing the power button)
+  p8 reboot NAME                   restart the guest (like pressing reset politely)
   p8 kill NAME                     power off immediately
   p8 delete NAME                   remove VM and its disk (asks first; -y to skip)
   p8 ip NAME                       the VM's IP address
   p8 ssh NAME                      log into the VM as user 'debian'
   p8 console NAME                  serial console (exit with Ctrl+])
+  p8 bootlog NAME                  follow the VM's boot messages (Ctrl+C to stop)
   p8 templates                     available templates
+  p8 dashboard                     web dashboard address + how to sign in
   p8 status                        is p8sd healthy?
   p8 logs                          follow p8sd logs
   p8 test                          run the full automatic test
@@ -45,7 +48,7 @@ call() {
   local args=(-s -X "$1" -H "Authorization: Bearer $TOKEN" -w '\n%{http_code}')
   [[ -n ${3:-} ]] && args+=(-H 'Content-Type: application/json' -d "$3")
   local out code body
-  out=$(curl "${args[@]}" "$URL$2") || { red "Can't reach p8sd at $URL — is it running? (p8 status)"; exit 1; }
+  out=$(curl -k "${args[@]}" "$URL$2") || { red "Can't reach p8sd at $URL — is it running? (p8 status)"; exit 1; }
   code=${out##*$'\n'}; body=${out%$'\n'*}
   if (( code >= 400 )); then
     red "error ($code): $(jq -r '.error.message // .' <<<"$body" 2>/dev/null || echo "$body")"
@@ -54,15 +57,14 @@ call() {
   printf '%s' "$body"
 }
 
-vm_ip() {
-  { sudo virsh -q domifaddr "p8s-$1" 2>/dev/null; sudo virsh -q domifaddr "p8s-$1" --source arp 2>/dev/null; } |
-    awk '$3 == "ipv4" {sub(/\/.*/, "", $4); print $4; exit}'
-}
+# The API reports the IP (from libvirt DHCP leases / guest agent / ARP).
+vm_ip() { call GET "/vms/$1" 2>/dev/null | jq -r '.ip // empty'; }
 
 table() {
-  jq -r '(["NAME","STATE","CPUS","RAM_MB","DISK_GB","TEMPLATE","CREATED"]),
-         (.vms[] | [.name, .state, .vcpus, .memory_mib, .disk_gb, .template, .created_at]) | @tsv' |
-    awk -F'\t' '{printf "%-20s %-9s %-5s %-7s %-8s %-11s %s\n", $1,$2,$3,$4,$5,$6,$7}'
+  jq -r '(["NAME","STATE","IP","CPUS","RAM_MB","DISK_GB","AUTOSTART","TEMPLATE"]),
+         (.vms[] | [.name, .state, (if .ip == "" then "-" else .ip end), .vcpus, .memory_mib, .disk_gb,
+                    (if .autostart then "yes" else "no" end), .template]) | @tsv' |
+    awk -F'\t' '{printf "%-18s %-9s %-16s %-5s %-7s %-8s %-10s %s\n", $1,$2,$3,$4,$5,$6,$7,$8}'
 }
 
 cmd=${1:-help}; shift || true
@@ -85,10 +87,10 @@ case $cmd in
 
   show|get)
     need "${1:-}"; body=$(call GET "/vms/$1") || exit 1
-    jq . <<<"$body"
-    ip=$(vm_ip "$1"); [[ -n $ip ]] && echo "ip: $ip" ;;
+    jq . <<<"$body" ;;
 
   start)  need "${1:-}"; body=$(call POST "/vms/$1/start") || exit 1; green "✔ $1 $(jq -r .state <<<"$body")" ;;
+  reboot) need "${1:-}"; body=$(call POST "/vms/$1/reboot") || exit 1; green "✔ $1 is rebooting" ;;
   stop)   need "${1:-}"; body=$(call POST "/vms/$1/stop") || exit 1
           green "✔ $1 is shutting down ($(jq -r .state <<<"$body")). Check: p8 list" ;;
   kill)   need "${1:-}"; body=$(call POST "/vms/$1/stop" '{"force":true}') || exit 1; green "✔ $1 $(jq -r .state <<<"$body")" ;;
@@ -113,16 +115,26 @@ case $cmd in
     exec ssh "${SSH_OPTS[@]}" "debian@$ip" ;;
 
   console) need "${1:-}"; exec sudo virsh console "p8s-$1" ;;
+  bootlog) need "${1:-}"; exec sudo tail -n "${2:-60}" -f "/var/log/libvirt/qemu/p8s-$1-console.log" ;;
 
   templates)
     body=$(call GET /templates) || exit 1
     jq -r '.templates[] | "\(.name)  (min \(.min_disk_gb) GB)"' <<<"$body" ;;
 
   status)
-    if h=$(curl -fs "$URL/health"); then green "✔ p8sd is running ($(jq -r .version <<<"$h"))"
+    if h=$(curl -kfs "$URL/health"); then green "✔ p8sd is running ($(jq -r .version <<<"$h"))"
     else red "✘ p8sd is not answering at $URL"; systemctl --no-pager -n 5 status p8sd; exit 1; fi
     [[ -n $TOKEN ]] && call GET /vms >/dev/null && green "✔ token works" ;;
 
+  dashboard|ui|web)
+    ip=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i=1;i<NF;i++) if ($i=="src") print $(i+1)}')
+    green "Open in a browser on any computer on your network:"
+    echo "    https://${ip:-<this-host-ip>}:8006"
+    echo
+    echo "  1. Accept the certificate warning once (Advanced -> Proceed). The certificate is"
+    echo "     generated by this host, so browsers don't know it yet."
+    echo "  2. Sign in with your API token:"
+    echo "     $TOKEN" ;;
   logs) exec journalctl -u p8sd -f ;;
 
   test)
@@ -133,7 +145,7 @@ case $cmd in
   report)
     {
       echo "== versions";  p8sd version; uname -r; virsh --version; zfs version 2>&1 | head -1
-      echo "== health";    curl -s "$URL/health"; echo
+      echo "== health";    curl -ks "$URL/health"; echo
       echo "== config";    sudo sed -E 's/("sha256": *")[0-9a-f]+/\1<hidden>/' /etc/p8s/p8sd.json
       echo "== service";   systemctl --no-pager status p8sd | head -5
       echo "== logs";      sudo journalctl -u p8sd -n 80 --no-pager

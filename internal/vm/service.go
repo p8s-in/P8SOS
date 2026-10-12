@@ -49,6 +49,7 @@ type Service struct {
 	Templates []config.Template
 	Bridge    string
 	Limits    Limits
+	SSHKeys   []string // default keys for creates that pass none
 	Log       *slog.Logger
 
 	locks sync.Map // name -> *sync.Mutex; serializes ops per VM
@@ -64,6 +65,8 @@ type VM struct {
 	MemoryMiB int        `json:"memory_mib"`
 	DiskGB    int        `json:"disk_gb"`
 	MAC       string     `json:"mac"`
+	IP        string     `json:"ip"`        // first IPv4; empty while booting or stopped
+	Autostart bool       `json:"autostart"` // starts when the host boots
 	UUID      string     `json:"uuid"`
 	CreatedAt string     `json:"created_at"`
 }
@@ -76,7 +79,8 @@ type CreateRequest struct {
 	DiskGB    int      `json:"disk_gb"`
 	SSHKeys   []string `json:"ssh_keys"`
 	UserData  string   `json:"user_data,omitempty"`
-	Start     *bool    `json:"start,omitempty"` // default true
+	Start     *bool    `json:"start,omitempty"`     // default true
+	Autostart *bool    `json:"autostart,omitempty"` // default true: start when the host boots
 }
 
 func (s *Service) lock(name string) func() {
@@ -152,6 +156,12 @@ func (s *Service) Create(ctx context.Context, r CreateRequest) (VM, error) {
 	} else if !errors.Is(err, virt.ErrNoDomain) {
 		return VM{}, err
 	}
+	// No domain exists, so any disk or seed with this name is a leftover from a
+	// create that was interrupted (crash, power loss). Clear it so we can retry.
+	if err := s.Disks.DestroyDisk(ctx, dom); err != nil {
+		return VM{}, fmt.Errorf("remove leftover disk: %w", err)
+	}
+	s.logErr("remove leftover seed", s.Seeds.Remove(dom))
 	if !s.Disks.SnapshotExists(ctx, t.Snapshot) {
 		return VM{}, fmt.Errorf("template %q snapshot %s is missing on this host", t.Name, t.Snapshot)
 	}
@@ -172,8 +182,12 @@ func (s *Service) Create(ctx context.Context, r CreateRequest) (VM, error) {
 	undo = append(undo, func() { s.logErr("rollback disk", s.Disks.DestroyDisk(bg, dom)) })
 
 	uuid := newUUID()
+	keys := r.SSHKeys
+	if len(keys) == 0 {
+		keys = s.SSHKeys
+	}
 	seed, err := s.Seeds.Build(ctx, dom, cloudinit.Spec{
-		InstanceID: uuid, Hostname: r.Name, SSHKeys: r.SSHKeys, UserData: r.UserData,
+		InstanceID: uuid, Hostname: r.Name, SSHKeys: keys, UserData: r.UserData,
 	})
 	if err != nil {
 		rollback()
@@ -196,6 +210,11 @@ func (s *Service) Create(ctx context.Context, r CreateRequest) (VM, error) {
 		return VM{}, err
 	}
 	undo = append(undo, func() { s.logErr("rollback define", s.HV.Undefine(bg, dom)) })
+
+	if err := s.HV.SetAutostart(ctx, dom, r.Autostart == nil || *r.Autostart); err != nil {
+		rollback()
+		return VM{}, err
+	}
 
 	if r.Start == nil || *r.Start {
 		if err := s.HV.Start(ctx, dom); err != nil {
@@ -226,11 +245,19 @@ func (s *Service) get(ctx context.Context, dom string) (VM, error) {
 	if err != nil {
 		return VM{}, err
 	}
-	return VM{
+	v := VM{
 		Name: strings.TrimPrefix(spec.Name, Prefix), State: st, Template: spec.Template,
 		VCPUs: spec.VCPUs, MemoryMiB: spec.MemoryMiB, DiskGB: spec.DiskGB,
 		MAC: spec.MAC, UUID: spec.UUID, CreatedAt: spec.CreatedAt,
-	}, nil
+	}
+	// Best effort: these must never make GET/list fail.
+	v.Autostart, _ = s.HV.Autostart(ctx, dom)
+	if st == virt.Running {
+		if ips, _ := s.HV.Addresses(ctx, dom); len(ips) > 0 {
+			v.IP = ips[0]
+		}
+	}
+	return v, nil
 }
 
 func (s *Service) List(ctx context.Context) ([]VM, error) {
@@ -267,6 +294,23 @@ func (s *Service) Start(ctx context.Context, name string) (VM, error) {
 		if err := s.HV.Start(ctx, dom); err != nil {
 			return VM{}, err
 		}
+	}
+	return s.get(ctx, dom)
+}
+
+// Reboot asks a running guest to restart via ACPI.
+func (s *Service) Reboot(ctx context.Context, name string) (VM, error) {
+	dom := Prefix + name
+	defer s.lock(dom)()
+	st, err := s.state(ctx, dom)
+	if err != nil {
+		return VM{}, err
+	}
+	if st != virt.Running {
+		return VM{}, fmt.Errorf("%w: vm %q is %s, not running", ErrConflict, name, st)
+	}
+	if err := s.HV.Reboot(ctx, dom); err != nil {
+		return VM{}, err
 	}
 	return s.get(ctx, dom)
 }

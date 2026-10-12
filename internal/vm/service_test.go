@@ -16,6 +16,7 @@ type fakeHV struct {
 	doms      map[string][]byte
 	state     map[string]virt.State
 	failStart bool
+	auto      map[string]bool
 }
 
 func newHV() *fakeHV { return &fakeHV{doms: map[string][]byte{}, state: map[string]virt.State{}} }
@@ -75,6 +76,27 @@ func (h *fakeHV) XML(_ context.Context, n string) ([]byte, error) {
 	}
 	return x, nil
 }
+func (h *fakeHV) Reboot(_ context.Context, n string) error { return h.set(n, virt.Running) }
+func (h *fakeHV) SetAutostart(_ context.Context, n string, on bool) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if _, ok := h.doms[n]; !ok {
+		return virt.ErrNoDomain
+	}
+	if h.auto == nil {
+		h.auto = map[string]bool{}
+	}
+	h.auto[n] = on
+	return nil
+}
+func (h *fakeHV) Autostart(_ context.Context, n string) (bool, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.auto[n], nil
+}
+func (h *fakeHV) Addresses(_ context.Context, n string) ([]string, error) {
+	return []string{"192.168.122.50"}, nil
+}
 func (h *fakeHV) List(context.Context) ([]string, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -88,6 +110,9 @@ func (h *fakeHV) List(context.Context) ([]string, error) {
 type fakeDisks struct{ live map[string]bool }
 
 func (d *fakeDisks) CloneDisk(_ context.Context, _, vm string, _ int) (string, error) {
+	if d.live[vm] {
+		return "", errors.New("zfs clone: dataset already exists") // like real ZFS
+	}
 	d.live[vm] = true
 	return "/dev/zvol/tank/vms/" + vm + "-disk0", nil
 }
@@ -123,6 +148,12 @@ func TestLifecycle(t *testing.T) {
 	if v.Name != "web1" || v.State != virt.Running || v.VCPUs != 2 || v.MemoryMiB != 2048 || v.DiskGB != 20 || v.Template != "debian-13" {
 		t.Fatalf("created %+v", v)
 	}
+	if !v.Autostart || v.IP != "192.168.122.50" {
+		t.Fatalf("autostart/ip: %+v", v)
+	}
+	if v, err = svc.Reboot(ctx, "web1"); err != nil || v.State != virt.Running {
+		t.Fatalf("reboot: %v %+v", err, v)
+	}
 	if _, err := svc.Create(ctx, CreateRequest{Name: "web1", Template: "debian-13"}); !errors.Is(err, ErrExists) {
 		t.Fatalf("duplicate create: %v", err)
 	}
@@ -132,6 +163,12 @@ func TestLifecycle(t *testing.T) {
 	}
 	if v, _ = svc.Stop(ctx, "web1", true); v.State != virt.Stopped {
 		t.Fatalf("stop: %s", v.State)
+	}
+	if v.IP != "" {
+		t.Fatalf("stopped VM should have no IP, got %q", v.IP)
+	}
+	if _, err := svc.Reboot(ctx, "web1"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("reboot stopped VM: want ErrConflict, got %v", err)
 	}
 	if v, _ = svc.Start(ctx, "web1"); v.State != virt.Running {
 		t.Fatalf("start: %s", v.State)
@@ -144,6 +181,28 @@ func TestLifecycle(t *testing.T) {
 	}
 	if len(disks.live) != 0 || len(seeds.live) != 0 {
 		t.Fatalf("leaked disks=%v seeds=%v", disks.live, seeds.live)
+	}
+}
+
+func TestCreateClearsLeftoversFromInterruptedCreate(t *testing.T) {
+	svc, _, disks, seeds := newSvc()
+	disks.live["p8s-web1"] = true // disk left behind by a crash, but no domain
+	seeds.live["p8s-web1"] = true
+	v, err := svc.Create(context.Background(), CreateRequest{Name: "web1", Template: "debian-13"})
+	if err != nil {
+		t.Fatalf("create after crash leftovers: %v", err)
+	}
+	if v.State != virt.Running {
+		t.Fatalf("state %s", v.State)
+	}
+}
+
+func TestAutostartOptOut(t *testing.T) {
+	svc, _, _, _ := newSvc()
+	off := false
+	v, err := svc.Create(context.Background(), CreateRequest{Name: "tmp1", Template: "debian-13", Autostart: &off})
+	if err != nil || v.Autostart {
+		t.Fatalf("err=%v autostart=%v", err, v.Autostart)
 	}
 }
 
@@ -197,5 +256,33 @@ func TestOpsOnMissingVM(t *testing.T) {
 	}
 	if err := svc.Delete(ctx, "ghost"); !errors.Is(err, ErrNotFound) {
 		t.Error(err)
+	}
+}
+
+type keySeeds struct {
+	fakeSeeds
+	got []string
+}
+
+func (k *keySeeds) Build(ctx context.Context, vm string, s cloudinit.Spec) (string, error) {
+	k.got = s.SSHKeys
+	return k.fakeSeeds.Build(ctx, vm, s)
+}
+
+func TestDefaultSSHKeysUsedWhenNoneGiven(t *testing.T) {
+	svc, _, _, _ := newSvc()
+	ks := &keySeeds{fakeSeeds: fakeSeeds{live: map[string]bool{}}}
+	svc.Seeds, svc.SSHKeys = ks, []string{"ssh-ed25519 HOSTKEY"}
+	if _, err := svc.Create(context.Background(), CreateRequest{Name: "ui1", Template: "debian-13"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(ks.got) != 1 || ks.got[0] != "ssh-ed25519 HOSTKEY" {
+		t.Fatalf("default keys not applied: %v", ks.got)
+	}
+	if _, err := svc.Create(context.Background(), CreateRequest{Name: "ui2", Template: "debian-13", SSHKeys: []string{"ssh-rsa MINE"}}); err != nil {
+		t.Fatal(err)
+	}
+	if ks.got[0] != "ssh-rsa MINE" {
+		t.Fatalf("explicit keys should win: %v", ks.got)
 	}
 }

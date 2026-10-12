@@ -10,18 +10,20 @@ import (
 )
 
 type Config struct {
-	Listen       string     `json:"listen"`         // e.g. "127.0.0.1:8006"
-	DataDir      string     `json:"data_dir"`       // e.g. "/var/lib/p8s"
-	LibvirtURI   string     `json:"libvirt_uri"`    // e.g. "qemu:///system"
-	VMDataset    string     `json:"vm_dataset"`     // ZFS dataset holding VM disks, e.g. "tank/p8s/vms"
-	Bridge       string     `json:"bridge"`         // host bridge VMs attach to, e.g. "vmbr0"
-	TLSCert      string     `json:"tls_cert"`       // optional; plain HTTP if empty
-	TLSKey       string     `json:"tls_key"`        // optional
-	Tokens       []Token    `json:"tokens"`         // API tokens (hashed)
-	Templates    []Template `json:"templates"`      // VM templates
-	MaxVCPUs     int        `json:"max_vcpus"`      // per-VM ceiling
-	MaxMemoryMiB int        `json:"max_memory_mib"` // per-VM ceiling
-	MaxDiskGB    int        `json:"max_disk_gb"`    // per-VM ceiling
+	Listen       string     `json:"listen"`           // e.g. "127.0.0.1:8006"
+	DataDir      string     `json:"data_dir"`         // e.g. "/var/lib/p8s"
+	LibvirtURI   string     `json:"libvirt_uri"`      // e.g. "qemu:///system"
+	VMDataset    string     `json:"vm_dataset"`       // ZFS dataset holding VM disks, e.g. "tank/p8s/vms"
+	Bridge       string     `json:"bridge"`           // host bridge VMs attach to, e.g. "vmbr0"
+	TLSCert      string     `json:"tls_cert"`         // optional; plain HTTP if empty
+	TLSKey       string     `json:"tls_key"`          // optional
+	TLSAuto      bool       `json:"tls_auto"`         // HTTPS with a self-signed cert in data_dir/tls
+	SSHKeys      []string   `json:"default_ssh_keys"` // added to VMs created without keys (e.g. from the dashboard)
+	Tokens       []Token    `json:"tokens"`           // API tokens (hashed)
+	Templates    []Template `json:"templates"`        // VM templates
+	MaxVCPUs     int        `json:"max_vcpus"`        // per-VM ceiling
+	MaxMemoryMiB int        `json:"max_memory_mib"`   // per-VM ceiling
+	MaxDiskGB    int        `json:"max_disk_gb"`      // per-VM ceiling
 }
 
 // Token is an API credential. Only the SHA-256 hex of the secret is stored.

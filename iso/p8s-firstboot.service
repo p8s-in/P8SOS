@@ -1,0 +1,16 @@
+[Unit]
+Description=P8S OS first-boot setup (KVM, ZFS, p8sd)
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=!/var/lib/p8s/.firstboot-done
+
+[Service]
+Type=oneshot
+ExecStart=/opt/p8sos/iso/firstboot.sh
+StandardOutput=journal+console
+StandardError=journal+console
+TimeoutStartSec=0
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

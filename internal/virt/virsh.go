@@ -36,6 +36,11 @@ type Hypervisor interface {
 	State(ctx context.Context, name string) (State, error)
 	XML(ctx context.Context, name string) ([]byte, error)
 	List(ctx context.Context) ([]string, error)
+	Reboot(ctx context.Context, name string) error
+	SetAutostart(ctx context.Context, name string, on bool) error
+	Autostart(ctx context.Context, name string) (bool, error)
+	// Addresses returns the guest's IPv4 addresses (may be empty while booting).
+	Addresses(ctx context.Context, name string) ([]string, error)
 }
 
 type Virsh struct {
@@ -115,6 +120,68 @@ func (v *Virsh) List(ctx context.Context) ([]string, error) {
 		}
 	}
 	return names, nil
+}
+
+func (v *Virsh) Reboot(ctx context.Context, name string) error {
+	_, err := v.virsh(ctx, "reboot", name, "--mode", "acpi")
+	return err
+}
+
+func (v *Virsh) SetAutostart(ctx context.Context, name string, on bool) error {
+	args := []string{"autostart", name}
+	if !on {
+		args = append(args, "--disable")
+	}
+	_, err := v.virsh(ctx, args...)
+	return err
+}
+
+func (v *Virsh) Autostart(ctx context.Context, name string) (bool, error) {
+	out, err := v.virsh(ctx, "dominfo", name)
+	if err != nil {
+		return false, err
+	}
+	for _, l := range strings.Split(string(out), "\n") {
+		if k, val, ok := strings.Cut(l, ":"); ok && strings.TrimSpace(k) == "Autostart" {
+			return strings.TrimSpace(val) == "enable", nil
+		}
+	}
+	return false, nil
+}
+
+// Addresses asks libvirt's DHCP leases first, then the guest agent, then the
+// host ARP table — whichever knows the guest's address first.
+func (v *Virsh) Addresses(ctx context.Context, name string) ([]string, error) {
+	for _, src := range []string{"lease", "agent", "arp"} {
+		out, err := v.virsh(ctx, "domifaddr", name, "--source", src)
+		if errors.Is(err, ErrNoDomain) {
+			return nil, err
+		}
+		if err != nil {
+			continue // e.g. guest agent not running yet; try the next source
+		}
+		if ips := ParseIfAddr(string(out)); len(ips) > 0 {
+			return ips, nil
+		}
+	}
+	return nil, nil // no address yet is normal while the guest boots
+}
+
+// ParseIfAddr extracts IPv4 addresses from `virsh domifaddr` output.
+func ParseIfAddr(out string) []string {
+	var ips []string
+	for _, l := range strings.Split(out, "\n") {
+		f := strings.Fields(l)
+		for i := 0; i+1 < len(f); i++ {
+			if f[i] == "ipv4" {
+				ip, _, _ := strings.Cut(f[i+1], "/")
+				if ip != "127.0.0.1" {
+					ips = append(ips, ip)
+				}
+			}
+		}
+	}
+	return ips
 }
 
 // ParseState maps virsh domstate output to State.

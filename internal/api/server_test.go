@@ -41,7 +41,8 @@ func (f *fakeVMs) Stop(ctx context.Context, n string, force bool) (vm.VM, error)
 	}
 	return f.Get(ctx, n)
 }
-func (f *fakeVMs) Delete(ctx context.Context, n string) error { _, err := f.Get(ctx, n); return err }
+func (f *fakeVMs) Reboot(ctx context.Context, n string) (vm.VM, error) { return f.Get(ctx, n) }
+func (f *fakeVMs) Delete(ctx context.Context, n string) error          { _, err := f.Get(ctx, n); return err }
 
 const secret = "p8s_testtoken"
 
@@ -96,6 +97,8 @@ func TestAPI(t *testing.T) {
 		{"POST", "/api/v1/vms/web1/start", secret, "", 200, "web1"},
 		{"POST", "/api/v1/vms/web1/stop", secret, `{"force":true}`, 202, "web1"},
 		{"POST", "/api/v1/vms/web1/stop", secret, "", 500, "internal error"},
+		{"POST", "/api/v1/vms/web1/reboot", secret, "", 202, "web1"},
+		{"POST", "/api/v1/vms/nope/reboot", secret, "", 404, "not_found"},
 		{"DELETE", "/api/v1/vms/web1", secret, "", 204, ""},
 		{"DELETE", "/api/v1/vms/nope", secret, "", 404, "not_found"},
 		{"PUT", "/api/v1/vms/web1", secret, "", 405, ""},
@@ -108,5 +111,23 @@ func TestAPI(t *testing.T) {
 	}
 	if f.created.VCPUs != 2 || len(f.created.SSHKeys) != 1 {
 		t.Errorf("create request not passed through: %+v", f.created)
+	}
+}
+
+func TestHostAndUI(t *testing.T) {
+	sum := sha256.Sum256([]byte(secret))
+	s := &Server{VMs: &fakeVMs{}, Tokens: []config.Token{{Name: "t", SHA256: hex.EncodeToString(sum[:])}},
+		Host: func(context.Context) any { return map[string]int{"cpus": 8} },
+		UI:   http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("dashboard")) })}
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+	if code, body := do(t, srv, "GET", "/api/v1/host", secret, ""); code != 200 || !strings.Contains(body, `"cpus":8`) {
+		t.Fatalf("host: %d %s", code, body)
+	}
+	if code, _ := do(t, srv, "GET", "/api/v1/host", "", ""); code != 401 {
+		t.Fatalf("host without token: %d", code)
+	}
+	if code, body := do(t, srv, "GET", "/", "", ""); code != 200 || body != "dashboard" {
+		t.Fatalf("ui: %d %s", code, body)
 	}
 }

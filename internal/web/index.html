@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>P8S OS</title>
+<style>
+:root{
+  --bg:#f5f6f8; --panel:#fff; --text:#16181d; --muted:#667085; --line:#e4e7ec;
+  --accent:#4f46e5; --accent-ink:#fff; --ok:#12b76a; --warn:#f79009; --bad:#f04438; --idle:#98a2b3;
+  --bar:#eef0f4; --shadow:0 1px 2px rgba(16,24,40,.06),0 1px 3px rgba(16,24,40,.08);
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#0e1116; --panel:#161b22; --text:#e6edf3; --muted:#8b949e; --line:#262c36;
+  --accent:#818cf8; --accent-ink:#0e1116; --bar:#21262d; --shadow:none;
+}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+button,input,select,textarea{font:inherit;color:inherit}
+header{display:flex;align-items:center;gap:12px;padding:12px 20px;background:var(--panel);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
+.logo{font-weight:700;letter-spacing:.3px}.logo b{color:var(--accent)}
+.sub{color:var(--muted);font-size:13px}
+.spacer{flex:1}
+main{max-width:1180px;margin:0 auto;padding:20px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:20px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px;box-shadow:var(--shadow)}
+.card h3{margin:0 0 6px;font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+.big{font-size:22px;font-weight:650}
+.meter{height:6px;background:var(--bar);border-radius:4px;margin-top:8px;overflow:hidden}
+.meter>i{display:block;height:100%;background:var(--accent);width:0;transition:width .4s}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow)}
+.panel-head{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line)}
+.panel-head h2{margin:0;font-size:15px}
+table{width:100%;border-collapse:collapse}
+th,td{padding:10px 16px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap}
+th{font-size:12px;color:var(--muted);font-weight:600}
+tr:last-child td{border-bottom:0}
+.state{display:inline-flex;align-items:center;gap:6px;font-weight:550}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--idle)}
+.running .dot{background:var(--ok)} .stopping .dot,.paused .dot{background:var(--warn)} .crashed .dot{background:var(--bad)}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13px}
+.muted{color:var(--muted)}
+.btn{border:1px solid var(--line);background:var(--panel);padding:6px 11px;border-radius:7px;cursor:pointer;white-space:nowrap}
+.btn:hover{border-color:var(--muted)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:600}
+.btn.danger{color:var(--bad)}
+.btn:disabled{opacity:.5;cursor:default}
+.actions{display:flex;gap:6px;justify-content:flex-end}
+.empty{padding:40px;text-align:center;color:var(--muted)}
+.login{max-width:420px;margin:12vh auto;padding:28px}
+.login h1{margin:0 0 4px;font-size:22px}
+label{display:block;font-size:13px;font-weight:550;margin:12px 0 4px}
+input,select,textarea{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:7px;background:var(--bg)}
+textarea{min-height:64px;resize:vertical}
+.row{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.hint{font-size:12px;color:var(--muted);margin-top:4px}
+dialog{border:1px solid var(--line);border-radius:12px;padding:0;background:var(--panel);color:var(--text);width:min(460px,calc(100vw - 32px))}
+dialog::backdrop{background:rgba(0,0,0,.45)}
+dialog form{padding:20px}
+dialog h2{margin:0 0 4px;font-size:17px}
+.dlg-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}
+#toasts{position:fixed;right:16px;bottom:16px;display:flex;flex-direction:column;gap:8px;z-index:20}
+.toast{background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--ok);padding:10px 14px;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.15);max-width:360px}
+.toast.err{border-left-color:var(--bad)}
+.copy{cursor:pointer;border-bottom:1px dashed var(--muted)}
+@media (max-width:760px){
+  header{padding:10px 16px} main{padding:16px} .panel-head{flex-wrap:wrap} #hVer{display:none}
+  thead{display:none} table,tbody,tr,td{display:block;width:100%}
+  tr{border-bottom:1px solid var(--line);padding:8px 0} td{border:0;padding:4px 16px;white-space:normal}
+  td[data-k]::before{content:attr(data-k) ": ";color:var(--muted);font-size:12px}
+  .actions{justify-content:flex-start;flex-wrap:wrap;padding-top:6px}
+  .row{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="toasts"></div>
+
+<dialog id="dlgCreate"><form method="dialog" id="fCreate">
+  <h2>New virtual machine</h2>
+  <div class="sub">Boots from the template in a few seconds.</div>
+  <label for="cName">Name</label>
+  <input id="cName" required pattern="[a-z][a-z0-9\-]{0,47}[a-z0-9]" placeholder="web1" autocomplete="off">
+  <div class="hint">Lowercase letters, digits and hyphens.</div>
+  <label for="cTpl">Template</label><select id="cTpl"></select>
+  <div class="row">
+    <div><label for="cCpu">CPUs</label><input id="cCpu" type="number" min="1" value="1"></div>
+    <div><label for="cMem">RAM</label><select id="cMem">
+      <option value="512">512 MB</option><option value="1024" selected>1 GB</option><option value="2048">2 GB</option>
+      <option value="4096">4 GB</option><option value="8192">8 GB</option><option value="16384">16 GB</option></select></div>
+    <div><label for="cDisk">Disk (GB)</label><input id="cDisk" type="number" min="1" value="10"></div>
+  </div>
+  <label for="cKeys">SSH public key <span class="muted">(optional)</span></label>
+  <textarea id="cKeys" placeholder="ssh-ed25519 AAAA… — leave empty to use the host's default key"></textarea>
+  <div class="dlg-actions">
+    <button class="btn" value="cancel" formnovalidate>Cancel</button>
+    <button class="btn primary" id="cGo" value="ok">Create</button>
+  </div>
+</form></dialog>
+
+<dialog id="dlgDelete"><form method="dialog" id="fDelete">
+  <h2>Delete <span id="dName"></span>?</h2>
+  <div class="sub">The VM and its disk are removed permanently.</div>
+  <label for="dConfirm">Type the name to confirm</label>
+  <input id="dConfirm" autocomplete="off">
+  <div class="dlg-actions">
+    <button class="btn" value="cancel" formnovalidate>Cancel</button>
+    <button class="btn primary" id="dGo" value="ok" disabled>Delete</button>
+  </div>
+</form></dialog>
+
+<script>
+"use strict";
+const API = "/api/v1";
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const store = {
+  get(){ try { return sessionStorage.getItem("p8s.token") || localStorage.getItem("p8s.token") || ""; } catch { return mem; } },
+  set(t, remember){ mem = t; try { sessionStorage.setItem("p8s.token", t); if (remember) localStorage.setItem("p8s.token", t); } catch {} },
+  clear(){ mem = ""; try { sessionStorage.removeItem("p8s.token"); localStorage.removeItem("p8s.token"); } catch {} },
+};
+let mem = "", token = store.get(), vms = [], host = null, templates = [], busy = new Set(), timer = null, version = "";
+
+function toast(msg, err){
+  const t = document.createElement("div");
+  t.className = "toast" + (err ? " err" : ""); t.textContent = msg;
+  $("#toasts").append(t); setTimeout(() => t.remove(), err ? 7000 : 3500);
+}
+
+async function call(method, path, body){
+  const r = await fetch(API + path, {
+    method, headers: {"Authorization": "Bearer " + token, ...(body ? {"Content-Type": "application/json"} : {})},
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (r.status === 401) {
+    const e = new Error("unauthorized"); e.code = 401;
+    if ($("#vmBody")) { store.clear(); token = ""; render(); toast("Signed out: the token is no longer valid", true); }
+    throw e;
+  }
+  if (r.status === 204) return null;
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data?.error?.message || ("HTTP " + r.status));
+  return data;
+}
+
+/* ---------- views ---------- */
+function render(){
+  if (!token) return renderLogin();
+  if (!$("#vmBody")) renderShell();
+  renderHost(); renderVMs();
+}
+
+function renderLogin(){
+  stopPolling();
+  $("#app").innerHTML = `
+  <div class="panel login">
+    <h1><span class="logo">P8S <b>OS</b></span></h1>
+    <div class="sub">Sign in with your API token.</div>
+    <form id="fLogin">
+      <label for="tok">API token</label>
+      <input id="tok" type="password" placeholder="p8s_…" autocomplete="current-password" required>
+      <div class="hint">On the host: <span class="mono">cat ~/.p8s-token</span></div>
+      <label style="display:flex;gap:8px;align-items:center;font-weight:400"><input id="rem" type="checkbox" style="width:auto"> Remember on this device</label>
+      <div class="dlg-actions"><button class="btn primary">Sign in</button></div>
+    </form>
+  </div>`;
+  $("#fLogin").onsubmit = async e => {
+    e.preventDefault();
+    token = $("#tok").value.trim();
+    try { await call("GET", "/vms"); store.set(token, $("#rem").checked); $("#app").innerHTML = ""; render(); }
+    catch (err) { token = ""; toast(err.code === 401 ? "That token didn't work. On the host run: cat ~/.p8s-token" : err.message, true); }
+  };
+}
+
+function renderShell(){
+  $("#app").innerHTML = `
+  <header>
+    <span class="logo">P8S <b>OS</b></span>
+    <span class="sub" id="hName"></span>
+    <span class="spacer"></span>
+    <span class="sub" id="hVer"></span>
+    <button class="btn" id="bOut">Sign out</button>
+  </header>
+  <main>
+    <section class="cards" id="cards"></section>
+    <section class="panel">
+      <div class="panel-head"><h2>Virtual machines</h2><span class="sub" id="vmCount"></span>
+        <span class="spacer"></span><button class="btn primary" id="bNew">+ New VM</button></div>
+      <table><thead><tr><th>State</th><th>Name</th><th>IP address</th><th>CPU</th><th>RAM</th><th>Disk</th><th>Autostart</th><th></th></tr></thead>
+      <tbody id="vmBody"></tbody></table>
+    </section>
+  </main>`;
+  $("#bOut").onclick = () => { store.clear(); token = ""; render(); };
+  $("#bNew").onclick = openCreate;
+  startPolling();
+}
+
+const gb = mib => (mib / 1024).toFixed(mib % 1024 ? 1 : 0) + " GB";
+function card(title, big, sub, pct){
+  return `<div class="card"><h3>${title}</h3><div class="big">${big}</div><div class="sub">${sub}</div>` +
+    (pct == null ? "" : `<div class="meter"><i style="width:${Math.min(100, Math.max(0, pct)).toFixed(0)}%"></i></div>`) + `</div>`;
+}
+function renderHost(){
+  const run = vms.filter(v => v.state === "running").length;
+  $("#vmCount").textContent = vms.length ? `${run} running · ${vms.length} total` : "";
+  if (!host) { $("#cards").innerHTML = card("Virtual machines", `${run} / ${vms.length}`, "running / total"); return; }
+  $("#hName").textContent = host.hostname;
+  const memUsed = host.mem_total_mib - host.mem_free_mib;
+  const poolUsed = host.pool_size_gb - host.pool_free_gb;
+  const up = host.uptime_sec > 86400 ? Math.floor(host.uptime_sec / 86400) + " days" : Math.floor(host.uptime_sec / 3600) + " h";
+  $("#cards").innerHTML =
+    card("Virtual machines", `${run} / ${vms.length}`, "running / total") +
+    card("CPU", `${host.cpus} cores`, `load ${host.load1.toFixed(2)} · up ${up}`, host.load1 / host.cpus * 100) +
+    card("Memory", gb(memUsed), `of ${gb(host.mem_total_mib)} used`, memUsed / host.mem_total_mib * 100) +
+    (host.pool_size_gb ? card("VM storage", poolUsed.toFixed(1) + " GB", `of ${host.pool_size_gb} GB used (ZFS)`, poolUsed / host.pool_size_gb * 100) : "");
+}
+
+function renderVMs(){
+  const body = $("#vmBody");
+  if (!vms.length) { body.innerHTML = `<tr><td colspan="8" class="empty">No VMs yet. Click <b>+ New VM</b> to create one.</td></tr>`; return; }
+  body.innerHTML = vms.map(v => {
+    const b = busy.has(v.name), dis = b ? "disabled" : "";
+    const acts = v.state === "running"
+      ? `<button class="btn" data-a="stop" ${dis}>Stop</button><button class="btn" data-a="reboot" ${dis}>Reboot</button><button class="btn" data-a="kill" ${dis} title="Power off immediately">Force off</button>`
+      : `<button class="btn" data-a="start" ${dis}>Start</button>`;
+    const ip = v.ip ? `<span class="mono copy" data-copy="ssh debian@${esc(v.ip)}" title="Click to copy the SSH command">${esc(v.ip)}</span>` : `<span class="muted">${v.state === "running" ? "booting…" : "—"}</span>`;
+    return `<tr data-n="${esc(v.name)}">
+      <td data-k="State"><span class="state ${esc(v.state)}"><span class="dot"></span>${b ? "working…" : esc(v.state)}</span></td>
+      <td data-k="Name"><b>${esc(v.name)}</b><div class="sub">${esc(v.template)}</div></td>
+      <td data-k="IP">${ip}</td>
+      <td data-k="CPU">${v.vcpus}</td><td data-k="RAM">${gb(v.memory_mib)}</td><td data-k="Disk">${v.disk_gb} GB</td>
+      <td data-k="Autostart">${v.autostart ? "yes" : "no"}</td>
+      <td><div class="actions">${acts}<button class="btn danger" data-a="delete" ${dis}>Delete</button></div></td></tr>`;
+  }).join("");
+}
+
+/* ---------- actions ---------- */
+document.addEventListener("click", async e => {
+  const cp = e.target.closest("[data-copy]");
+  if (cp) { try { await navigator.clipboard.writeText(cp.dataset.copy); toast("Copied: " + cp.dataset.copy); } catch { toast(cp.dataset.copy); } return; }
+  const btn = e.target.closest("button[data-a]"); if (!btn) return;
+  const name = btn.closest("tr").dataset.n, a = btn.dataset.a;
+  if (a === "delete") return openDelete(name);
+  const path = {start: "/start", stop: "/stop", reboot: "/reboot", kill: "/stop"}[a];
+  busy.add(name); renderVMs();
+  try {
+    await call("POST", `/vms/${encodeURIComponent(name)}${path}`, a === "kill" ? {force: true} : undefined);
+    toast({start: `${name} started`, stop: `${name} is shutting down`, reboot: `${name} is rebooting`, kill: `${name} powered off`}[a]);
+  } catch (err) { toast(err.message, true); }
+  busy.delete(name); refresh();
+});
+
+async function openCreate(){
+  try { templates = (await call("GET", "/templates")).templates; } catch (err) { return toast(err.message, true); }
+  $("#cTpl").innerHTML = templates.map(t => `<option value="${esc(t.name)}" data-min="${t.min_disk_gb}">${esc(t.name)}</option>`).join("");
+  const min = templates[0]?.min_disk_gb || 1;
+  $("#cDisk").min = min; if (+$("#cDisk").value < min) $("#cDisk").value = Math.max(10, min);
+  $("#cName").value = ""; $("#cKeys").value = "";
+  $("#dlgCreate").showModal(); $("#cName").focus();
+}
+$("#cTpl").onchange = e => { const min = +e.target.selectedOptions[0].dataset.min; $("#cDisk").min = min; if (+$("#cDisk").value < min) $("#cDisk").value = min; };
+$("#fCreate").onsubmit = async e => {
+  if (e.submitter?.value !== "ok") return;
+  e.preventDefault();
+  const name = $("#cName").value.trim();
+  const keys = $("#cKeys").value.split("\n").map(s => s.trim()).filter(Boolean);
+  const go = $("#cGo"); go.disabled = true; go.textContent = "Creating…";
+  try {
+    await call("POST", "/vms", {name, template: $("#cTpl").value, vcpus: +$("#cCpu").value,
+      memory_mib: +$("#cMem").value, disk_gb: +$("#cDisk").value, ssh_keys: keys});
+    $("#dlgCreate").close(); toast(`${name} created — it gets an IP in ~30-60 s`); refresh();
+  } catch (err) { toast(err.message, true); }
+  go.disabled = false; go.textContent = "Create";
+};
+
+function openDelete(name){
+  $("#dName").textContent = name; $("#dConfirm").value = ""; $("#dGo").disabled = true;
+  $("#dlgDelete").dataset.n = name; $("#dlgDelete").showModal(); $("#dConfirm").focus();
+}
+$("#dConfirm").oninput = e => { $("#dGo").disabled = e.target.value !== $("#dlgDelete").dataset.n; };
+$("#fDelete").onsubmit = async e => {
+  if (e.submitter?.value !== "ok") return;
+  e.preventDefault();
+  const name = $("#dlgDelete").dataset.n; $("#dlgDelete").close();
+  busy.add(name); renderVMs();
+  try { await call("DELETE", `/vms/${encodeURIComponent(name)}`); toast(`${name} deleted`); }
+  catch (err) { toast(err.message, true); }
+  busy.delete(name); refresh();
+};
+
+/* ---------- polling ---------- */
+let tick = 0;
+async function refresh(withHost){
+  if (!token) return;
+  try {
+    vms = (await call("GET", "/vms")).vms;
+    if (withHost || tick % 4 === 0) host = await call("GET", "/host").catch(() => null);
+    if (!version) { const h = await fetch(API + "/health").then(r => r.json()).catch(() => ({})); version = h.version || ""; }
+    if ($("#hVer")) $("#hVer").textContent = version ? "p8sd " + version : "";
+    render();
+  } catch (err) { if (token && err.code !== 401) toast(err.message, true); }
+  tick++;
+}
+function startPolling(){ stopPolling(); refresh(true); timer = setInterval(() => { if (!document.hidden) refresh(); }, 4000); }
+function stopPolling(){ if (timer) clearInterval(timer); timer = null; }
+document.addEventListener("visibilitychange", () => { if (!document.hidden && token) refresh(true); });
+
+render();
+</script>
+</body>
+</html>

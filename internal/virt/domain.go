@@ -73,6 +73,10 @@ type devicesXML struct {
 	Interfaces []ifaceXML `xml:"interface"`
 	Serial     struct {
 		Type string `xml:"type,attr"`
+		Log  *struct {
+			File   string `xml:"file,attr"`
+			Append string `xml:"append,attr"`
+		} `xml:"log"`
 	} `xml:"serial"`
 	Console struct {
 		Type string `xml:"type,attr"`
@@ -173,6 +177,12 @@ func DomainXML(s Spec) ([]byte, error) {
 	d.Devices.Interfaces = []ifaceXML{nic}
 
 	d.Devices.Serial.Type = "pty"
+	// Everything the guest prints on its serial console (kernel, cloud-init) is
+	// also kept in a file, so failed boots can be diagnosed without a console.
+	d.Devices.Serial.Log = &struct {
+		File   string `xml:"file,attr"`
+		Append string `xml:"append,attr"`
+	}{File: ConsoleLog(s.Name), Append: "off"}
 	d.Devices.Console.Type = "pty"
 	d.Devices.Channel.Type = "unix"
 	d.Devices.Channel.Target.Type, d.Devices.Channel.Target.Name = "virtio", "org.qemu.guest_agent.0"
@@ -234,3 +244,6 @@ func RandomMAC() string {
 	_, _ = rand.Read(b)
 	return fmt.Sprintf("52:54:00:%02x:%02x:%02x", b[0], b[1], b[2])
 }
+
+// ConsoleLog is where a domain's serial console output is recorded.
+func ConsoleLog(name string) string { return "/var/log/libvirt/qemu/" + name + "-console.log" }

@@ -13,12 +13,15 @@ Each phase ships something usable on its own.
 - [x] REST API v1 + auth + error model ([api.md](api.md))
 - [x] Unit tests with fakes for every layer
 - [x] systemd unit, bootstrap + template scripts
-- [ ] **First run on real hardware** (FX505GT, plain Debian 13) — see [host-setup.md](host-setup.md)
-- [ ] VM IP lookup via guest agent
-- [ ] Reboot, resize CPU/RAM, ZFS snapshots + rollback
+- [x] **First real run** — Debian 13 in VirtualBox (nested): install + 39/39 smoke test + `p8 ssh web1` (2026-10-11)
+- [x] VM IP in API and `p8 list` (DHCP lease → guest agent → ARP)
+- [x] Autostart with the host (default on), reboot
+- [x] Serial console log per VM (`p8 bootlog`), recovery from interrupted creates
+- [ ] Resize CPU/RAM, ZFS snapshots + rollback
 - [x] End-to-end smoke test script (`scripts/smoke-test.sh`) + [USER.md](../USER.md) test guide
 - [x] One-command `install.sh` and `p8` CLI helper
-- [ ] Smoke test passing on real hardware
+- [x] **Bare metal** — alpha ISO installed on the ASUS FX505GT; `p8 create web1 2 2048 20` + `p8 ssh web1` working (2026-10-12)
+- [ ] Full `p8 test` run on bare metal
 - [ ] `p8sctl` CLI client in Go (replaces the `p8` shell helper)
 
 ## Phase 2 — Tenants and networking (months 2–4)
@@ -28,6 +31,10 @@ nftables firewall per VM; IP pools (static assignment via cloud-init network
 config); containers via Incus. Replaces Proxmox on the home lab.
 
 ## Phase 3 — Web UI and console (months 4–5)
+
+- [x] Web dashboard v1 (pulled forward): HTTPS with self-signed cert, token sign-in, host cards,
+      VM list with live refresh, create / start / stop / reboot / force-off / delete, phone layout
+- [ ] Browser console (noVNC), metrics graphs, backups
 
 Admin + customer panels, noVNC console proxied through p8sd auth, metrics,
 scheduled backups (ZFS send to a second pool or remote).

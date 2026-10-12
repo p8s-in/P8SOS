@@ -4,6 +4,7 @@
 #   sudo ./bootstrap-debian13.sh /dev/nvme0n1   # real disk -> pool "tank" (DESTROYS the disk)
 #   sudo ./bootstrap-debian13.sh                # no disk -> 64G sparse file pool, for testing only
 set -euo pipefail
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH  # admin tools even under plain "su"
 
 POOL=${POOL:-tank}
 DEV=${1:-}
@@ -14,10 +15,17 @@ DEV=${1:-}
 grep -Eq 'vmx|svm' /proc/cpuinfo || { echo "CPU virtualization (VT-x/AMD-V) not available; enable it in BIOS" >&2; exit 1; }
 
 echo "==> enabling contrib (ZFS lives there)"
-SRC=/etc/apt/sources.list.d/debian.sources
-if [[ -f $SRC ]] && ! grep -q '^Components:.*contrib' "$SRC"; then
-  sed -i -E 's/^(Components:.*\bmain\b)(.*)$/\1 contrib\2/' "$SRC"
+# Classic format (/etc/apt/sources.list, written by the netinst installer)
+if [[ -f /etc/apt/sources.list ]]; then
+  sed -i -E '/^deb(-src)?[[:space:]]+https?:/{/[[:space:]]contrib([[:space:]]|$)/! s/[[:space:]]main([[:space:]]|$)/ main contrib\1/}' /etc/apt/sources.list
 fi
+# deb822 format (/etc/apt/sources.list.d/*.sources)
+for f in /etc/apt/sources.list.d/*.sources; do
+  [[ -f $f ]] || continue
+  sed -i -E '/^Components:/{/[[:space:]]contrib([[:space:]]|$)/! s/[[:space:]]main([[:space:]]|$)/ main contrib\1/}' "$f"
+done
+grep -rqsE '(^deb .* contrib|^Components:.* contrib)' /etc/apt/sources.list /etc/apt/sources.list.d/ \
+  || { echo "could not enable 'contrib' in apt sources" >&2; exit 1; }
 
 echo "==> installing packages"
 export DEBIAN_FRONTEND=noninteractive
@@ -27,11 +35,16 @@ apt-get install -y linux-headers-amd64 zfs-dkms zfsutils-linux \
   libvirt-daemon-config-network dnsmasq-base \
   cloud-image-utils ovmf bridge-utils curl jq make git
 modprobe zfs
+udevadm control --reload-rules && udevadm trigger --subsystem-match=block --action=add   # load ZFS's /dev/zvol rules now
 systemctl enable --now libvirtd
 
 if ! zpool list -H "$POOL" >/dev/null 2>&1; then
   if [[ -n $DEV ]]; then
-    read -r -p "Create pool $POOL on $DEV? ALL DATA ON $DEV WILL BE LOST [type yes]: " ok
+    if [[ ${P8S_YES:-0} == 1 ]]; then
+      ok=yes   # unattended (ISO first boot); the caller has already checked the disk is empty
+    else
+      read -r -p "Create pool $POOL on $DEV? ALL DATA ON $DEV WILL BE LOST [type yes]: " ok
+    fi
     [[ $ok == yes ]] || exit 1
     zpool create -f -o ashift=12 -O compression=lz4 -O atime=off "$POOL" "$DEV"
   else

@@ -5,14 +5,26 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
+	"time"
 
 	"p8sos/internal/execx"
 )
 
 type ZFS struct {
 	Run     execx.Runner
-	Dataset string // parent dataset for VM disks, e.g. tank/p8s/vms
+	Dataset string            // parent dataset for VM disks, e.g. tank/p8s/vms
+	Exists  func(string) bool // checks a device path; nil = os.Stat (tests fake it)
+	Wait    time.Duration     // max wait for /dev/zvol/...; 0 = 30s
+}
+
+func (z *ZFS) exists(p string) bool {
+	if z.Exists != nil {
+		return z.Exists(p)
+	}
+	_, err := os.Stat(p)
+	return err == nil
 }
 
 func (z *ZFS) diskDataset(vm string) string { return z.Dataset + "/" + vm + "-disk0" }
@@ -33,8 +45,21 @@ func (z *ZFS) CloneDisk(ctx context.Context, snapshot, vm string, sizeGB int) (s
 		return "", fmt.Errorf("resize disk: %w", err)
 	}
 	// Wait for udev to create /dev/zvol/... before libvirt tries to open it.
-	_, _ = z.Run.Run(ctx, "udevadm", "settle", "--timeout=10")
-	return z.DevicePath(vm), nil
+	dev := z.DevicePath(vm)
+	limit := z.Wait
+	if limit == 0 {
+		limit = 30 * time.Second
+	}
+	for deadline := time.Now().Add(limit); !z.exists(dev); {
+		if time.Now().After(deadline) || ctx.Err() != nil {
+			_ = z.DestroyDisk(context.WithoutCancel(ctx), vm)
+			return "", fmt.Errorf("disk device %s did not appear (udev)", dev)
+		}
+		_, _ = z.Run.Run(ctx, "udevadm", "trigger", "--subsystem-match=block", "--action=add")
+		_, _ = z.Run.Run(ctx, "udevadm", "settle", "--timeout=5")
+		time.Sleep(300 * time.Millisecond)
+	}
+	return dev, nil
 }
 
 // DestroyDisk removes the VM's disk and its snapshots. Missing disks are not an error.

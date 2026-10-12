@@ -175,7 +175,7 @@ way. Takes 2–5 minutes. In **VirtualBox** run `SLOW=1 p8 test` instead (VMs in
 You want to see:
 
 ```
-== result: 39 passed, 0 failed
+== result: 44 passed, 0 failed
 ```
 
 **Send me the full output** — whether it passes or not.
@@ -187,10 +187,11 @@ You want to see:
 ```bash
 p8 create web1             # make a VM (1 CPU, 1 GB RAM)
 p8 create db1 2 2048 20    # 2 CPUs, 2048 MB RAM, 20 GB disk
-p8 list                    # see all VMs
+p8 list                    # see all VMs, their IPs and state
 p8 ssh web1                # log in (waits for it to boot)
 p8 stop web1               # shut down
 p8 start web1              # power on
+p8 reboot web1             # restart it
 p8 delete web1             # remove it
 p8 help                    # everything else
 ```

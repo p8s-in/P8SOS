@@ -25,6 +25,7 @@ type VMService interface {
 	List(ctx context.Context) ([]vm.VM, error)
 	Start(ctx context.Context, name string) (vm.VM, error)
 	Stop(ctx context.Context, name string, force bool) (vm.VM, error)
+	Reboot(ctx context.Context, name string) (vm.VM, error)
 	Delete(ctx context.Context, name string) error
 }
 
@@ -34,6 +35,8 @@ type Server struct {
 	Tokens    []config.Token
 	Version   string
 	Log       *slog.Logger
+	Host      func(ctx context.Context) any // host capacity for the dashboard; nil = 404
+	UI        http.Handler                  // web dashboard served at /; nil = none
 }
 
 func (s *Server) Handler() http.Handler {
@@ -47,8 +50,13 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("GET /api/v1/vms/{name}", s.getVM)
 	auth.HandleFunc("POST /api/v1/vms/{name}/start", s.startVM)
 	auth.HandleFunc("POST /api/v1/vms/{name}/stop", s.stopVM)
+	auth.HandleFunc("POST /api/v1/vms/{name}/reboot", s.rebootVM)
 	auth.HandleFunc("DELETE /api/v1/vms/{name}", s.deleteVM)
+	auth.HandleFunc("GET /api/v1/host", s.hostInfo)
 	mux.Handle("/api/v1/", s.requireToken(auth))
+	if s.UI != nil {
+		mux.Handle("/", s.UI) // the page itself is public; every API call it makes needs the token
+	}
 
 	return s.logRequests(mux)
 }
@@ -70,6 +78,14 @@ func (s *Server) listTemplates(w http.ResponseWriter, r *http.Request) {
 		out = append(out, tpl{t.Name, t.MinDiskGB, t.OSVariant})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"templates": out})
+}
+
+func (s *Server) hostInfo(w http.ResponseWriter, r *http.Request) {
+	if s.Host == nil {
+		writeErr(w, http.StatusNotFound, "not_found", "host info not available")
+		return
+	}
+	writeJSON(w, http.StatusOK, s.Host(r.Context()))
 }
 
 func (s *Server) listVMs(w http.ResponseWriter, r *http.Request) {
@@ -121,6 +137,15 @@ func (s *Server) stopVM(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v, err := s.VMs.Stop(r.Context(), r.PathValue("name"), body.Force)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, v)
+}
+
+func (s *Server) rebootVM(w http.ResponseWriter, r *http.Request) {
+	v, err := s.VMs.Reboot(r.Context(), r.PathValue("name"))
 	if err != nil {
 		s.fail(w, err)
 		return

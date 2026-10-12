@@ -42,12 +42,17 @@ scoped tokens arrive with tenants in Phase 2.
   "memory_mib": 2048,
   "disk_gb": 20,
   "mac": "52:54:00:3a:91:c4",
+  "ip": "192.168.122.57",
+  "autostart": true,
   "uuid": "6f1e4c1a-6c0b-4f1e-9a51-0f6f3a7f9b20",
   "created_at": "2026-10-10T12:00:00Z"
 }
 ```
 
 `state` is one of `running`, `stopped`, `stopping`, `paused`, `crashed`, `unknown`.
+`ip` is the guest's first IPv4 address (from libvirt DHCP leases, the guest agent,
+or the ARP table); it is empty while the guest boots and when it is stopped.
+`autostart` means the VM starts automatically when the host boots.
 
 ## Endpoints
 
@@ -71,7 +76,8 @@ scoped tokens arrive with tenants in Phase 2.
   "disk_gb": 20,
   "ssh_keys": ["ssh-ed25519 AAAA... you@laptop"],
   "user_data": "#cloud-config\n...",
-  "start": true
+  "start": true,
+  "autostart": true
 }
 ```
 
@@ -85,6 +91,7 @@ scoped tokens arrive with tenants in Phase 2.
 | ssh_keys    | no       | []                   | OpenSSH public keys                           |
 | user_data   | no       | generated            | must start with `#cloud-config`; replaces the generated config entirely |
 | start       | no       | true                 | define only when false                        |
+| autostart   | no       | true                 | start the VM when the host boots              |
 
 What happens: ZFS clone of the template snapshot → resize → cloud-init seed
 ISO → libvirt define → start. Any failure rolls back everything created.
@@ -106,6 +113,9 @@ Body optional: `{"force": true}` pulls the power; default is ACPI shutdown.
 `202` VM object — with ACPI the state will be `stopping` until the guest powers off.
 Idempotent on a stopped VM.
 
+### `POST /vms/{name}/reboot`
+ACPI reboot of a running guest. `202` VM object. `409 conflict` if the VM is not running.
+
 ### `DELETE /vms/{name}`
 Force-stops if running, undefines the domain, destroys the disk and seed ISO.
 `204`. **Irreversible.**
@@ -126,7 +136,7 @@ curl -s -H "Authorization: Bearer $TOK" -X DELETE $P8S/vms/web1 -w '%{http_code}
 
 ## Planned (not in Phase 1)
 
-- `GET /vms/{name}/ip` via guest agent; `POST /vms/{name}/reboot`; resize CPU/RAM.
+- Resize CPU/RAM; change autostart on an existing VM.
 - Snapshots: `POST /vms/{name}/snapshots`, rollback.
 - Async jobs: `POST` returns `202` + `/jobs/{id}` for long operations.
 - Tenants, projects, quotas, scoped tokens (Phase 2).
