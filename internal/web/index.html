@@ -9,15 +9,12 @@
   --bg:#f5f6f8; --panel:#fff; --text:#16181d; --muted:#667085; --line:#e4e7ec;
   --accent:#4f46e5; --accent-ink:#fff; --ok:#12b76a; --warn:#f79009; --bad:#f04438; --idle:#98a2b3;
   --bar:#eef0f4; --shadow:0 1px 2px rgba(16,24,40,.06),0 1px 3px rgba(16,24,40,.08);
-  --series-1:#2a78d6; --series-2:#eb6834; --grid:#eceef2;
 }
 @media (prefers-color-scheme:dark){:root{
   --bg:#0e1116; --panel:#161b22; --text:#e6edf3; --muted:#8b949e; --line:#262c36;
   --accent:#818cf8; --accent-ink:#0e1116; --bar:#21262d; --shadow:none;
-  --series-1:#3987e5; --series-2:#d95926; --grid:#232933;
 }}
 *{box-sizing:border-box}
-[hidden]{display:none !important}
 body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
 button,input,select,textarea{font:inherit;color:inherit}
 header{display:flex;align-items:center;gap:12px;padding:12px 20px;background:var(--panel);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
@@ -74,20 +71,6 @@ dialog.wide{width:min(620px,calc(100vw - 32px))}
 .snaps td{padding:8px 0;border-bottom:1px solid var(--line)}
 .snaps td:last-child{text-align:right}
 .snaps td.muted{text-align:left}
-.charts{display:grid;grid-template-columns:1fr 1fr;gap:14px 18px;margin-top:8px}
-.chart{position:relative}
-.chart-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;font-size:12px;color:var(--muted)}
-.chart-head b{color:var(--text);font-size:13px;font-weight:600}
-.chart-head .now{color:var(--text);font-variant-numeric:tabular-nums}
-.key{display:inline-flex;align-items:center;gap:5px;font-variant-numeric:tabular-nums}
-.key i{width:10px;height:3px;border-radius:2px;display:inline-block}
-.chart svg{display:block;width:100%;height:auto;overflow:visible}
-.chart svg text{fill:var(--muted);font-size:10px;font-variant-numeric:tabular-nums}
-.chart .tip{position:absolute;pointer-events:none;background:var(--panel);border:1px solid var(--line);border-radius:6px;
-  padding:5px 8px;font-size:12px;box-shadow:0 4px 14px rgba(0,0,0,.15);white-space:nowrap;z-index:3;font-variant-numeric:tabular-nums}
-.chart .empty-chart{font-size:12px;color:var(--muted);padding:26px 0;text-align:center;border:1px dashed var(--line);border-radius:6px;margin-top:4px}
-.spark{margin-top:8px}
-@media (max-width:760px){.charts{grid-template-columns:1fr}}
 .btn.confirm{background:var(--bad);border-color:var(--bad);color:#fff}
 @media (max-width:760px){
   header{padding:10px 16px} main{padding:16px} .panel-head{flex-wrap:wrap} #hVer{display:none}
@@ -109,13 +92,7 @@ dialog.wide{width:min(620px,calc(100vw - 32px))}
   <label for="cName">Name</label>
   <input id="cName" required pattern="[a-z][a-z0-9\-]{0,47}[a-z0-9]" placeholder="web1" autocomplete="off">
   <div class="hint">Lowercase letters, digits and hyphens.</div>
-  <label for="cTpl">Operating system</label><select id="cTpl"></select>
-  <div class="hint" id="cTplHint"></div>
-  <div id="cIsoOnly" hidden>
-    <label for="cOS">Kind of system</label>
-    <select id="cOS"><option value="linux">Linux or other</option><option value="windows">Windows</option></select>
-    <div class="hint">Windows gets devices its installer knows (SATA disk, Intel network card).</div>
-  </div>
+  <label for="cTpl">Template</label><select id="cTpl"></select>
   <label for="cNet">Network</label>
   <select id="cNet">
     <option value="nat">Private — reachable from the host (NAT)</option>
@@ -129,17 +106,8 @@ dialog.wide{width:min(620px,calc(100vw - 32px))}
       <option value="4096">4 GB</option><option value="8192">8 GB</option><option value="16384">16 GB</option></select></div>
     <div><label for="cDisk">Disk (GB)</label><input id="cDisk" type="number" min="1" value="10"></div>
   </div>
-  <div id="cCloudOnly">
-  <label for="cPw">Root password <span class="muted">(optional)</span></label>
-  <div class="row" style="grid-template-columns:1fr 1fr">
-    <input id="cPw" type="password" minlength="8" maxlength="128" placeholder="8+ characters" autocomplete="new-password">
-    <input id="cPw2" type="password" minlength="8" maxlength="128" placeholder="repeat" autocomplete="new-password" aria-label="Repeat root password">
-  </div>
-  <label style="display:flex;gap:8px;align-items:center;font-weight:400;margin-top:8px"><input id="cPwSSH" type="checkbox" style="width:auto" checked> Allow SSH login as root with this password</label>
-  <div class="hint">Leave empty to log in with SSH keys only (safest). You can set or change passwords later under Manage.</div>
   <label for="cKeys">SSH public key <span class="muted">(optional)</span></label>
   <textarea id="cKeys" placeholder="ssh-ed25519 AAAA… — leave empty to use the host's default key"></textarea>
-  </div>
   <div class="dlg-actions">
     <button class="btn" value="cancel" formnovalidate>Cancel</button>
     <button class="btn primary" id="cGo" value="ok">Create</button>
@@ -161,12 +129,6 @@ dialog.wide{width:min(620px,calc(100vw - 32px))}
   <h2 id="mTitle"></h2>
   <div class="sub" id="mSub"></div>
 
-  <h3>Usage <span class="sub" style="font-weight:400">last hour</span></h3>
-  <div class="charts" id="mCharts"></div>
-
-  <div id="mCD" hidden><h3>Installer CD</h3>
-    <div class="inline"><span class="sub" id="mCDTxt"></span><span class="spacer"></span><button class="btn" id="mEject">Eject</button></div></div>
-
   <h3>Resize</h3>
   <div class="sub" id="mRzHint"></div>
   <div class="row">
@@ -177,14 +139,6 @@ dialog.wide{width:min(620px,calc(100vw - 32px))}
   <div class="hint">Disks can only grow. The VM's filesystem grows to the new size when it boots.</div>
   <div class="inline"><span class="spacer"></span><button class="btn primary" id="mRzGo">Apply</button></div>
 
-  <h3>Change password</h3>
-  <div class="sub" id="mPwHint">Sets a login password inside the VM (needs it running and fully booted).</div>
-  <div class="inline">
-    <input id="mPwUser" value="root" style="flex:0 0 110px" aria-label="User" autocomplete="off" pattern="[a-z_][a-z0-9_\-]{0,31}">
-    <input id="mPw" type="password" minlength="8" maxlength="128" placeholder="new password (8+)" autocomplete="new-password">
-    <button class="btn" id="mPwGo">Set</button>
-  </div>
-
   <h3>Snapshots</h3>
   <div class="sub">A snapshot saves the VM's disk as it is right now, in an instant. Take one before
     risky changes; roll back to undo everything since.</div>
@@ -194,39 +148,7 @@ dialog.wide{width:min(620px,calc(100vw - 32px))}
   </div>
   <table class="snaps"><tbody id="mSnaps"></tbody></table>
 
-  <h3>Backups</h3>
-  <div class="sub">A backup is a full copy of the disk in a file. It survives even if the VM is deleted, and works while the VM runs.</div>
-  <div class="inline">
-    <label style="display:flex;gap:6px;align-items:center;font-weight:400;margin:0;white-space:nowrap"><input id="mAuto" type="checkbox" style="width:auto"> Every day at <span id="mAutoAt">02:30</span>, keep</label>
-    <input id="mKeep" type="number" min="1" max="365" value="7" style="flex:0 0 64px" aria-label="Backups to keep">
-    <span class="spacer"></span>
-    <button class="btn" id="mBackupGo">Back up now</button>
-  </div>
-  <table class="snaps"><tbody id="mBackups"></tbody></table>
-
   <div class="dlg-actions"><button class="btn" id="mClose">Close</button></div>
-</div></dialog>
-
-<dialog id="dlgIsos" class="wide"><div class="dlg-body">
-  <h2>ISO images</h2>
-  <div class="sub">Installer CDs. Create a VM from one under <b>+ New VM → Operating system</b> and install it in the console —
-    any Linux, Windows, BSD…</div>
-  <h3>Upload from this computer</h3>
-  <div class="inline"><input id="iFile" type="file" accept=".iso"><button class="btn primary" id="iUp">Upload</button></div>
-  <div class="meter" id="iBar" hidden><i></i></div><div class="hint" id="iUpTxt"></div>
-  <h3>Or download from the internet <span class="sub" style="font-weight:400">(straight to the server)</span></h3>
-  <div class="inline"><input id="iUrl" placeholder="https://…/something.iso" autocomplete="off"></div>
-  <div class="inline"><input id="iSum" placeholder="SHA-256 checksum (optional, recommended)" autocomplete="off"><button class="btn" id="iDl">Download</button></div>
-  <h3>On the server</h3>
-  <table class="snaps"><tbody id="iList"></tbody></table>
-  <div class="dlg-actions"><button class="btn" id="iClose">Close</button></div>
-</div></dialog>
-
-<dialog id="dlgBackups" class="wide"><div class="dlg-body">
-  <h2>All backups</h2>
-  <div class="sub">Every VM's backups, including VMs that were deleted. Recreate a deleted VM, or make a copy under a new name.</div>
-  <table class="snaps"><tbody id="gBackups"></tbody></table>
-  <div class="dlg-actions"><button class="btn" id="gClose">Close</button></div>
 </div></dialog>
 
 <script>
@@ -300,8 +222,6 @@ function renderShell(){
     <span class="sub" id="hName"></span>
     <span class="spacer"></span>
     <span class="sub" id="hVer"></span>
-    <button class="btn" id="bIsos">ISOs</button>
-    <button class="btn" id="bBackups">Backups</button>
     <button class="btn" id="bOut">Sign out</button>
   </header>
   <main>
@@ -314,28 +234,14 @@ function renderShell(){
     </section>
   </main>`;
   $("#bOut").onclick = () => { store.clear(); token = ""; render(); };
-  $("#bBackups").onclick = openAllBackups;
-  $("#bIsos").onclick = openIsos;
   $("#bNew").onclick = openCreate;
   startPolling();
 }
 
 const gb = mib => (mib / 1024).toFixed(mib % 1024 ? 1 : 0) + " GB";
-function card(title, big, sub, pct, spark){
+function card(title, big, sub, pct){
   return `<div class="card"><h3>${title}</h3><div class="big">${big}</div><div class="sub">${sub}</div>` +
-    (pct == null ? "" : `<div class="meter"><i style="width:${Math.min(100, Math.max(0, pct)).toFixed(0)}%"></i></div>`) +
-    (spark ? `<div class="chart spark" id="${spark}"></div>` : "") + `</div>`;
-}
-function drawHostSparks(){
-  const c = $("#sCPU"), m = $("#sMem"); if (!c || !m) return;
-  const t = hostPts.map(p => p.t), s1 = css("--series-1");
-  if (hostPts.length < 2) {
-    for (const e of [c, m]) e.innerHTML = `<div class="meter"><i style="width:0"></i></div>`;
-    return;
-  }
-  lineChart(c, {compact: true, title: "Host CPU, last hour", times: t, fmt: fmtPct, max: 100, series: [{name: "CPU", color: s1, values: hostPts.map(p => p.cpu)}]});
-  lineChart(m, {compact: true, title: "Host memory used, last hour", times: t, fmt: fmtMiB, max: hostPts[hostPts.length - 1].mem_total_mib,
-    series: [{name: "Memory", color: s1, values: hostPts.map(p => p.mem_used_mib)}]});
+    (pct == null ? "" : `<div class="meter"><i style="width:${Math.min(100, Math.max(0, pct)).toFixed(0)}%"></i></div>`) + `</div>`;
 }
 function renderHost(){
   const run = vms.filter(v => v.state === "running").length;
@@ -347,10 +253,9 @@ function renderHost(){
   const up = host.uptime_sec > 86400 ? Math.floor(host.uptime_sec / 86400) + " days" : Math.floor(host.uptime_sec / 3600) + " h";
   $("#cards").innerHTML =
     card("Virtual machines", `${run} / ${vms.length}`, "running / total") +
-    card("CPU", `${host.cpus} cores`, `load ${host.load1.toFixed(2)} · up ${up}`, null, "sCPU") +
-    card("Memory", gb(memUsed), `of ${gb(host.mem_total_mib)} used`, null, "sMem") +
+    card("CPU", `${host.cpus} cores`, `load ${host.load1.toFixed(2)} · up ${up}`, host.load1 / host.cpus * 100) +
+    card("Memory", gb(memUsed), `of ${gb(host.mem_total_mib)} used`, memUsed / host.mem_total_mib * 100) +
     (host.pool_size_gb ? card("VM storage", poolUsed.toFixed(1) + " GB", `of ${host.pool_size_gb} GB used (ZFS)`, poolUsed / host.pool_size_gb * 100) : "");
-  drawHostSparks();
 }
 
 function renderVMs(){
@@ -359,12 +264,12 @@ function renderVMs(){
   body.innerHTML = vms.map(v => {
     const b = busy.has(v.name), dis = b ? "disabled" : "";
     const acts = v.state === "running"
-      ? `<button class="btn" data-a="stop" ${dis}>Stop</button><button class="btn" data-a="reboot" ${dis}>Reboot</button><button class="btn" data-a="kill" ${dis} title="Power off immediately">Force off</button><button class="btn" data-a="console" ${dis} title="See and use the VM's screen">Console</button>`
+      ? `<button class="btn" data-a="stop" ${dis}>Stop</button><button class="btn" data-a="reboot" ${dis}>Reboot</button><button class="btn" data-a="kill" ${dis} title="Power off immediately">Force off</button>`
       : `<button class="btn" data-a="start" ${dis}>Start</button>`;
-    const ip = v.ip ? `<span class="mono copy" data-copy="ssh ${esc(v.user || "debian")}@${esc(v.ip)}" title="Click to copy the SSH command">${esc(v.ip)}</span>` : `<span class="muted">${v.state === "running" ? "booting…" : "—"}</span>`;
+    const ip = v.ip ? `<span class="mono copy" data-copy="ssh debian@${esc(v.ip)}" title="Click to copy the SSH command">${esc(v.ip)}</span>` : `<span class="muted">${v.state === "running" ? "booting…" : "—"}</span>`;
     return `<tr data-n="${esc(v.name)}">
       <td data-k="State"><span class="state ${esc(v.state)}"><span class="dot"></span>${b ? "working…" : esc(v.state)}</span></td>
-      <td data-k="Name"><b>${esc(v.name)}</b><div class="sub">${esc(templates.find(t => t.name === v.template)?.label || v.template.replace(/^iso:/, "from "))}${v.os_type === "windows" ? " · Windows" : ""}${v.network === "lan" ? " · home network" : ""}${v.iso ? " · CD in drive" : ""}</div></td>
+      <td data-k="Name"><b>${esc(v.name)}</b><div class="sub">${esc(v.template)}${v.network === "lan" ? " · home network" : ""}</div></td>
       <td data-k="IP">${ip}</td>
       <td data-k="CPU">${v.vcpus}</td><td data-k="RAM">${gb(v.memory_mib)}</td><td data-k="Disk">${v.disk_gb} GB</td>
       <td data-k="Autostart">${v.autostart ? "yes" : "no"}</td>
@@ -380,7 +285,6 @@ document.addEventListener("click", async e => {
   const name = btn.closest("tr").dataset.n, a = btn.dataset.a;
   if (a === "delete") return openDelete(name);
   if (a === "manage") return openManage(name);
-  if (a === "console") { window.open(`/console?vm=${encodeURIComponent(name)}`, `p8s-console-${name}`); return; }
   const path = {start: "/start", stop: "/stop", reboot: "/reboot", kill: "/stop"}[a];
   busy.add(name); renderVMs();
   try {
@@ -391,21 +295,11 @@ document.addEventListener("click", async e => {
 });
 
 async function openCreate(){
-  let isoList = [];
-  try {
-    templates = (await call("GET", "/templates")).templates;
-    isoList = (await call("GET", "/isos").catch(() => ({isos: []}))).isos;
-  } catch (err) { return toast(err.message, true); }
-  $("#cTpl").innerHTML = `<optgroup label="Ready to use (cloud images)">` +
-    templates.map(t => `<option value="${esc(t.name)}" data-min="${t.min_disk_gb}" data-user="${esc(t.default_user)}">${esc(t.label || t.name)}</option>`).join("") +
-    `</optgroup><optgroup label="Install from ISO (in the console)">` +
-    (isoList.length ? isoList.map(i => `<option value="iso:${esc(i.name)}" data-min="1">${esc(i.name)}</option>`).join("")
-      : `<option value="" disabled>No ISOs yet — add one with the ISOs button</option>`) + `</optgroup>`;
-  $("#cOS").value = "linux";
+  try { templates = (await call("GET", "/templates")).templates; } catch (err) { return toast(err.message, true); }
+  $("#cTpl").innerHTML = templates.map(t => `<option value="${esc(t.name)}" data-min="${t.min_disk_gb}">${esc(t.name)}</option>`).join("");
   const min = templates[0]?.min_disk_gb || 1;
   $("#cDisk").min = min; if (+$("#cDisk").value < min) $("#cDisk").value = Math.max(10, min);
-  tplHint();
-  $("#cName").value = ""; $("#cKeys").value = ""; $("#cPw").value = $("#cPw2").value = ""; $("#cPwSSH").checked = true;
+  $("#cName").value = ""; $("#cKeys").value = "";
   host = await call("GET", "/host").catch(() => host);
   const lan = !!host?.networks?.includes("lan");
   $("#cNet").querySelector('[value="lan"]').disabled = !lan;
@@ -421,38 +315,17 @@ function netHint(){
     : "Only the host can reach this VM. Choose Home network to reach it from other devices.";
 }
 $("#cNet").onchange = netHint;
-function tplHint(){
-  const o = $("#cTpl").selectedOptions[0], iso = !!o?.value.startsWith("iso:");
-  $("#cIsoOnly").hidden = !iso; $("#cCloudOnly").hidden = iso;
-  if (iso && +$("#cDisk").value < 32) $("#cDisk").value = 32;
-  if (iso && +$("#cCpu").value < 2) $("#cCpu").value = 2;
-  if (iso && +$("#cMem").value < 2048) $("#cMem").value = "2048";
-  $("#cTplHint").innerHTML = !o ? "" : iso
-    ? "Starts with an empty disk and boots the ISO. The console opens so you can install; the VM boots from its disk afterwards."
-    : `Ready in a minute. SSH keys go to user <b>${esc(o.dataset.user)}</b>. More systems: <span class="mono">p8 templates available</span> on the host.`;
-}
-$("#cTpl").onchange = e => { const min = +e.target.selectedOptions[0].dataset.min; $("#cDisk").min = min; if (+$("#cDisk").value < min) $("#cDisk").value = min; tplHint(); };
+$("#cTpl").onchange = e => { const min = +e.target.selectedOptions[0].dataset.min; $("#cDisk").min = min; if (+$("#cDisk").value < min) $("#cDisk").value = min; };
 $("#fCreate").onsubmit = async e => {
   if (e.submitter?.value !== "ok") return;
   e.preventDefault();
   const name = $("#cName").value.trim();
   const keys = $("#cKeys").value.split("\n").map(s => s.trim()).filter(Boolean);
-  const pw = $("#cPw").value;
-  if (pw !== $("#cPw2").value) return toast("The root passwords don't match", true);
   const go = $("#cGo"); go.disabled = true; go.textContent = "Creating…";
-  const tpl = $("#cTpl").value, iso = tpl.startsWith("iso:") ? tpl.slice(4) : "";
   try {
-    const common = {name, vcpus: +$("#cCpu").value, memory_mib: +$("#cMem").value, disk_gb: +$("#cDisk").value, network: $("#cNet").value};
-    if (iso) {
-      await call("POST", "/vms", {...common, iso, os_type: $("#cOS").value});
-      $("#dlgCreate").close(); toast(`${name} created and booting ${iso} — install it in the console`);
-      window.open(`/console?vm=${encodeURIComponent(name)}`, `p8s-console-${name}`);
-    } else {
-      await call("POST", "/vms", {...common, template: tpl, ssh_keys: keys,
-        ...(pw ? {root_password: pw, ssh_password_auth: $("#cPwSSH").checked} : {})});
-      $("#dlgCreate").close(); toast(`${name} created — it gets an IP in ~30-60 s`);
-    }
-    refresh();
+    await call("POST", "/vms", {name, template: $("#cTpl").value, vcpus: +$("#cCpu").value,
+      memory_mib: +$("#cMem").value, disk_gb: +$("#cDisk").value, ssh_keys: keys, network: $("#cNet").value});
+    $("#dlgCreate").close(); toast(`${name} created — it gets an IP in ~30-60 s`); refresh();
   } catch (err) { toast(err.message, true); }
   go.disabled = false; go.textContent = "Create";
 };
@@ -481,13 +354,11 @@ async function openManage(name){
   mName = name; mVM = null; snaps = [];
   const v = vms.find(x => x.name === name);
   $("#mCpu").value = v.vcpus; $("#mMem").value = v.memory_mib; $("#mDisk").value = v.disk_gb; $("#mDisk").min = v.disk_gb;
-  $("#mSnapName").value = ""; $("#mPw").value = "";
+  $("#mSnapName").value = "";
   $("#mTitle").textContent = name; $("#mSnaps").dataset.key = ""; $("#mRzHint").dataset.st = "";
   renderManage();
   $("#dlgManage").showModal();
-  $("#mBackups").innerHTML = `<tr><td class="muted">Loading…</td></tr>`;
-  $("#mCharts").innerHTML = "";
-  await Promise.all([loadSnaps(), loadBackups(), loadVMCharts()]);
+  await loadSnaps();
 }
 async function loadSnaps(){
   try { snaps = (await call("GET", `/vms/${encodeURIComponent(mName)}/snapshots`)).snapshots; }
@@ -502,17 +373,8 @@ function renderManage(){
   if ($("#mRzHint").dataset.st !== v.state + mName) $("#mRzHint").innerHTML = stopped ? "Change CPUs, memory or disk size. Takes effect when you start the VM."
     : `Stop the VM first to resize it. <button class="btn" data-m="stop">Stop ${esc(v.name)}</button>`;
   $("#mRzHint").dataset.st = v.state + mName;
-  $("#mPwGo").disabled = !(v.state === "running");
-  $("#mCD").hidden = !v.iso;
-  if (v.iso) {
-    $("#mCDTxt").textContent = stopped ? `${v.iso} is in the drive. Eject it once the system is installed.`
-      : `${v.iso} is in the drive. The VM boots from its disk first, so it's harmless; stop the VM to eject it.`;
-    $("#mEject").disabled = !stopped;
-  }
-  $("#mPwHint").textContent = v.state === "running" ? "Sets a login password inside the VM (needs it fully booted)." : "Start the VM to change a password.";
   for (const id of ["#mCpu", "#mMem", "#mDisk", "#mRzGo"]) $(id).disabled = !stopped;
   if (mVM && mVM.disk_gb !== v.disk_gb) { $("#mDisk").value = v.disk_gb; $("#mDisk").min = v.disk_gb; }
-  if (mVM && mVM.state !== v.state) renderBackups();
   mVM = v;
   const key = v.state + "|" + JSON.stringify(snaps);
   if ($("#mSnaps").dataset.key === key) return; // unchanged: keep half-confirmed buttons as they are
@@ -575,235 +437,6 @@ $("#mRzGo").onclick = async () => {
   await refresh();
 };
 $("#mClose").onclick = () => $("#dlgManage").close();
-$("#mEject").onclick = async () => {
-  try { await call("POST", `/vms/${encodeURIComponent(mName)}/eject`); toast("CD ejected"); refresh(); }
-  catch (err) { toast(err.message, true); }
-};
-$("#mPwGo").onclick = async () => {
-  const user = $("#mPwUser").value.trim(), password = $("#mPw").value, go = $("#mPwGo");
-  if (password.length < 8) return toast("Passwords need at least 8 characters", true);
-  go.disabled = true;
-  try {
-    await call("POST", `/vms/${encodeURIComponent(mName)}/password`, {user, password});
-    toast(`Password for ${user} on ${mName} changed`); $("#mPw").value = "";
-  } catch (err) { toast(err.message, true); }
-  go.disabled = false;
-};
-
-/* ---------- usage charts (inline SVG, no library) ---------- */
-const fmtPct = v => v.toFixed(v < 10 ? 1 : 0) + "%";
-const fmtMiB = v => v >= 1024 ? (v / 1024).toFixed(1) + " GB" : Math.round(v) + " MB";
-const fmtRate = v => v >= 1 << 20 ? (v / (1 << 20)).toFixed(1) + " MB/s" : v >= 1024 ? (v / 1024).toFixed(0) + " KB/s" : Math.round(v) + " B/s";
-const fmtClock = t => new Date(t * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
-function niceMax(v){ if (v <= 0) return 1; const p = Math.pow(10, Math.floor(Math.log10(v))); for (const m of [1, 2, 2.5, 5, 10]) if (m * p >= v) return m * p; return 10 * p; }
-
-// lineChart(el, {title, times, series:[{name, color, values}], fmt, max, compact})
-function lineChart(el, o){
-  const W = 320, H = o.compact ? 46 : 110, L = o.compact ? 0 : 44, R = 6, T = 6, B = o.compact ? 2 : 18;
-  const n = o.times.length, last = o.series.map(s => s.values[n - 1]);
-  const head = o.compact ? "" : `<div class="chart-head"><b>${esc(o.title)}</b>` + (o.series.length === 1
-      ? (n ? `<span class="now">${o.fmt(last[0])}</span>` : "")
-      : o.series.map((s, i) => `<span class="key"><i style="background:${s.color}"></i>${esc(s.name)}${n ? " " + o.fmt(last[i]) : ""}</span>`).join("")) + `</div>`;
-  if (n < 2) { el.innerHTML = head + (o.compact ? "" : `<div class="empty-chart">Collecting… the chart fills in within a minute.</div>`); return; }
-  const max = o.max || niceMax(Math.max(...o.series.flatMap(s => s.values)) * 1.1);
-  const t0 = o.times[0], t1 = o.times[n - 1], span = Math.max(t1 - t0, 1);
-  const x = t => L + (t - t0) / span * (W - L - R), y = v => T + (1 - Math.min(v, max) / max) * (H - T - B);
-  let g = "";
-  if (!o.compact) {
-    for (const f of [0, .5, 1]) g += `<line x1="${L}" x2="${W - R}" y1="${y(max * f)}" y2="${y(max * f)}" stroke="var(--grid)" stroke-width="1"/>` +
-      `<text x="${L - 6}" y="${y(max * f) + 3}" text-anchor="end">${o.fmt(max * f)}</text>`;
-    g += `<text x="${L}" y="${H - 4}">${fmtClock(t0)}</text><text x="${W - R}" y="${H - 4}" text-anchor="end">${fmtClock(t1)}</text>`;
-  }
-  const paths = o.series.map(s => `<path d="${s.values.map((v, i) => (i ? "L" : "M") + x(o.times[i]).toFixed(1) + " " + y(v).toFixed(1)).join("")}" fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`).join("");
-  el.innerHTML = head + `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(o.title)}">${g}${paths}
-    <line class="xh" y1="${T}" y2="${H - B}" stroke="var(--muted)" stroke-width="1" stroke-dasharray="2 2" visibility="hidden"/>
-    ${o.series.map(s => `<circle class="dot" r="4" fill="${s.color}" stroke="var(--panel)" stroke-width="2" visibility="hidden"/>`).join("")}
-    <rect x="${L}" y="0" width="${W - L - R}" height="${H}" fill="transparent" class="hit"/></svg><div class="tip" hidden></div>`;
-  const svg = el.querySelector("svg"), tip = el.querySelector(".tip"), xh = svg.querySelector(".xh"), dots = svg.querySelectorAll(".dot");
-  const hit = svg.querySelector(".hit");
-  hit.addEventListener("mousemove", ev => {
-    const r = svg.getBoundingClientRect(), px = (ev.clientX - r.left) / r.width * W;
-    let i = 0, best = Infinity;
-    o.times.forEach((t, k) => { const d = Math.abs(x(t) - px); if (d < best) { best = d; i = k; } });
-    const cx = x(o.times[i]);
-    xh.setAttribute("x1", cx); xh.setAttribute("x2", cx); xh.setAttribute("visibility", "visible");
-    dots.forEach((d, k) => { d.setAttribute("cx", cx); d.setAttribute("cy", y(o.series[k].values[i])); d.setAttribute("visibility", "visible"); });
-    tip.innerHTML = `<div class="muted">${fmtClock(o.times[i])}</div>` + o.series.map(s =>
-      `<div><span class="key"><i style="background:${s.color}"></i>${o.series.length > 1 ? esc(s.name) + " " : ""}<b>${o.fmt(s.values[i])}</b></span></div>`).join("");
-    tip.hidden = false;
-    const left = cx / W * r.width, er = el.getBoundingClientRect();
-    tip.style.left = Math.min(Math.max(left - tip.offsetWidth / 2, 0), er.width - tip.offsetWidth) + "px";
-    tip.style.top = (r.top - er.top - tip.offsetHeight - 6) + "px";
-  });
-  hit.addEventListener("mouseleave", () => { tip.hidden = true; xh.setAttribute("visibility", "hidden"); dots.forEach(d => d.setAttribute("visibility", "hidden")); });
-}
-const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-
-async function loadVMCharts(){
-  if (!$("#dlgManage").open) return;
-  const v = vms.find(x => x.name === mName); if (!v) return;
-  let pts = [];
-  try { pts = (await call("GET", `/vms/${encodeURIComponent(mName)}/metrics`)).points; } catch { return; }
-  const box = $("#mCharts");
-  if (!box.children.length) box.innerHTML = '<div class="chart"></div>'.repeat(4);
-  const [c1, c2, c3, c4] = box.children, t = pts.map(p => p.t), s1 = css("--series-1"), s2 = css("--series-2");
-  lineChart(c1, {title: "CPU", times: t, fmt: fmtPct, max: 100, series: [{name: "CPU", color: s1, values: pts.map(p => p.cpu)}]});
-  lineChart(c2, {title: "Memory (host RAM used)", times: t, fmt: fmtMiB, max: Math.max(v.memory_mib * 1.1, ...pts.map(p => p.mem_mib)),
-    series: [{name: "Memory", color: s1, values: pts.map(p => p.mem_mib)}]});
-  lineChart(c3, {title: "Disk", times: t, fmt: fmtRate, series: [
-    {name: "Read", color: s1, values: pts.map(p => p.disk_read_bps)}, {name: "Write", color: s2, values: pts.map(p => p.disk_write_bps)}]});
-  lineChart(c4, {title: "Network", times: t, fmt: fmtRate, series: [
-    {name: "In", color: s1, values: pts.map(p => p.net_rx_bps)}, {name: "Out", color: s2, values: pts.map(p => p.net_tx_bps)}]});
-}
-setInterval(() => { if (!document.hidden) loadVMCharts(); }, 10000);
-
-let hostPts = [];
-async function loadHostMetrics(){
-  try { hostPts = (await call("GET", "/host/metrics")).points; } catch { hostPts = []; }
-}
-
-/* ---------- ISO library ---------- */
-async function openIsos(){
-  $("#iFile").value = ""; $("#iUrl").value = ""; $("#iSum").value = ""; $("#iBar").hidden = true; $("#iUpTxt").textContent = "";
-  $("#dlgIsos").showModal(); await loadIsos();
-}
-async function loadIsos(){
-  try {
-    const l = (await call("GET", "/isos")).isos;
-    $("#iList").innerHTML = l.length ? l.map(i => `<tr data-iso="${esc(i.name)}"><td><b class="mono">${esc(i.name)}</b>
-      <div class="sub">${fmtBytes(i.bytes)} · added ${esc(fmtTime(i.added_at))}</div></td>
-      <td><button class="btn danger" data-i="del">Delete</button></td></tr>`).join("")
-      : `<tr><td class="muted">No ISOs yet.</td></tr>`;
-  } catch (err) { toast(err.message, true); }
-}
-$("#iList").addEventListener("click", async e => {
-  const btn = e.target.closest("button[data-i]"); if (!btn) return;
-  const name = btn.closest("tr").dataset.iso;
-  if (!armed(btn, "Delete — sure?")) return;
-  try { await call("DELETE", `/isos/${encodeURIComponent(name)}`); toast(`${name} deleted`); loadIsos(); }
-  catch (err) { toast(err.message, true); }
-});
-$("#iUp").onclick = () => {
-  const f = $("#iFile").files[0];
-  if (!f) return toast("Choose an .iso file first", true);
-  const name = f.name.replace(/[^A-Za-z0-9._+-]/g, "-");
-  if (!/\.iso$/i.test(name)) return toast("The file must end in .iso", true);
-  // XMLHttpRequest, because fetch() can't report upload progress.
-  const x = new XMLHttpRequest(), bar = $("#iBar"), txt = $("#iUpTxt"), up = $("#iUp");
-  x.open("PUT", API + "/isos/" + encodeURIComponent(name));
-  x.setRequestHeader("Authorization", "Bearer " + token);
-  x.upload.onprogress = ev => { if (ev.lengthComputable) {
-    bar.firstElementChild.style.width = (ev.loaded / ev.total * 100).toFixed(1) + "%";
-    txt.textContent = `Uploading ${name}: ${fmtBytes(ev.loaded)} of ${fmtBytes(ev.total)}`; } };
-  x.onload = () => {
-    up.disabled = false; bar.hidden = true;
-    if (x.status === 201) { txt.textContent = ""; toast(`${name} uploaded`); loadIsos(); }
-    else { let m = "upload failed"; try { m = JSON.parse(x.responseText).error.message; } catch {} txt.textContent = m; toast(m, true); }
-  };
-  x.onerror = () => { up.disabled = false; bar.hidden = true; toast("Upload failed (connection lost)", true); };
-  bar.hidden = false; bar.firstElementChild.style.width = "0"; up.disabled = true;
-  x.send(f);
-};
-$("#iDl").onclick = async () => {
-  const url = $("#iUrl").value.trim(); if (!url) return toast("Paste the link to an .iso file", true);
-  try {
-    const j = await call("POST", "/isos/download", {url, sha256: $("#iSum").value.trim()});
-    $("#iUrl").value = ""; $("#iSum").value = "";
-    trackJob(j, () => { if ($("#dlgIsos").open) loadIsos(); });
-  } catch (err) { toast(err.message, true); }
-};
-$("#iClose").onclick = () => $("#dlgIsos").close();
-
-/* ---------- backups ---------- */
-let mBackups = [];
-async function loadBackups(){
-  const n = encodeURIComponent(mName);
-  try {
-    const [b, sch] = await Promise.all([call("GET", `/vms/${n}/backups`), call("GET", `/vms/${n}/backup-schedule`)]);
-    mBackups = b.backups;
-    $("#mAuto").checked = sch.daily; $("#mKeep").value = sch.keep; $("#mAutoAt").textContent = sch.at;
-  } catch (err) { toast(err.message, true); }
-  renderBackups();
-}
-function backupRow(b, opts){
-  const restore = opts.restore === "hide" ? "" :
-    `<button class="btn" data-b="restore" ${opts.restore === "off" ? 'disabled title="Stop the VM first"' : ""}>${opts.restoreLabel || "Restore"}</button>`;
-  return `<tr data-vm="${esc(b.vm)}" data-id="${esc(b.id)}">
-    <td><b>${esc(fmtTime(b.created_at))}</b><div class="sub">${opts.showVM ? esc(b.vm) + " · " : ""}${fmtBytes(b.bytes || 0)} · ${b.consistent ? "clean" : "crash-consistent"} · ${b.vcpus} CPU, ${gb(b.memory_mib)}</div>
-      <div class="inline" data-copyrow hidden><input data-copyname placeholder="name of the new VM" autocomplete="off"><button class="btn primary" data-b="copygo">Create copy</button></div></td>
-    <td>${restore}<button class="btn" data-b="copy" title="Make a new VM from this backup">Copy</button><button class="btn danger" data-b="del">Delete</button></td></tr>`;
-}
-function renderBackups(){
-  const v = vms.find(x => x.name === mName); if (!v) return;
-  $("#mBackups").innerHTML = mBackups.length
-    ? mBackups.map(b => backupRow(b, {restore: v.state === "stopped" ? "on" : "off"})).join("")
-    : `<tr><td class="muted">No backups yet.</td></tr>`;
-}
-async function openAllBackups(){
-  $("#gBackups").innerHTML = `<tr><td class="muted">Loading…</td></tr>`;
-  $("#dlgBackups").showModal();
-  await loadAllBackups();
-}
-async function loadAllBackups(){
-  try {
-    const all = (await call("GET", "/backups")).backups;
-    $("#gBackups").innerHTML = all.length ? all.map(b => {
-      const exists = vms.some(v => v.name === b.vm);
-      return backupRow(b, {showVM: true, restore: exists ? "hide" : "on", restoreLabel: "Recreate " + b.vm});
-    }).join("") : `<tr><td class="muted">No backups yet. Make one under Manage on a VM.</td></tr>`;
-  } catch (err) { toast(err.message, true); }
-}
-// Follow a background job; tell the user when it ends.
-async function trackJob(job, after){
-  toast(`${job.kind} of ${job.target} started — you can keep working`);
-  for (;;) {
-    await new Promise(r => setTimeout(r, 2000));
-    let j; try { j = await call("GET", `/jobs/${job.id}`); } catch { continue; }
-    if (j.state === "done") { toast(j.message); break; }
-    if (j.state === "failed") { toast(`${j.kind} of ${j.target} failed: ${j.error}`, true); break; }
-  }
-  refresh(); after?.();
-}
-async function backupAction(e, reload){
-  const btn = e.target.closest("button[data-b]"); if (!btn) return;
-  const row = btn.closest("tr"), vm = row.dataset.vm, id = row.dataset.id, a = btn.dataset.b;
-  const path = `/backups/${encodeURIComponent(vm)}/${encodeURIComponent(id)}`;
-  try {
-    if (a === "copy") { const r = row.querySelector("[data-copyrow]"); r.hidden = !r.hidden; if (!r.hidden) r.querySelector("input").focus(); return; }
-    if (a === "copygo") {
-      const name = row.querySelector("[data-copyname]").value.trim();
-      if (!/^[a-z][a-z0-9-]{0,47}[a-z0-9]$/.test(name)) return toast("Name: lowercase letters, digits and hyphens", true);
-      btn.disabled = true;
-      trackJob(await call("POST", path + "/restore", {name}), reload);
-      row.querySelector("[data-copyrow]").hidden = true;
-    } else if (a === "restore") {
-      if (!armed(btn, "Replace the disk — sure?")) return;
-      btn.disabled = true;
-      trackJob(await call("POST", path + "/restore", {}), reload);
-    } else if (a === "del") {
-      if (!armed(btn, "Delete — sure?")) return;
-      btn.disabled = true;
-      await call("DELETE", path); toast("backup deleted"); reload();
-    }
-  } catch (err) { toast(err.message, true); btn.disabled = false; }
-}
-$("#mBackups").addEventListener("click", e => backupAction(e, loadBackups));
-$("#gBackups").addEventListener("click", e => backupAction(e, loadAllBackups));
-$("#gClose").onclick = () => $("#dlgBackups").close();
-$("#mBackupGo").onclick = async () => {
-  const go = $("#mBackupGo"); go.disabled = true;
-  try { trackJob(await call("POST", `/vms/${encodeURIComponent(mName)}/backups`), () => { if ($("#dlgManage").open) loadBackups(); }); }
-  catch (err) { toast(err.message, true); }
-  go.disabled = false;
-};
-async function saveSchedule(){
-  try {
-    const s = await call("PUT", `/vms/${encodeURIComponent(mName)}/backup-schedule`, {daily: $("#mAuto").checked, keep: +$("#mKeep").value || 7});
-    toast(s.daily ? `${mName}: daily backup at ${s.at}, keeping ${s.keep}` : `${mName}: daily backup off`);
-  } catch (err) { toast(err.message, true); }
-}
-$("#mAuto").onchange = saveSchedule;
-$("#mKeep").onchange = () => { if ($("#mAuto").checked) saveSchedule(); };
 
 /* ---------- polling ---------- */
 let tick = 0;
@@ -811,8 +444,7 @@ async function refresh(withHost){
   if (!token) return;
   try {
     vms = (await call("GET", "/vms")).vms;
-    if (withHost || tick % 4 === 0) { host = await call("GET", "/host").catch(() => null); await loadHostMetrics(); }
-    if (withHost && !templates.length) templates = (await call("GET", "/templates").catch(() => ({templates: []}))).templates;
+    if (withHost || tick % 4 === 0) host = await call("GET", "/host").catch(() => null);
     if (!version) { const h = await fetch(API + "/health").then(r => r.json()).catch(() => ({})); version = h.version || ""; }
     if ($("#hVer")) $("#hVer").textContent = version ? "p8sd " + version : "";
     render();
