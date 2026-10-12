@@ -47,15 +47,13 @@ async function licenseShell(){
   $("#licNotice")?.remove();
   if (!isAdmin()) return;
   try { lic = await call("GET", "/license"); } catch { return; }
-  if (!$("#bLicense")) {
-    const b = document.createElement("button");
-    b.className = "btn"; b.id = "bLicense"; b.textContent = "Subscription";
-    $("#bAudit").before(b);
-  }
+  if (!$("#bLicense")) return;
+  $("#bLicense").hidden = false;
   $("#bLicense").onclick = openLicense;
+  sideGroups();
   licenseNotice();
   try { upd = await call("GET", "/updates"); } catch { upd = null; }
-  if (upd?.update) $("#bLicense").innerHTML = `Subscription <span class="badge" title="Update available">1</span>`;
+  if (upd?.update && !$("#bLicense .badge")) $("#bLicense").insertAdjacentHTML("beforeend", `<span class="badge" title="Update available">1</span>`);
 }
 
 function licenseNotice(){

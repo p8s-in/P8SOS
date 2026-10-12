@@ -35,11 +35,9 @@ const ndWhen = s => { try { return new Date(s).toLocaleString(); } catch { retur
 const ndState = {running: "⏳ running", ok: "✔ done", failed: "✘ failed"};
 
 function nodeShell(){
-  if (!isAdmin() || $("#bNode")) return;
-  const b = document.createElement("button");
-  b.className = "btn"; b.id = "bNode"; b.textContent = "Server";
-  ($("#bSettings") || $("#bAudit")).after(b);
-  b.onclick = openNode;
+  if (!isAdmin() || !$("#bNode")) return;
+  $("#bNode").hidden = false;
+  $("#bNode").onclick = openNode;
 }
 
 async function openNode(){

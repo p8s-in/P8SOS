@@ -117,6 +117,46 @@ dialog form.uform{padding:0}
 .thread .m.staff{border-left:4px solid var(--accent)}
 @media print{body *{visibility:hidden} .inv,.inv *{visibility:visible} .inv{position:absolute;left:0;top:0;border:0;width:100%}}
 .btn.confirm{background:var(--bad);border-color:var(--bad);color:#fff}
+
+/* ---------- Proxmox-style shell: top bar, sidebar tree, content ---------- */
+.shell{display:grid;grid-template-columns:232px minmax(0,1fr);grid-template-rows:auto 1fr;min-height:100vh}
+.shell>header{grid-column:1/-1;padding:8px 16px;gap:10px}
+.shell>main{max-width:none;margin:0;padding:18px 20px;min-width:0}
+#side{background:var(--panel);border-right:1px solid var(--line);padding:10px 8px 24px;overflow-y:auto;position:sticky;top:49px;height:calc(100vh - 49px)}
+.side-h{font-size:11px;font-weight:650;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin:14px 10px 4px}
+#side .btn,.tree-vm{display:flex;align-items:center;gap:9px;width:100%;border:0;background:transparent;padding:6px 10px;border-radius:6px;text-align:left;cursor:pointer;color:var(--text);font-size:13.5px}
+#side .btn:hover,.tree-vm:hover{background:var(--bar)}
+#side .btn.on{background:var(--bar);font-weight:600}
+#side svg{width:16px;height:16px;flex:0 0 16px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;opacity:.75}
+.tree-vm{padding-left:30px;font-size:13px}
+.tree-vm .dot{flex:0 0 8px}
+.tree-vm .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tree-node{font-weight:600}
+#side .badge{margin-left:auto}
+.crumb{font-size:13px;color:var(--muted);margin-bottom:12px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.crumb b{color:var(--text)}
+#vmFilter{width:220px;padding:6px 10px}
+.menu{position:relative;display:inline-block}
+.menu>summary{list-style:none}.menu>summary::-webkit-details-marker{display:none}
+.menu-list{position:absolute;right:0;top:calc(100% + 4px);background:var(--panel);border:1px solid var(--line);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.14);padding:4px;z-index:6;min-width:150px;display:flex;flex-direction:column}
+.menu-list .btn{border:0;text-align:left;background:transparent}
+.menu-list .btn:hover{background:var(--bar)}
+#bSideToggle{display:none}
+.side-mobile{display:none}
+@media (max-width:900px){
+  .shell{grid-template-columns:minmax(0,1fr)}
+  #side{position:fixed;left:0;top:49px;bottom:0;width:260px;z-index:8;transform:translateX(-100%);transition:transform .2s;box-shadow:0 8px 24px rgba(0,0,0,.2)}
+  .shell.side-open #side{transform:none}
+  #bSideToggle{display:inline-flex}
+  #vmFilter{width:140px}
+  .shell>main{padding:14px 16px}
+}
+@media (max-width:640px){
+  .shell>header #bMe,.shell>header #bOut,.shell>header #hVer{display:none}
+  .side-mobile{display:block}
+  #vmFilter{width:0;flex:1;min-width:60px}
+  .shell>header .logo{white-space:nowrap}
+}
 @media (max-width:760px){
   header{padding:10px 16px} main{padding:16px} .panel-head{flex-wrap:wrap} #hVer{display:none}
   thead{display:none} table,tbody,tr,td{display:block;width:100%}
@@ -614,32 +654,76 @@ function renderLogin(){
   };
 }
 
+const IC = {
+  home: '<path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/>',
+  server: '<rect x="3" y="4" width="18" height="7" rx="1.5"/><rect x="3" y="13" width="18" height="7" rx="1.5"/><path d="M7 7.5h.01M7 16.5h.01"/>',
+  disc: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2.5"/>',
+  archive: '<rect x="3" y="4" width="18" height="5" rx="1"/><path d="M5 9v11h14V9M10 13h4"/>',
+  users: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.4-5.5 6.5-5.5s5.7 1.9 6.5 5.5"/><path d="M16 4.6a3.5 3.5 0 0 1 0 6.8M18 14.8c1.9.7 3.1 2.4 3.5 5.2"/>',
+  gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
+  card: '<rect x="2.5" y="5" width="19" height="14" rx="2"/><path d="M2.5 10h19M6 15h4"/>',
+  help: '<circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6v.6M12 17h.01"/>',
+  key: '<circle cx="7.5" cy="15.5" r="4"/><path d="M10.5 12.5L20 3M16 7l3 3M14 9l2 2"/>',
+  activity: '<path d="M3 12h4l3 8 4-16 3 8h4"/>',
+  menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
+};
+const ic = n => `<svg viewBox="0 0 24 24" aria-hidden="true">${IC[n]}</svg>`;
+
 function renderShell(){
   $("#app").innerHTML = `
+  <div class="shell" id="shell">
   <header>
+    <button class="btn" id="bSideToggle" aria-label="Menu"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">${IC.menu}</svg></button>
     <span class="logo" id="hBrand"></span>
-    <span class="sub" id="hName"></span>
-    <span class="spacer"></span>
     <span class="sub" id="hVer"></span>
-    <button class="btn" id="bIsos" hidden>ISOs</button>
-    <button class="btn" id="bBackups">Backups</button>
-    <button class="btn" id="bUsers" hidden>Users</button>
-    <button class="btn" id="bSettings" hidden>Settings</button>
-    <button class="btn" id="bBilling" hidden>Billing</button>
-    <button class="btn" id="bSupport" hidden>Support</button>
-    <button class="btn" id="bAudit">Activity</button>
-    <button class="btn" id="bMe" title="Password and two-factor sign-in"></button>
+    <span class="spacer"></span>
+    <input id="vmFilter" type="search" placeholder="Search VMs" aria-label="Search VMs">
+    <button class="btn primary" id="bNew">+ Create VM</button>
+    <button class="btn" id="bMe" title="Your account: password, two-factor sign-in, keys"></button>
     <button class="btn" id="bOut">Sign out</button>
   </header>
+  <nav id="side" aria-label="Main">
+    <button class="btn on" id="bHome">${ic("home")}<span>Datacenter</span></button>
+    <button class="btn tree-node" id="bNode" hidden>${ic("server")}<span id="hName2">server</span></button>
+    <button class="btn tree-node" id="bNodeLabel" hidden>${ic("server")}<span>Your servers</span></button>
+    <div id="sideVMs"></div>
+    <div class="side-group"><div class="side-h">Storage</div>
+      <button class="btn" id="bIsos" hidden>${ic("disc")}<span>ISO images</span></button>
+      <button class="btn" id="bBackups">${ic("archive")}<span>Backups</span></button>
+    </div>
+    <div class="side-group"><div class="side-h">Administration</div>
+      <button class="btn" id="bUsers" hidden>${ic("users")}<span>Users</span></button>
+      <button class="btn" id="bSettings" hidden>${ic("gear")}<span>Settings</span></button>
+      <button class="btn" id="bLicense" hidden>${ic("key")}<span>Subscription</span></button>
+    </div>
+    <div class="side-group"><div class="side-h">Cloud</div>
+      <button class="btn" id="bBilling" hidden>${ic("card")}<span>Billing</span></button>
+      <button class="btn" id="bSupport" hidden>${ic("help")}<span>Support</span></button>
+    </div>
+    <div class="side-group"><div class="side-h">Logs</div>
+      <button class="btn" id="bAudit">${ic("activity")}<span>Activity</span></button>
+    </div>
+    <div class="side-group side-mobile"><div class="side-h">Account</div>
+      <button class="btn" id="bMe2">${ic("users")}<span>My account</span></button>
+      <button class="btn" id="bOut2">${ic("home")}<span>Sign out</span></button>
+    </div>
+  </nav>
   <main>
+    <div class="crumb"><b>Datacenter</b><span id="hName"></span></div>
     <section class="cards" id="cards"></section>
     <section class="panel">
-      <div class="panel-head"><h2>Virtual machines</h2><span class="sub" id="vmCount"></span>
-        <span class="spacer"></span><button class="btn primary" id="bNew">+ New VM</button></div>
+      <div class="panel-head"><h2>Virtual machines</h2><span class="sub" id="vmCount"></span></div>
       <table><thead><tr><th>State</th><th>Name</th><th>IP address</th><th>CPU</th><th>RAM</th><th>Disk</th><th>Autostart</th><th></th></tr></thead>
       <tbody id="vmBody"></tbody></table>
     </section>
-  </main>`;
+  </main>
+  </div>`;
+  $("#bSideToggle").onclick = () => $("#shell").classList.toggle("side-open");
+  $("#side").addEventListener("click", e => { if (e.target.closest("button") && innerWidth <= 900) $("#shell").classList.remove("side-open"); });
+  $("#bHome").onclick = () => { $("main").scrollTo?.(0, 0); window.scrollTo(0, 0); };
+  $("#vmFilter").oninput = () => renderVMs();
+  $("#bMe2").onclick = () => $("#bMe").click();
+  $("#bOut2").onclick = () => $("#bOut").click();
   $("#bOut").onclick = async () => { await call("POST", "/logout").catch(() => {}); store.clear(); token = ""; me = null; render(); };
   $("#bUsers").onclick = openUsers;
   $("#bSettings").onclick = openSettings;
@@ -678,6 +762,9 @@ function renderHost(){
     $("#bMe").textContent = me.account ? me.name : "admin (token)";
     $("#bIsos").hidden = $("#bUsers").hidden = $("#bSettings").hidden = !isAdmin();
     if (isAdmin() && !licLoaded) { licLoaded = true; licenseShell(); nodeShell(); }
+    $("#bNodeLabel").hidden = isAdmin();
+    sideGroups();
+    if (typeof badge === "function") badge();
   }
   if (me && !isAdmin()) {
     const q = me.quota, u = me.usage;
@@ -690,7 +777,8 @@ function renderHost(){
     return;
   }
   if (!host) { $("#cards").innerHTML = card("Virtual machines", `${run} / ${vms.length}`, "running / total"); return; }
-  $("#hName").textContent = host.hostname;
+  $("#hName").textContent = "› " + host.hostname;
+  if ($("#hName2")) $("#hName2").textContent = host.hostname;
   const memUsed = host.mem_total_mib - host.mem_free_mib;
   const poolUsed = host.pool_size_gb - host.pool_free_gb;
   const up = host.uptime_sec > 86400 ? Math.floor(host.uptime_sec / 86400) + " days" : Math.floor(host.uptime_sec / 3600) + " h";
@@ -702,14 +790,28 @@ function renderHost(){
   drawHostSparks();
 }
 
+// hide sidebar headings whose buttons are all hidden (customers, P8S Cloud off)
+function sideGroups(){
+  for (const g of document.querySelectorAll("#side .side-group"))
+    g.hidden = ![...g.querySelectorAll("button")].some(b => !b.hidden);
+}
+
 function renderVMs(){
   const body = $("#vmBody");
-  if (!vms.length) { body.innerHTML = `<tr><td colspan="8" class="empty">No VMs yet. Click <b>+ New VM</b> to create one.</td></tr>`; return; }
-  body.innerHTML = vms.map(v => {
+  const q = ($("#vmFilter")?.value || "").trim().toLowerCase();
+  const list = q ? vms.filter(v => (v.name + " " + (v.ip || "") + " " + (v.owner || "") + " " + v.template).toLowerCase().includes(q)) : vms;
+  // sidebar tree: one line per VM, like Proxmox's resource tree
+  if ($("#sideVMs")) $("#sideVMs").innerHTML = list.map(v => `<button class="tree-vm ${esc(v.state)}" data-vm="${esc(v.name)}" title="${esc(v.name)} — ${esc(v.state)}"><span class="dot"></span><span class="nm">${esc(v.name)}</span></button>`).join("");
+  if (!vms.length) { body.innerHTML = `<tr><td colspan="8" class="empty">No VMs yet. Click <b>+ Create VM</b> to make one.</td></tr>`; return; }
+  if (!list.length) { body.innerHTML = `<tr><td colspan="8" class="empty">No VM matches “${esc(q)}”.</td></tr>`; return; }
+  body.innerHTML = list.map(v => {
     const b = busy.has(v.name), dis = b ? "disabled" : "";
-    const acts = v.state === "running"
-      ? `<button class="btn" data-a="stop" ${dis}>Stop</button><button class="btn" data-a="reboot" ${dis}>Reboot</button><button class="btn" data-a="kill" ${dis} title="Power off immediately">Force off</button><button class="btn" data-a="console" ${dis} title="See and use the VM's screen">Console</button>`
+    const main = v.state === "running"
+      ? `<button class="btn" data-a="console" ${dis} title="See and use the VM's screen">Console</button><button class="btn" data-a="stop" ${dis} title="Shut down politely">Shutdown</button>`
       : `<button class="btn" data-a="start" ${dis}>Start</button>`;
+    const more = `<details class="menu"><summary class="btn" ${dis ? 'style="pointer-events:none;opacity:.5"' : ""} title="More actions">⋯</summary><div class="menu-list">
+        ${v.state === "running" ? `<button class="btn" data-a="reboot">Reboot</button><button class="btn" data-a="kill" title="Power off immediately">Force off</button>` : ""}
+        <button class="btn danger" data-a="delete">Delete…</button></div></details>`;
     const ip = v.ip ? `<span class="mono copy" data-copy="ssh ${esc(v.user || "debian")}@${esc(v.ip)}" title="Click to copy the SSH command">${esc(v.ip)}</span>` : `<span class="muted">${v.state !== "running" ? "—" : v.iso ? "installing? open Console" : "booting…"}</span>`;
     return `<tr data-n="${esc(v.name)}">
       <td data-k="State"><span class="state ${esc(v.state)}"><span class="dot"></span>${b ? "working…" : esc(v.state)}</span></td>
@@ -717,15 +819,23 @@ function renderVMs(){
       <td data-k="IP">${ip}</td>
       <td data-k="CPU">${v.vcpus}</td><td data-k="RAM">${gb(v.memory_mib)}</td><td data-k="Disk">${v.disk_gb} GB</td>
       <td data-k="Autostart">${v.autostart ? "yes" : "no"}</td>
-      <td><div class="actions">${acts}<button class="btn" data-a="manage" ${dis} title="Resize and snapshots">Manage</button><button class="btn danger" data-a="delete" ${dis}>Delete</button></div></td></tr>`;
+      <td><div class="actions">${main}<button class="btn" data-a="manage" ${dis} title="Settings, snapshots, backups, firewall">Manage</button>${more}</div></td></tr>`;
   }).join("");
 }
+
+// sidebar VM entry -> its Manage page; close open "⋯" menus on outside clicks
+document.addEventListener("click", e => {
+  const t = e.target.closest(".tree-vm");
+  if (t) { openManage(t.dataset.vm); return; }
+  for (const m of document.querySelectorAll("details.menu[open]")) if (!m.contains(e.target)) m.open = false;
+});
 
 /* ---------- actions ---------- */
 document.addEventListener("click", async e => {
   const cp = e.target.closest("[data-copy]");
   if (cp) { try { await navigator.clipboard.writeText(cp.dataset.copy); toast("Copied: " + cp.dataset.copy); } catch { toast(cp.dataset.copy); } return; }
   const btn = e.target.closest("button[data-a]"); if (!btn) return;
+  btn.closest("details.menu")?.removeAttribute("open");
   const name = btn.closest("tr").dataset.n, a = btn.dataset.a;
   if (a === "delete") return openDelete(name);
   if (a === "manage") return openManage(name);
