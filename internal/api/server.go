@@ -52,6 +52,7 @@ type VMService interface {
 	StartISODownload(ctx context.Context, url, name, sha256 string) (vm.Job, error)
 	DeleteISO(ctx context.Context, name string) error
 	EjectISO(ctx context.Context, name string) (vm.VM, error)
+	Screenshot(ctx context.Context, name string) ([]byte, error)
 	SetPassword(ctx context.Context, name, user, password string) error
 }
 
@@ -123,6 +124,7 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("POST /api/v1/isos/download", s.downloadISO)
 	auth.HandleFunc("DELETE /api/v1/isos/{name}", s.deleteISO)
 	auth.HandleFunc("POST /api/v1/vms/{name}/eject", s.ejectISO)
+	auth.HandleFunc("GET /api/v1/vms/{name}/screenshot", s.screenshot)
 	auth.HandleFunc("GET /api/v1/jobs", s.listJobs)
 	auth.HandleFunc("GET /api/v1/jobs/{id}", s.getJob)
 	mux.Handle("/api/v1/", s.requireToken(auth))
@@ -515,6 +517,17 @@ func (s *Server) deleteISO(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) screenshot(w http.ResponseWriter, r *http.Request) {
+	b, err := s.VMs.Screenshot(r.Context(), r.PathValue("name"))
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = w.Write(b)
 }
 
 func (s *Server) ejectISO(w http.ResponseWriter, r *http.Request) {

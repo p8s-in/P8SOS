@@ -168,6 +168,10 @@ deletes the newer ones — without `destroy_newer` that is a `409` listing them.
 ISO VMs have `template: "iso:<name>"`, `user: ""`, and `iso` while the CD is inserted. No cloud-init:
 users and passwords are set in the installer. Windows 11 (needs UEFI + TPM) is not supported yet.
 
+### Screen image
+`GET /vms/{name}/screenshot` → `image/png` of the VM's screen taken directly from QEMU (not via VNC).
+`409` if the VM isn't running.
+
 ### Usage metrics
 `GET /vms/{name}/metrics` → `{"interval":10,"points":[{"t":…,"cpu":25.5,"mem_mib":736,"disk_read_bps":…,
 "disk_write_bps":…,"net_rx_bps":…,"net_tx_bps":…}]}` — one point per 10 s for the last hour, oldest first.

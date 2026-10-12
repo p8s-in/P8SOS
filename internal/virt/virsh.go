@@ -48,6 +48,8 @@ type Hypervisor interface {
 	FSThaw(ctx context.Context, name string) error
 	// VNCAddr is the host:port of a running domain's VNC screen (127.0.0.1 only).
 	VNCAddr(ctx context.Context, name string) (string, error)
+	// Screenshot grabs the VM's screen straight from QEMU (PPM or PNG).
+	Screenshot(ctx context.Context, name string) ([]byte, error)
 	// SetUserPassword sets a guest account's password via the guest agent.
 	SetUserPassword(ctx context.Context, name, user, password string) error
 }
@@ -171,6 +173,21 @@ func ParseVNCDisplay(out string) (string, error) {
 		return "", fmt.Errorf("VNC display %q is not on loopback", s)
 	}
 	return fmt.Sprintf("127.0.0.1:%d", 5900+n), nil
+}
+
+// Screenshot returns the VM's screen as it is right now (PPM or PNG bytes,
+// straight from QEMU's framebuffer, independent of any VNC client).
+func (v *Virsh) Screenshot(ctx context.Context, name string) ([]byte, error) {
+	f, err := os.CreateTemp("", "p8s-shot-*")
+	if err != nil {
+		return nil, err
+	}
+	f.Close()
+	defer os.Remove(f.Name())
+	if _, err := v.virsh(ctx, "screenshot", name, f.Name()); err != nil {
+		return nil, err
+	}
+	return os.ReadFile(f.Name())
 }
 
 // DomStats returns `virsh domstats --raw` for all running domains (one call).

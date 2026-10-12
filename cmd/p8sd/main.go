@@ -28,6 +28,7 @@ import (
 	"p8sos/internal/cloudinit"
 	"p8sos/internal/config"
 	"p8sos/internal/execx"
+	"p8sos/internal/guard"
 	"p8sos/internal/hostinfo"
 	"p8sos/internal/isos"
 	"p8sos/internal/jobs"
@@ -97,6 +98,7 @@ func serve(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go svc.RunSchedule(ctx, cfg.BackupTime, nil)
+	go runGuard(ctx, log, run, cfg)
 	virsh := &virt.Virsh{Run: run, URI: cfg.LibvirtURI}
 	mc := &metrics.Collector{
 		Stats: func(ctx context.Context) (map[string]metrics.Raw, error) {
@@ -186,4 +188,36 @@ func token(args []string) error {
 	entry, _ := json.Marshal(config.Token{Name: *name, SHA256: hash})
 	fmt.Printf("token (shown once, store it safely):\n  %s\n\nadd to \"tokens\" in p8sd.json:\n  %s\n", secret, entry)
 	return nil
+}
+
+// runGuard keeps the VM isolation firewall in place (re-applied every 5 minutes
+// in case something flushed it, e.g. a libvirt or firewall restart).
+func runGuard(ctx context.Context, log *slog.Logger, run execx.Runner, cfg *config.Config) {
+	if !cfg.GuardOn() {
+		guard.Remove(ctx, run)
+		log.Warn("vm_guard is off: VMs can reach this server and the home network")
+		return
+	}
+	gc := guard.Config{NATBridge: cfg.Bridge, LANBridge: cfg.LANBridge, Allow: cfg.VMAllow}
+	lastErr := ""
+	for {
+		err := guard.Apply(ctx, run, gc)
+		msg := ""
+		if err != nil {
+			msg = err.Error()
+		}
+		if msg != lastErr {
+			if err != nil {
+				log.Error("vm guard", "err", err)
+			} else {
+				log.Info("vm guard active: VMs can't reach this server or the home network", "nat", gc.NATBridge, "lan", gc.LANBridge)
+			}
+			lastErr = msg
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(5 * time.Minute):
+		}
+	}
 }

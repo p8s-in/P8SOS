@@ -28,9 +28,14 @@ type Config struct {
 	MaxDiskGB    int        `json:"max_disk_gb"`      // per-VM ceiling
 	BackupDir    string     `json:"backup_dir"`       // backup files; default data_dir/backups (put it on another disk!)
 	ISODir       string     `json:"iso_dir"`          // installer ISO library; default data_dir/isos
+	VMGuard      *bool      `json:"vm_guard"`         // keep VMs off the host and the home LAN (default true)
+	VMAllow      []string   `json:"vm_allow"`         // private addresses VMs may still reach, e.g. a NAS
 	BackupTime   string     `json:"backup_time"`      // daily backups at HH:MM host time; default 02:30
 	BackupKeep   int        `json:"backup_keep"`      // default number of daily backups kept per VM; default 7
 }
+
+// GuardOn reports whether VM isolation rules are wanted (default yes).
+func (c *Config) GuardOn() bool { return c.VMGuard == nil || *c.VMGuard }
 
 // Token is an API credential. Only the SHA-256 hex of the secret is stored.
 type Token struct {

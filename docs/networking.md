@@ -10,6 +10,17 @@ Every VM is on one of two networks. You choose when you create it.
 | Setup | none | once: `sudo p8 lan-setup` (Ethernet cable) |
 | Good for | experiments, build boxes | web servers, game servers, anything you open from another device |
 
+## VMs can't touch the server or your home devices
+
+P8S OS keeps every VM away from the P8S server itself (no dashboard, no SSH, nothing but DHCP/DNS/ping)
+and keeps **private-network** VMs away from your home network (192.168.x.x, 10.x, 172.16-31.x).
+They still reach the internet. The server can still reach every VM (`p8 ssh`, console).
+Home-network VMs are on your LAN by choice, but they can't reach the server either.
+
+Exceptions, e.g. a NAS a VM should use, go in `/etc/p8s/p8sd.json`: `"vm_allow": ["192.168.0.50"]`.
+To switch the protection off: `"vm_guard": false`. Then `sudo systemctl restart p8sd`.
+Check it's on: `sudo nft list table inet p8s_guard`.
+
 ## Turn on the home network (once)
 
 1. Plug the host into your router with an **Ethernet cable**.

@@ -10,6 +10,7 @@ import (
 
 	"p8sos/internal/isos"
 	"p8sos/internal/jobs"
+	"p8sos/internal/screen"
 	"p8sos/internal/virt"
 )
 
@@ -141,6 +142,23 @@ func (s *Service) createFromISO(ctx context.Context, r CreateRequest) (VM, error
 		}
 	}
 	return s.get(ctx, dom)
+}
+
+// Screenshot returns a running VM's screen as PNG.
+func (s *Service) Screenshot(ctx context.Context, name string) ([]byte, error) {
+	dom := Prefix + name
+	st, err := s.state(ctx, dom)
+	if err != nil {
+		return nil, err
+	}
+	if st != virt.Running {
+		return nil, fmt.Errorf("%w: vm %q is %s", ErrConflict, name, st)
+	}
+	b, err := s.HV.Screenshot(ctx, dom)
+	if err != nil {
+		return nil, err
+	}
+	return screen.ToPNG(b)
 }
 
 // EjectISO takes the installer CD out of a stopped VM (after installing).

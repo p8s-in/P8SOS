@@ -117,6 +117,9 @@ func (h *fakeHV) FSThaw(_ context.Context, n string) error {
 	h.thawed++
 	return nil
 }
+func (h *fakeHV) Screenshot(_ context.Context, n string) ([]byte, error) {
+	return append([]byte("P6\n1 1\n255\n"), 1, 2, 3), nil
+}
 func (h *fakeHV) VNCAddr(_ context.Context, n string) (string, error) { return "127.0.0.1:5900", nil }
 func (h *fakeHV) SetUserPassword(_ context.Context, n, user, pw string) error {
 	if h.noAgent {

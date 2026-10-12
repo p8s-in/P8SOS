@@ -143,6 +143,10 @@ func (f *fakeVMs) DeleteISO(ctx context.Context, name string) error {
 	}
 	return nil
 }
+func (f *fakeVMs) Screenshot(ctx context.Context, n string) ([]byte, error) {
+	_, err := f.Get(ctx, n)
+	return []byte("\x89PNGfake"), err
+}
 func (f *fakeVMs) EjectISO(ctx context.Context, n string) (vm.VM, error) { return f.Get(ctx, n) }
 
 type fakeMetrics struct{}
@@ -255,6 +259,8 @@ func TestAPI(t *testing.T) {
 		{"DELETE", "/api/v1/isos/inuse.iso", secret, "", 409, "in use"},
 		{"DELETE", "/api/v1/isos/old.iso", secret, "", 204, ""},
 		{"POST", "/api/v1/vms/web1/eject", secret, "", 200, "web1"},
+		{"GET", "/api/v1/vms/web1/screenshot", secret, "", 200, "PNGfake"},
+		{"GET", "/api/v1/vms/nope/screenshot", secret, "", 404, "not_found"},
 	}
 	for _, c := range cases {
 		code, body := do(t, srv, c.method, c.path, c.tok, c.body)

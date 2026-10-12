@@ -43,6 +43,7 @@ textarea{min-height:80px;font-family:ui-monospace,Menlo,Consolas,monospace}
   <button class="btn" id="bCAD" disabled title="Send Ctrl+Alt+Del to the VM">Ctrl+Alt+Del</button>
   <button class="btn" id="bType" disabled title="Type text into the VM (e.g. a long password)">Type text</button>
   <button class="btn" id="bPw" title="Set a login password inside the VM">Set password</button>
+  <button class="btn" id="bShot" title="Picture of the screen taken directly from the VM (not through this viewer)">Screen image</button>
   <button class="btn" id="bFull" title="Full screen">Full screen</button>
   <button class="btn primary" id="bRe" hidden>Reconnect</button>
 </div>
@@ -128,6 +129,14 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt
 
 $("#bRe").onclick = connect;
 $("#bCAD").onclick = () => { rfb?.sendCtrlAltDel(); rfb?.focus(); };
+$("#bShot").onclick = async () => {
+  if (!token) return toast("Open the console from the dashboard to use this", true);
+  const r = await fetch(`/api/v1/vms/${encodeURIComponent(vm)}/screenshot`, {headers: {"Authorization": "Bearer " + token}});
+  if (!r.ok) { const d = await r.json().catch(() => ({})); return toast(d?.error?.message || "HTTP " + r.status, true); }
+  const url = URL.createObjectURL(await r.blob());
+  const a = document.createElement("a"); a.href = url; a.download = `${vm}-screen.png`; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+};
 $("#bFull").onclick = () => document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen().catch(() => {});
 
 /* Type text: send physical key presses for a US layout, with Shift where needed,

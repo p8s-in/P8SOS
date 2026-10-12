@@ -130,6 +130,13 @@ if [[ -n $ip && $keys != '[]' ]]; then
     [[ ${g[0]} == "$NAME" ]] && ok "hostname is $NAME" || bad "hostname is '${g[0]}'"
     sz=${g[1]//[^0-9]/}; [[ $sz -ge 9 ]] && ok "root fs grew to ${sz}G" || bad "root fs is ${sz}G, expected ~10G"
     [[ ${g[2]} == active ]] && ok "qemu-guest-agent active" || bad "qemu-guest-agent: ${g[2]:-unknown}"
+    # VM guard: a VM must not reach this server or the home network, but must reach the internet.
+    hostlan=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i=1;i<NF;i++) if ($i=="src") print $(i+1)}')
+    langw=$(ip -4 route show default | awk '{print $3; exit}')
+    g=$(ssh "${ssh_opts[@]}" "$LOGIN@$ip" "for t in ${ip%.*}.1:8006 ${ip%.*}.1:22 ${hostlan:-127.0.0.1}:8006 ${langw:-127.0.0.1}:80; do timeout 4 bash -c \"</dev/tcp/\${t%:*}/\${t#*:}\" 2>/dev/null && echo \"\$t OPEN\" || echo \"\$t closed\"; done; getent hosts deb.debian.org >/dev/null && echo DNS-OK" 2>/dev/null)
+    if [[ -z $g ]]; then bad "VM guard: could not run the check inside the VM"
+    else grep -q "OPEN" <<<"$g" && bad "VM guard: a VM can reach $(grep OPEN <<<"$g" | tr '\n' ' ')" || ok "VM guard: VM can't reach this server or the home network"; fi
+    grep -q DNS-OK <<<"$g" && ok "VM still has DNS/internet" || bad "VM has no DNS: $g"
     r=$(ssh "${ssh_opts[@]}" "$LOGIN@$ip" 'sudo getent shadow root | cut -d: -f2 | cut -c1-3; sudo sshd -T 2>/dev/null | grep -i "^permitrootlogin"' 2>/dev/null)
     [[ $(head -1 <<<"$r") == '$6$' ]] && ok "root password set (SHA-512 hash in /etc/shadow)" || bad "root password not set: $r"
     [[ $(tail -1 <<<"$r") == "permitrootlogin yes" ]] && ok "SSH allows root password login" || bad "sshd: $(tail -1 <<<"$r")"
