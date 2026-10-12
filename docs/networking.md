@@ -58,3 +58,21 @@ reservation") using the MAC from `p8 show web2`.
 | `old settings were restored` | `sudo cat /var/lib/p8s/bridge/apply.log` → send it |
 | LAN VM shows no IP | Router's DHCP on? Check `p8 bootlog web2`. The IP shows once the guest agent runs (~1 min) |
 | Want to undo | `sudo cp /var/lib/p8s/bridge/interfaces.before-bridge /etc/network/interfaces && sudo reboot`, then remove `"lan_bridge"` from `/etc/p8s/p8sd.json` |
+
+## SSH from other computers (SSH ports)
+
+VMs and containers on the **Private (NAT)** network have addresses like `192.168.122.x` / `10.0.3.x` that exist
+only inside the server, so `ssh root@192.168.122.50` works on the server but not from your PC.
+P8S OS therefore gives each of them an **SSH port on the server** (like NAT VPS providers):
+
+```
+ssh -p 2205 debian@192.168.0.106        # server address + the guest's port
+```
+
+- The dashboard shows it under the IP address ("SSH port 2205"); click it to copy the command.
+- Ports start at 2201, stay with a guest until it is deleted (`/var/lib/p8s/ssh-ports.json`), and are only
+  shown to the guest's owner. p8sd relays the connection to the guest's port 22.
+- VMs and containers on the home network or with a public IP don't need this (they are reachable directly).
+- Turn off with `"ssh_ports": false` in `/etc/p8s/p8sd.json`, or move with `"ssh_port_base": 30001`.
+- Login: cloud VMs use their image user (`debian`, `ubuntu`, …) with your SSH key, or `root` with the password
+  you set; containers use `root`.

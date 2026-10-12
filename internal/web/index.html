@@ -477,7 +477,14 @@ const store = {
   clear(){ mem = ""; try { sessionStorage.removeItem("p8s.token"); localStorage.removeItem("p8s.token"); } catch {} },
 };
 let mem = "", token = store.get(), vms = [], host = null, templates = [], busy = new Set(), timer = null, version = "";
-let me = null, userList = [], brandName = "P8S OS";
+let me = null, userList = [], brandName = "P8S OS", sshPorts = {};
+// "SSH from any computer" line for a guest on the private network (server port -> guest:22)
+function sshLine(name, user){
+  const p = sshPorts[name];
+  if (!p) return "";
+  const cmd = `ssh -p ${p} ${user || "root"}@${location.hostname}`;
+  return `<div class="sub"><span class="mono copy" data-copy="${esc(cmd)}" title="Click to copy: ${esc(cmd)} (works from any computer)">SSH port ${p}</span></div>`;
+}
 // "P8S Cloud" -> P8S <b>Cloud</b>: the last word in the accent colour, like the original logo.
 function brandHTML(){ const w = esc(brandName).split(" "); return w.length > 1 ? w.slice(0, -1).join(" ") + " <b>" + w[w.length - 1] + "</b>" : "<b>" + w[0] + "</b>"; }
 const isAdmin = () => me?.role === "admin";
@@ -836,7 +843,7 @@ function renderVMs(){
     return `<tr data-n="${esc(v.name)}">
       <td data-k="State"><span class="state ${esc(v.state)}"><span class="dot"></span>${b ? "working…" : esc(v.state)}</span></td>
       <td data-k="Name"><b>${esc(v.name)}</b><div class="sub">${esc(templates.find(t => t.name === v.template)?.label || v.template.replace(/^iso:/, "from "))}${v.os_type === "windows11" ? " · Windows (UEFI, TPM)" : v.os_type === "windows" ? " · Windows" : ""}${v.network === "lan" ? " · home network" : ""}${v.public ? " · public IP" : ""}${v.iso ? " · CD in drive" : ""}${isAdmin() && v.owner ? ` · <b>${esc(v.owner)}</b>` : ""}</div></td>
-      <td data-k="IP">${ip}</td>
+      <td data-k="IP">${ip}${sshLine(v.name, v.user)}</td>
       <td data-k="CPU">${v.vcpus}</td><td data-k="RAM">${gb(v.memory_mib)}</td><td data-k="Disk">${v.disk_gb} GB</td>
       <td data-k="Autostart">${v.autostart ? "yes" : "no"}</td>
       <td><div class="actions">${main}<button class="btn" data-a="manage" ${dis} title="Settings, snapshots, backups, firewall">Manage</button>${more}</div></td></tr>`;
@@ -1692,6 +1699,7 @@ async function refresh(withHost){
   if (!token) return;
   try {
     vms = (await call("GET", "/vms")).vms;
+    sshPorts = (await call("GET", "/ssh-ports").catch(() => ({}))).ports || {};
     if (typeof loadCTs === "function") await loadCTs();
     if (withHost || tick % 4 === 0 || !me) me = await call("GET", "/me");
     if (isAdmin() && (withHost || tick % 4 === 0)) { host = await call("GET", "/host").catch(() => null); await loadHostMetrics(); }

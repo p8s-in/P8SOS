@@ -87,7 +87,7 @@ function renderCTs(){
     return `<tr data-ct="${esc(c.name)}">
       <td data-k="State"><span class="state ${esc(c.state)}"><span class="dot"></span>${b ? "working…" : esc(c.state)}</span></td>
       <td data-k="Name"><b>${esc(c.name)}</b><div class="sub">container · ${esc(ctTplLabel(c.template))}${c.network === "lan" ? " · home network" : ""}${isAdmin() && c.owner ? ` · <b>${esc(c.owner)}</b>` : ""}</div></td>
-      <td data-k="IP">${ip}</td><td data-k="CPU">${c.vcpus}</td><td data-k="RAM">${gb(c.memory_mib)}</td>
+      <td data-k="IP">${ip}${typeof sshLine === "function" ? sshLine(c.name, "root") : ""}</td><td data-k="CPU">${c.vcpus}</td><td data-k="RAM">${gb(c.memory_mib)}</td>
       <td data-k="Disk">${used}${c.disk_gb} GB</td><td data-k="Autostart">${c.autostart ? "yes" : "no"}</td>
       <td><div class="actions">${main}<button class="btn" data-c="manage" ${dis}>Manage</button>${more}</div></td></tr>`;
   }).join("");

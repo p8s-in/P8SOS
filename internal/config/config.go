@@ -36,7 +36,14 @@ type Config struct {
 	// p8sd asks it once a day whether this server's key was renewed or cancelled.
 	// Empty = keys are only checked offline.
 	LicenseServer string `json:"license_server"`
+	// SSHPorts gives every VM and container on the private (NAT) network an SSH
+	// port on this server, from SSHPortBase up (default on, from 2201).
+	SSHPorts    *bool `json:"ssh_ports"`
+	SSHPortBase int   `json:"ssh_port_base"`
 }
+
+// SSHPortsOn reports whether NAT guests get SSH ports (default yes).
+func (c *Config) SSHPortsOn() bool { return c.SSHPorts == nil || *c.SSHPorts }
 
 // GuardOn reports whether VM isolation rules are wanted (default yes).
 func (c *Config) GuardOn() bool { return c.VMGuard == nil || *c.VMGuard }

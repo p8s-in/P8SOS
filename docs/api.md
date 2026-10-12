@@ -329,6 +329,11 @@ passwords locked). 8–128 chars. `409` if the VM isn't running or the agent isn
 | POST | `/api/v1/updates/install` | download, verify and install the available release (202) |
 | PUT | `/api/v1/updates/channel` | `{"channel":"stable"|"testing"}` (stable needs a subscription) |
 
+### SSH ports
+
+`GET /api/v1/ssh-ports` → `{"enabled": true, "ports": {"web1": 2201, …}}`: the port on this server that reaches each
+private-network VM/container's SSH (customers see only theirs). See [networking.md](networking.md).
+
 ### Windows VMs
 
 `POST /api/v1/vms` with `"iso"` takes `"os_type": "linux" | "windows" (BIOS) | "windows11"` (UEFI, Secure Boot,

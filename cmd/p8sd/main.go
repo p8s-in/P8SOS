@@ -44,6 +44,7 @@ import (
 	"p8sos/internal/license"
 	"p8sos/internal/mail"
 	"p8sos/internal/metrics"
+	"p8sos/internal/portfwd"
 	"p8sos/internal/storage"
 	"p8sos/internal/support"
 	"p8sos/internal/tasks"
@@ -293,6 +294,35 @@ func serve(args []string) error {
 			}
 			return l
 		}
+	}
+	if cfg.SSHPortsOn() { // server:2201.. -> VM/container:22 for guests on the private network
+		base := cfg.SSHPortBase
+		if base <= 0 {
+			base = 2201
+		}
+		pf := &portfwd.Manager{File: filepath.Join(cfg.DataDir, "ssh-ports.json"), Base: base, Log: log,
+			Guests: func(ctx context.Context) ([]portfwd.Guest, error) {
+				var gs []portfwd.Guest
+				vms, err := svc.List(ctx)
+				if err != nil {
+					return nil, err
+				}
+				for _, v := range vms {
+					gs = append(gs, portfwd.Guest{Name: v.Name, IP: v.IP, NAT: v.Network == "nat"})
+				}
+				if cts != nil {
+					l, err := cts.List(ctx)
+					if err != nil {
+						return nil, err
+					}
+					for _, c := range l {
+						gs = append(gs, portfwd.Guest{Name: c.Name, IP: c.IP, NAT: c.Network == "nat"})
+					}
+				}
+				return gs, nil
+			}}
+		apiSrv.SSHPorts = pf.Ports
+		go pf.Run(ctx)
 	}
 	go func() { // P8S Cloud billing: hourly charges, low/negative balance, suspension
 		for {

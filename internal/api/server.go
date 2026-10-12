@@ -112,6 +112,8 @@ type Server struct {
 	Node *tasks.Node
 	// CTs are the containers (LXC); nil = not available.
 	CTs *ct.Service
+	// SSHPorts lists guest -> SSH port on this server; nil = off.
+	SSHPorts func() map[string]int
 
 	once      sync.Once
 	lmOnce    sync.Once
@@ -245,6 +247,7 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("POST /api/v1/containers/{name}/snapshots", s.ctSnapshot)
 	auth.HandleFunc("POST /api/v1/containers/{name}/snapshots/{snap}/rollback", s.ctRollback)
 	auth.HandleFunc("DELETE /api/v1/containers/{name}/snapshots/{snap}", s.ctDeleteSnapshot)
+	auth.HandleFunc("GET /api/v1/ssh-ports", s.sshPorts)
 	auth.HandleFunc("GET /api/v1/node", s.getNode)
 	auth.HandleFunc("GET /api/v1/node/tasks", s.listTasks)
 	auth.HandleFunc("POST /api/v1/node/tasks", s.startTask)
@@ -1025,4 +1028,35 @@ func decodeBytes(b []byte, v any) error { return json.Unmarshal(b, v) }
 
 func auditEntry(user, detail string) audit.Entry {
 	return audit.Entry{User: user, Action: "billing", Status: 200, Detail: detail}
+}
+
+// sshPorts: which port on this server reaches each VM/container's SSH (only
+// the caller's own guests for customers).
+func (s *Server) sshPorts(w http.ResponseWriter, r *http.Request) {
+	out := map[string]int{}
+	if s.SSHPorts == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ports": out, "enabled": false})
+		return
+	}
+	all := s.SSHPorts()
+	p := who(r)
+	mine := map[string]bool{}
+	if !p.Admin {
+		mine = s.ownedNames(r.Context(), p)
+		if s.CTs != nil {
+			if l, err := s.CTs.List(r.Context()); err == nil {
+				for _, c := range l {
+					if c.Owner == p.Name {
+						mine[c.Name] = true
+					}
+				}
+			}
+		}
+	}
+	for n, port := range all {
+		if p.Admin || mine[n] {
+			out[n] = port
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ports": out, "enabled": true})
 }
