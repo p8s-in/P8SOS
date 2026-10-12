@@ -43,6 +43,8 @@ textarea{min-height:80px;font-family:ui-monospace,Menlo,Consolas,monospace}
   <button class="btn" id="bCAD" disabled title="Send Ctrl+Alt+Del to the VM">Ctrl+Alt+Del</button>
   <button class="btn" id="bType" disabled title="Type text into the VM (e.g. a long password)">Type text</button>
   <button class="btn" id="bPw" title="Set a login password inside the VM">Set password</button>
+  <select class="btn" id="bMode" title="How the screen is sent. Sharp is exact (use it on your home network); Compressed uses less bandwidth.">
+    <option value="sharp">Sharp</option><option value="compressed">Compressed</option></select>
   <button class="btn" id="bShot" title="Picture of the screen taken directly from the VM (not through this viewer)">Screen image</button>
   <button class="btn" id="bFull" title="Full screen">Full screen</button>
   <button class="btn primary" id="bRe" hidden>Reconnect</button>
@@ -102,6 +104,23 @@ async function api(method, path, body){
   return d;
 }
 
+/* Screen encoding. QEMU + the compressed (Tight/ZRLE) encodings drew some text
+   garbled (glyphs flipped) on Linux framebuffer consoles, so "Sharp" asks QEMU
+   for Hextile/Raw only: exact pixels, plenty fast on a LAN. */
+const COMPRESSED = [7, -260, 16, 21]; // Tight, TightPNG, ZRLE, JPEG
+let mode = (() => { try { return localStorage.getItem("p8s.consoleMode") || "sharp"; } catch { return "sharp"; } })();
+$("#bMode").value = mode;
+if (RFB.messages && RFB.messages.clientEncodings) {
+  const orig = RFB.messages.clientEncodings;
+  RFB.messages.clientEncodings = (sock, encs) => orig(sock, mode === "sharp" ? encs.filter(e => !COMPRESSED.includes(e)) : encs);
+}
+$("#bMode").onchange = e => {
+  mode = e.target.value;
+  try { localStorage.setItem("p8s.consoleMode", mode); } catch {}
+  if (rfb) { rfb.disconnect(); } // the disconnect handler offers Reconnect; reconnect now
+  setTimeout(connect, 300);
+};
+
 async function connect(){
   $("#bRe").hidden = true; message(""); status("Connecting…");
   if (!ticket) {
@@ -113,6 +132,7 @@ async function connect(){
   ticket = ""; // used up by this connection
   $("#screen").innerHTML = "";
   rfb = new RFB($("#screen"), url, {wsProtocols: ["binary"], shared: true});
+  rfb.qualityLevel = 9; // never lossy JPEG for text
   rfb.scaleViewport = true;
   rfb.background = "#000";
   rfb.focusOnClick = true;
