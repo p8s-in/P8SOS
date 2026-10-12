@@ -18,6 +18,8 @@ type ZFS struct {
 	Dataset string            // parent dataset for VM disks, e.g. tank/p8s/vms
 	Exists  func(string) bool // checks a device path; nil = os.Stat (tests fake it)
 	Wait    time.Duration     // max wait for /dev/zvol/...; 0 = 30s
+	// BusyRetry is the pause between destroy attempts while the disk is busy; 0 = 1s.
+	BusyRetry time.Duration
 }
 
 func (z *ZFS) exists(p string) bool {
@@ -64,13 +66,28 @@ func (z *ZFS) CloneDisk(ctx context.Context, snapshot, vm string, sizeGB int) (s
 }
 
 // DestroyDisk removes the VM's disk and its snapshots. Missing disks are not an error.
+// Right after a VM is powered off, QEMU or udev can still hold the device open for
+// a moment ("dataset is busy"), so that case is retried for a few seconds.
 func (z *ZFS) DestroyDisk(ctx context.Context, vm string) error {
-	_, err := z.Run.Run(ctx, "zfs", "destroy", "-r", z.diskDataset(vm))
-	var ee *execx.Error
-	if errors.As(err, &ee) && strings.Contains(ee.Stderr, "does not exist") {
-		return nil
+	pause := z.BusyRetry
+	if pause == 0 {
+		pause = time.Second
 	}
-	return err
+	for attempt := 1; ; attempt++ {
+		_, err := z.Run.Run(ctx, "zfs", "destroy", "-r", z.diskDataset(vm))
+		var ee *execx.Error
+		if !errors.As(err, &ee) {
+			return err
+		}
+		if strings.Contains(ee.Stderr, "does not exist") {
+			return nil
+		}
+		if !strings.Contains(ee.Stderr, "busy") || attempt == 15 || ctx.Err() != nil {
+			return err
+		}
+		_, _ = z.Run.Run(ctx, "udevadm", "settle", "--timeout=5")
+		time.Sleep(pause)
+	}
 }
 
 // SnapshotExists checks that a template snapshot is present.

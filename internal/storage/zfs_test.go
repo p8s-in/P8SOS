@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"p8sos/internal/execx"
 	"p8sos/internal/testfake"
 )
 
@@ -107,5 +108,32 @@ func TestSnapshots(t *testing.T) {
 	}
 	if len(ParseSnapshots("")) != 0 {
 		t.Fatal("empty output should give no snapshots")
+	}
+}
+
+// busyRunner fails "zfs destroy" with "dataset is busy" the first n times.
+type busyRunner struct {
+	testfake.Runner
+	n int
+}
+
+func (b *busyRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	if name == "zfs" && args[0] == "destroy" && b.n > 0 {
+		b.n--
+		return nil, &execx.Error{Cmd: name, Args: args, Stderr: "cannot destroy 'tank/vms/p8s-a1-disk0': dataset is busy", Err: context.Canceled}
+	}
+	return b.Runner.Run(ctx, name, args...)
+}
+
+func TestDestroyDiskRetriesWhileBusy(t *testing.T) {
+	r := &busyRunner{n: 3}
+	z := &ZFS{Run: r, Dataset: "tank/vms", BusyRetry: time.Millisecond}
+	if err := z.DestroyDisk(context.Background(), "p8s-a1"); err != nil {
+		t.Fatalf("should succeed after the device is released: %v", err)
+	}
+	r = &busyRunner{n: 100}
+	z.Run = r
+	if err := z.DestroyDisk(context.Background(), "p8s-a1"); err == nil || !strings.Contains(err.Error(), "busy") {
+		t.Fatalf("should give up eventually: %v", err)
 	}
 }

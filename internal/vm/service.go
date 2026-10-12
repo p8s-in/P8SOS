@@ -400,10 +400,10 @@ func (s *Service) Delete(ctx context.Context, name string) error {
 	if err := s.HV.Undefine(ctx, dom); err != nil {
 		return err
 	}
-	if err := s.Disks.DestroyDisk(ctx, dom); err != nil {
+	s.logErr("remove seed", s.Seeds.Remove(dom))
+	if err := s.Disks.DestroyDisk(context.WithoutCancel(ctx), dom); err != nil {
 		return fmt.Errorf("domain removed but disk cleanup failed: %w", err)
 	}
-	s.logErr("remove seed", s.Seeds.Remove(dom))
 	return nil
 }
 
