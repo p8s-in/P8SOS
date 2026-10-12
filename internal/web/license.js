@@ -90,7 +90,7 @@ function renderLicense(){
     : (l.user_limit ? `Home allows up to ${l.user_limit} user accounts.` : "");
   $("#lsRemove").hidden = !x;
   $("#lsCheck").hidden = !(x && l.online);
-  const rank = {home: 0, business: 1, hosting: 2, partner: 3, internal: 4};
+  const rank = {home: 0, standard: 1, enterprise: 2, datacenter: 3, internal: 4};
   $("#lsTiers").innerHTML = l.tiers.map(t => {
     const cur = t.id === l.tier, up = rank[t.id] > rank[l.tier];
     const buy = t.price && up && l.shop ? `<a class="btn primary" style="margin-top:8px;display:inline-block;text-decoration:none" href="${esc(shopLink({tier: t.id, server: l.server_id}))}" target="_blank" rel="noopener">Buy ${esc(t.name)}</a>` : "";

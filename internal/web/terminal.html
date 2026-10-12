@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Terminal</title>
+<style>
+/**
+ * Copyright (c) 2014 The xterm.js authors. All rights reserved.
+ * Copyright (c) 2012-2013, Christopher Jeffrey (MIT License)
+ * https://github.com/chjj/term.js
+ * @license MIT
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ *
+ * Originally forked from (with the author's permission):
+ *   Fabrice Bellard's javascript vt100 for jslinux:
+ *   http://bellard.org/jslinux/
+ *   Copyright (c) 2011 Fabrice Bellard
+ *   The original design remains. The terminal itself
+ *   has been extended to include xterm CSI codes, among
+ *   other features.
+ */
+
+/**
+ *  Default styles for xterm.js
+ */
+
+.xterm {
+    cursor: text;
+    position: relative;
+    user-select: none;
+    -ms-user-select: none;
+    -webkit-user-select: none;
+}
+
+.xterm.focus,
+.xterm:focus {
+    outline: none;
+}
+
+.xterm .xterm-helpers {
+    position: absolute;
+    top: 0;
+    /**
+     * The z-index of the helpers must be higher than the canvases in order for
+     * IMEs to appear on top.
+     */
+    z-index: 5;
+}
+
+.xterm .xterm-helper-textarea {
+    padding: 0;
+    border: 0;
+    margin: 0;
+    /* Move textarea out of the screen to the far left, so that the cursor is not visible */
+    position: absolute;
+    opacity: 0;
+    left: -9999em;
+    top: 0;
+    width: 0;
+    height: 0;
+    z-index: -5;
+    /** Prevent wrapping so the IME appears against the textarea at the correct position */
+    white-space: nowrap;
+    overflow: hidden;
+    resize: none;
+}
+
+.xterm .composition-view {
+    /* TODO: Composition position got messed up somewhere */
+    background: #000;
+    color: #FFF;
+    display: none;
+    position: absolute;
+    white-space: nowrap;
+    z-index: 1;
+}
+
+.xterm .composition-view.active {
+    display: block;
+}
+
+.xterm .xterm-viewport {
+    /* On OS X this is required in order for the scroll bar to appear fully opaque */
+    background-color: #000;
+    overflow-y: scroll;
+    cursor: default;
+    position: absolute;
+    right: 0;
+    left: 0;
+    top: 0;
+    bottom: 0;
+}
+
+.xterm .xterm-screen {
+    position: relative;
+}
+
+.xterm .xterm-screen canvas {
+    position: absolute;
+    left: 0;
+    top: 0;
+}
+
+.xterm .xterm-scroll-area {
+    visibility: hidden;
+}
+
+.xterm-char-measure-element {
+    display: inline-block;
+    visibility: hidden;
+    position: absolute;
+    top: 0;
+    left: -9999em;
+    line-height: normal;
+}
+
+.xterm.enable-mouse-events {
+    /* When mouse events are enabled (eg. tmux), revert to the standard pointer cursor */
+    cursor: default;
+}
+
+.xterm.xterm-cursor-pointer,
+.xterm .xterm-cursor-pointer {
+    cursor: pointer;
+}
+
+.xterm.column-select.focus {
+    /* Column selection mode */
+    cursor: crosshair;
+}
+
+.xterm .xterm-accessibility:not(.debug),
+.xterm .xterm-message {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    right: 0;
+    z-index: 10;
+    color: transparent;
+    pointer-events: none;
+}
+
+.xterm .xterm-accessibility-tree:not(.debug) *::selection {
+  color: transparent;
+}
+
+.xterm .xterm-accessibility-tree {
+  user-select: text;
+  white-space: pre;
+}
+
+.xterm .live-region {
+    position: absolute;
+    left: -9999px;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+}
+
+.xterm-dim {
+    /* Dim should not apply to background, so the opacity of the foreground color is applied
+     * explicitly in the generated class and reset to 1 here */
+    opacity: 1 !important;
+}
+
+.xterm-underline-1 { text-decoration: underline; }
+.xterm-underline-2 { text-decoration: double underline; }
+.xterm-underline-3 { text-decoration: wavy underline; }
+.xterm-underline-4 { text-decoration: dotted underline; }
+.xterm-underline-5 { text-decoration: dashed underline; }
+
+.xterm-overline {
+    text-decoration: overline;
+}
+
+.xterm-overline.xterm-underline-1 { text-decoration: overline underline; }
+.xterm-overline.xterm-underline-2 { text-decoration: overline double underline; }
+.xterm-overline.xterm-underline-3 { text-decoration: overline wavy underline; }
+.xterm-overline.xterm-underline-4 { text-decoration: overline dotted underline; }
+.xterm-overline.xterm-underline-5 { text-decoration: overline dashed underline; }
+
+.xterm-strikethrough {
+    text-decoration: line-through;
+}
+
+.xterm-screen .xterm-decoration-container .xterm-decoration {
+	z-index: 6;
+	position: absolute;
+}
+
+.xterm-screen .xterm-decoration-container .xterm-decoration.xterm-decoration-top-layer {
+	z-index: 7;
+}
+
+.xterm-decoration-overview-ruler {
+    z-index: 8;
+    position: absolute;
+    top: 0;
+    right: 0;
+    pointer-events: none;
+}
+
+.xterm-decoration-top {
+    z-index: 2;
+    position: relative;
+}
+</style>
+<style>
+html,body{margin:0;height:100%;background:#0e1116;color:#e6edf3;font:13px system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+body{display:flex;flex-direction:column}
+.bar{display:flex;align-items:center;gap:10px;padding:6px 12px;background:#161b22;border-bottom:1px solid #262c36}
+.bar b{font-weight:650}.sp{flex:1}
+.st{display:inline-flex;align-items:center;gap:6px;color:#8b949e}.st i{width:8px;height:8px;border-radius:50%;background:#98a2b3}
+.st.ok i{background:#12b76a}.st.bad i{background:#f04438}
+button{background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:6px;padding:4px 10px;cursor:pointer;font:inherit}
+#term{flex:1;min-height:0;padding:6px 0 0 8px}
+#msg{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:#8b949e;text-align:center;max-width:80%}
+</style>
+</head>
+<body>
+<div class="bar"><b id="name"></b><span class="st" id="st"><i></i><span>connecting…</span></span><span class="sp"></span>
+  <button id="paste" title="Paste text from your clipboard">Paste</button><button id="again">Reconnect</button></div>
+<div id="term"></div><div id="msg" hidden></div>
+<script src="/xterm.min.js"></script>
+<script src="/xterm-fit.min.js"></script>
+<script>
+"use strict";
+const ct = new URLSearchParams(location.search).get("ct") || "";
+const token = (() => { try { return sessionStorage.getItem("p8s.token") || localStorage.getItem("p8s.token") || ""; } catch { return ""; } })();
+document.title = ct + " — terminal";
+document.getElementById("name").textContent = ct + " (container)";
+const term = new Terminal({cursorBlink: true, fontFamily: "ui-monospace,SFMono-Regular,Menlo,Consolas,monospace", fontSize: 14, scrollback: 5000,
+  theme: {background: "#0e1116", foreground: "#e6edf3"}});
+const fit = new FitAddon.FitAddon();
+term.loadAddon(fit);
+term.open(document.getElementById("term"));
+fit.fit();
+let ws = null;
+const enc = new TextEncoder();
+function status(t, cls){ const s = document.getElementById("st"); s.className = "st " + (cls || ""); s.lastChild.textContent = t; }
+function msg(t){ const m = document.getElementById("msg"); m.hidden = !t; m.textContent = t || ""; }
+function sendSize(){ if (ws && ws.readyState === 1) ws.send(JSON.stringify({cols: term.cols, rows: term.rows})); }
+async function connect(){
+  if (ws) { try { ws.close(); } catch {} }
+  msg("");
+  if (!token) { status("not signed in", "bad"); msg("Open the terminal from the P8S OS dashboard (Console button)."); return; }
+  status("connecting…");
+  let ticket;
+  try {
+    const r = await fetch("/api/v1/containers/" + encodeURIComponent(ct) + "/console", {method: "POST", headers: {"Authorization": "Bearer " + token}});
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j?.error?.message || "HTTP " + r.status);
+    ticket = j.ticket;
+  } catch (e) { status("not connected", "bad"); msg(e.message); return; }
+  ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/api/v1/terminal?ticket=" + encodeURIComponent(ticket));
+  ws.binaryType = "arraybuffer";
+  ws.onopen = () => { status("connected", "ok"); sendSize(); term.focus(); };
+  ws.onmessage = e => term.write(typeof e.data === "string" ? e.data : new Uint8Array(e.data));
+  ws.onclose = () => { status("disconnected", "bad"); term.write("\r\n\x1b[90m[disconnected — press Reconnect]\x1b[0m\r\n"); };
+}
+term.onData(d => { if (ws && ws.readyState === 1) ws.send(enc.encode(d)); });
+term.onResize(sendSize);
+new ResizeObserver(() => { try { fit.fit(); } catch {} }).observe(document.getElementById("term"));
+document.getElementById("again").onclick = connect;
+document.getElementById("paste").onclick = async () => { try { const t = await navigator.clipboard.readText(); if (ws && ws.readyState === 1) ws.send(enc.encode(t)); } catch {} term.focus(); };
+connect();
+</script>
+</body>
+</html>

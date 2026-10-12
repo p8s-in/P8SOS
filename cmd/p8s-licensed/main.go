@@ -68,7 +68,7 @@ func run(cmd string, args []string) error {
 	id, args := split(args)
 	fs := flag.NewFlagSet(cmd, flag.ExitOnError)
 	cfgPath := fs.String("config", "/etc/p8s-licensed.json", "config file")
-	tier := fs.String("tier", "", "business, hosting, partner or internal")
+	tier := fs.String("tier", "", "standard, enterprise, datacenter or internal")
 	server := fs.String("server", "", "server ID(s), comma separated")
 	customer := fs.String("customer", "", "customer name")
 	email := fs.String("email", "", "customer email")
@@ -129,7 +129,7 @@ func run(cmd string, args []string) error {
 		fmt.Println(licsrv.PublicKey(key))
 	case "issue":
 		if _, ok := license.Tier(*tier); !ok || *tier == license.Home {
-			return errors.New("-tier: business, hosting, partner or internal")
+			return errors.New("-tier: standard, enterprise, datacenter or internal")
 		}
 		r, err := st.Issue(*tier, []string{*server}, *customer, *email, *months, *note)
 		if err != nil {

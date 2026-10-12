@@ -329,12 +329,29 @@ passwords locked). 8–128 chars. `409` if the VM isn't running or the agent isn
 | POST | `/api/v1/updates/install` | download, verify and install the available release (202) |
 | PUT | `/api/v1/updates/channel` | `{"channel":"stable"|"testing"}` (stable needs a subscription) |
 
+### Containers (LXC)
+
+| Method | Path | |
+|---|---|---|
+| GET | `/api/v1/containers` | containers the caller may see, `enabled` false when LXC isn't installed |
+| POST | `/api/v1/containers` | `{"name","template","vcpus","memory_mib","disk_gb","network","root_password","ssh_keys","owner","start","autostart"}` |
+| GET / DELETE / PATCH | `/api/v1/containers/{name}` | details / delete with its disk / resize `{"vcpus","memory_mib","disk_gb","autostart"}` (live) |
+| POST | `/api/v1/containers/{name}/start` · `/stop` (`{"force":true}`) · `/reboot` | power |
+| GET / POST | `/api/v1/containers/{name}/snapshots` | list / take `{"name"}` |
+| POST / DELETE | `/api/v1/containers/{name}/snapshots/{snap}/rollback` · `/snapshots/{snap}` | roll back (stopped; `{"destroy_newer":true}`) / delete |
+| POST | `/api/v1/containers/{name}/password` | `{"user","password"}` (running) |
+| PUT | `/api/v1/containers/{name}/owner` | `{"owner"}` (admins) |
+| POST | `/api/v1/containers/{name}/console` | one-time ticket for `GET /api/v1/terminal?ticket=` (WebSocket: binary = terminal bytes, text = `{"cols","rows"}`) |
+| GET | `/api/v1/ct-templates` | installed container templates |
+
+Names are shared with VMs (a container and a VM can't have the same name). See [containers.md](containers.md).
+
 ### Server page (admins)
 
 | Method | Path | |
 |---|---|---|
 | GET | `/api/v1/node` | storage pool (size, used, free, health, how much it can grow), OS template catalog, home network, Debian updates, running task, recent tasks |
-| POST | `/api/v1/node/tasks` | `{"kind":"template","arg":"ubuntu-24.04"}` · `storage-grow` · `lan-setup` · `os-check` · `os-upgrade` · `reboot` (202; 409 while another runs) |
+| POST | `/api/v1/node/tasks` | `{"kind":"template","arg":"ubuntu-24.04"}` · `ct-template` (arg e.g. debian-13) · `storage-grow` · `lan-setup` · `os-check` · `os-upgrade` · `reboot` (202; 409 while another runs) |
 | GET | `/api/v1/node/tasks` / `/api/v1/node/tasks/{id}` | task list / one task with its log |
 
 Tasks run as their own systemd units (`p8s-task-*`), so they finish even when p8sd restarts.

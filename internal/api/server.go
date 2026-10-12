@@ -21,6 +21,7 @@ import (
 	"p8sos/internal/cloud"
 	"p8sos/internal/config"
 	"p8sos/internal/console"
+	"p8sos/internal/ct"
 	"p8sos/internal/firewall"
 	"p8sos/internal/ippool"
 	"p8sos/internal/license"
@@ -109,6 +110,8 @@ type Server struct {
 	Updates *updates.Manager
 	// Node is the Server page: host tasks (templates, storage, network, Debian updates); nil = none.
 	Node *tasks.Node
+	// CTs are the containers (LXC); nil = not available.
+	CTs *ct.Service
 
 	once      sync.Once
 	lmOnce    sync.Once
@@ -128,7 +131,8 @@ func (s *Server) tickets() *console.Tickets {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", s.health)
-	mux.HandleFunc("GET /api/v1/console", s.consoleSocket) // authorized by its one-time ticket
+	mux.HandleFunc("GET /api/v1/console", s.consoleSocket)   // authorized by its one-time ticket
+	mux.HandleFunc("GET /api/v1/terminal", s.terminalSocket) // container shell; one-time ticket
 	mux.HandleFunc("GET /api/v1/auth", s.authInfo)
 	mux.HandleFunc("POST /api/v1/login", s.login)
 	mux.HandleFunc("POST /api/v1/signup", s.signup)
@@ -227,6 +231,20 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("PUT /api/v1/license", s.putLicense)
 	auth.HandleFunc("DELETE /api/v1/license", s.deleteLicense)
 	auth.HandleFunc("POST /api/v1/license/check", s.checkLicense)
+	auth.HandleFunc("GET /api/v1/containers", s.listCTs)
+	auth.HandleFunc("POST /api/v1/containers", s.createCT)
+	auth.HandleFunc("GET /api/v1/ct-templates", s.ctTemplates)
+	auth.HandleFunc("GET /api/v1/containers/{name}", s.getCT)
+	auth.HandleFunc("DELETE /api/v1/containers/{name}", s.deleteCT)
+	auth.HandleFunc("PATCH /api/v1/containers/{name}", s.resizeCT)
+	auth.HandleFunc("POST /api/v1/containers/{name}/{action}", s.ctPower)
+	auth.HandleFunc("POST /api/v1/containers/{name}/console", s.ctConsole)
+	auth.HandleFunc("POST /api/v1/containers/{name}/password", s.ctPassword)
+	auth.HandleFunc("PUT /api/v1/containers/{name}/owner", s.ctOwner)
+	auth.HandleFunc("GET /api/v1/containers/{name}/snapshots", s.ctSnapshots)
+	auth.HandleFunc("POST /api/v1/containers/{name}/snapshots", s.ctSnapshot)
+	auth.HandleFunc("POST /api/v1/containers/{name}/snapshots/{snap}/rollback", s.ctRollback)
+	auth.HandleFunc("DELETE /api/v1/containers/{name}/snapshots/{snap}", s.ctDeleteSnapshot)
 	auth.HandleFunc("GET /api/v1/node", s.getNode)
 	auth.HandleFunc("GET /api/v1/node/tasks", s.listTasks)
 	auth.HandleFunc("POST /api/v1/node/tasks", s.startTask)
@@ -300,6 +318,10 @@ func (s *Server) createVM(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := who(r)
+	if s.CTs != nil && s.CTs.Exists(req.Name) {
+		writeErr(w, http.StatusConflict, "exists", fmt.Sprintf("a container is already called %q", req.Name))
+		return
+	}
 	plan, ok := s.applyPlan(w, r, &req)
 	if !ok {
 		return

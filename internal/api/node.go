@@ -38,9 +38,14 @@ func (s *Server) startTask(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &body) {
 		return
 	}
-	if body.Kind == tasks.Template {
+	if body.Kind == tasks.Template || body.Kind == tasks.CTTemplate {
+		o := s.Node.Overview(r.Context())
+		cat := o.Catalog
+		if body.Kind == tasks.CTTemplate {
+			cat = o.CTCatalog
+		}
 		ok := false
-		for _, c := range s.Node.Overview(r.Context()).Catalog {
+		for _, c := range cat {
 			ok = ok || (c.Name == body.Arg && !c.Installed)
 		}
 		if !ok {

@@ -35,7 +35,7 @@ type Config struct {
 	TaxName    string        `json:"tax_name"`
 	TaxPercent int           `json:"tax_percent"`
 	Prefix     string        `json:"invoice_prefix"`
-	// Prices per year in paise: per server (business, hosting) or per pack (partner).
+	// Prices per year in paise: per server (standard, enterprise) or per pack (datacenter).
 	Prices map[string]int64 `json:"prices"`
 
 	RazorpayKeyID         string `json:"razorpay_key_id"`
@@ -310,7 +310,7 @@ func (s *Server) order(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, "this licence was cancelled; please contact us")
 			return
 		}
-		rank := map[string]int{license.Business: 1, license.Hosting: 2, license.Partner: 3}
+		rank := map[string]int{license.Standard: 1, license.Enterprise: 2, license.Datacenter: 3}
 		if rank[in.Tier] < rank[rec.License.Tier] {
 			writeErr(w, http.StatusBadRequest, "a renewal can stay on the same tier or move up")
 			return

@@ -161,25 +161,31 @@ func headerHas(h http.Header, name, token string) bool {
 // ReadMessage returns the payload of the next data frame. Control frames are
 // handled here: pings are answered, a close frame ends the stream with io.EOF.
 func (c *Conn) ReadMessage() ([]byte, error) {
+	_, p, err := c.ReadTyped()
+	return p, err
+}
+
+// ReadTyped is ReadMessage that also says whether the frame was text.
+func (c *Conn) ReadTyped() (text bool, payload []byte, err error) {
 	for {
 		fin, op, payload, err := c.readFrame()
 		if err != nil {
-			return nil, err
+			return false, nil, err
 		}
 		switch op {
 		case opPing:
 			if err := c.write(opPong, payload); err != nil {
-				return nil, err
+				return false, nil, err
 			}
 		case opPong:
 		case opClose:
 			_ = c.write(opClose, nil)
-			return nil, io.EOF
+			return false, nil, io.EOF
 		case opText, opBinary, opCont:
 			_ = fin // fragments are forwarded as they arrive; VNC is a byte stream
-			return payload, nil
+			return op == opText, payload, nil
 		default:
-			return nil, fmt.Errorf("websocket: unknown opcode %d", op)
+			return false, nil, fmt.Errorf("websocket: unknown opcode %d", op)
 		}
 	}
 }
@@ -287,3 +293,6 @@ func Proxy(ws *Conn, tcp net.Conn) {
 	stop()
 	<-done
 }
+
+// SendClose sends a close frame.
+func (c *Conn) SendClose() error { return c.write(opClose, nil) }

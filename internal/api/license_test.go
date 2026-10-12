@@ -26,7 +26,7 @@ func TestLicense(t *testing.T) {
 		s.Billing = &billing.Store{Dir: filepath.Join(dir, "billing")}
 	})
 	st := m.server.Cloud.Settings()
-	st.SignupOpen, st.Brand = true, "Acme Hosting"
+	st.SignupOpen, st.Brand = true, "Acme Enterprise"
 	if _, err := m.server.Cloud.SetSettings(st); err != nil {
 		t.Fatal(err)
 	}
@@ -50,24 +50,24 @@ func TestLicense(t *testing.T) {
 	m.req("GET", "/api/v1/license", alice, "", 403)
 
 	// a key for another server, a forged key, then the right one
-	other, _ := license.Sign(priv, license.License{ID: "LTEST0001", Customer: "x", Tier: license.Hosting,
+	other, _ := license.Sign(priv, license.License{ID: "LTEST0001", Customer: "x", Tier: license.Enterprise,
 		Servers: []string{"P8S-0000-0000-0000-0000"}, Issued: "2026-01-01", Expires: "2027-01-01"})
 	m.req("PUT", "/api/v1/license", boss, `{"key":"`+other+`"}`, 400)
 	_, priv2, _ := ed25519.GenerateKey(nil)
-	forged, _ := license.Sign(priv2, license.License{ID: "LTEST0002", Customer: "x", Tier: license.Hosting,
+	forged, _ := license.Sign(priv2, license.License{ID: "LTEST0002", Customer: "x", Tier: license.Enterprise,
 		Servers: []string{id}, Issued: "2026-01-01", Expires: "2027-01-01"})
 	m.req("PUT", "/api/v1/license", boss, `{"key":"`+forged+`"}`, 400)
 	m.req("PUT", "/api/v1/license", alice, `{"key":"x"}`, 403)
-	good, _ := license.Sign(priv, license.License{ID: "LTEST0003", Customer: "Acme", Tier: license.Hosting,
+	good, _ := license.Sign(priv, license.License{ID: "LTEST0003", Customer: "Acme", Tier: license.Enterprise,
 		Servers: []string{id}, Issued: "2026-01-01", Expires: "2027-01-01"})
 	v = m.req("PUT", "/api/v1/license", boss, `{"key":"`+good+`"}`, 200)
-	if v["tier"] != "hosting" || v["notice"] != false || v["state"] != "active" {
+	if v["tier"] != "enterprise" || v["notice"] != false || v["state"] != "active" {
 		t.Fatalf("installed: %v", v)
 	}
 
-	// Hosting unlocks it all
+	// Enterprise unlocks it all
 	m.req("POST", "/api/v1/users", secret, `{"name":"carol","password":"carol-password"}`, 201)
-	if v := m.req("GET", "/api/v1/auth", "", "", 200); v["signup"] != true || v["brand"] != "Acme Hosting" {
+	if v := m.req("GET", "/api/v1/auth", "", "", 200); v["signup"] != true || v["brand"] != "Acme Enterprise" {
 		t.Fatalf("hosting auth info: %v", v)
 	}
 	m.req("PUT", "/api/v1/plans/small", secret, `{"name":"Small","vcpus":1,"memory_mib":1024,"disk_gb":20,"price_monthly":50000}`, 200)

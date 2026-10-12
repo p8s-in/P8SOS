@@ -171,6 +171,18 @@ type Usage struct {
 // usage is what a user has now, websites included.
 func (s *Server) usage(vms []vm.VM, owner string) Usage {
 	u := usageOf(vms, owner)
+	if s.CTs != nil { // containers count like VMs
+		if cts, err := s.CTs.List(context.Background()); err == nil {
+			for _, c := range cts {
+				if c.Owner == owner {
+					u.VMs++
+					u.VCPUs += c.VCPUs
+					u.MemoryMiB += c.MemoryMiB
+					u.DiskGB += c.DiskGB
+				}
+			}
+		}
+	}
 	if s.Tunnel != nil {
 		if l, err := s.Tunnel.Sites("", owner); err == nil {
 			u.Sites = len(l)
@@ -598,8 +610,8 @@ func (s *Server) deleteUser(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	if n := usageOf(all, name).VMs; n > 0 {
-		writeErr(w, http.StatusConflict, "conflict", fmt.Sprintf("%s still has %d VM(s); delete them or give them to someone else first", name, n))
+	if n := s.usage(all, name).VMs; n > 0 {
+		writeErr(w, http.StatusConflict, "conflict", fmt.Sprintf("%s still has %d server(s) (VMs or containers); delete them or give them to someone else first", name, n))
 		return
 	}
 	if err := s.Users.Delete(name); err != nil {

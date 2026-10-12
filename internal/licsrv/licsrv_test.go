@@ -126,13 +126,13 @@ func TestShop(t *testing.T) {
 	}
 
 	// bad orders
-	post(t, ts.URL+"/api/order", `{"tier":"hosting","servers":"nope","name":"A","email":"a@x.com"}`, 400)
+	post(t, ts.URL+"/api/order", `{"tier":"enterprise","servers":"nope","name":"A","email":"a@x.com"}`, 400)
 	post(t, ts.URL+"/api/order", `{"tier":"internal","servers":"`+s1+`","name":"A","email":"a@x.com"}`, 400)
 	post(t, ts.URL+"/api/order", `{"tier":"home","servers":"`+s1+`","name":"A","email":"a@x.com"}`, 400)
-	post(t, ts.URL+"/api/order", `{"tier":"hosting","servers":"`+s1+`","name":"A","email":"bad"}`, 400)
+	post(t, ts.URL+"/api/order", `{"tier":"enterprise","servers":"`+s1+`","name":"A","email":"bad"}`, 400)
 
-	// buy Hosting for two servers: 2 x 9999 + 18% GST
-	o := post(t, ts.URL+"/api/order", `{"tier":"hosting","servers":"`+s1+`\n`+strings.ToLower(s2)+`","name":"Ravi","company":"Acme","gstin":"37abcde1234f1z5","email":"Ravi@Acme.in"}`, 200)
+	// buy Enterprise for two servers: 2 x 9999 + 18% GST
+	o := post(t, ts.URL+"/api/order", `{"tier":"enterprise","servers":"`+s1+`\n`+strings.ToLower(s2)+`","name":"Ravi","company":"Acme","gstin":"37abcde1234f1z5","email":"Ravi@Acme.in"}`, 200)
 	if o["amount"].(float64) != 2*999900*118/100 {
 		t.Fatalf("amount %v", o["amount"])
 	}
@@ -142,7 +142,7 @@ func TestShop(t *testing.T) {
 	d := post(t, ts.URL+"/api/paid", `{"razorpay_order_id":"`+oid+`","razorpay_payment_id":"pay_1","razorpay_signature":"`+sig("sekret", oid+"|pay_1")+`"}`, 200)
 	k := d["key"].(string)
 	l, err := license.Parse(trusted, k)
-	if err != nil || l.Tier != "hosting" || !l.Covers(s1) || !l.Covers(s2) || l.Expires != "2027-10-11" || l.Email != "ravi@acme.in" {
+	if err != nil || l.Tier != "enterprise" || !l.Covers(s1) || !l.Covers(s2) || l.Expires != "2027-10-11" || l.Email != "ravi@acme.in" {
 		t.Fatalf("licence %v %+v", err, l)
 	}
 	inv := d["invoice"].(map[string]any)
@@ -172,7 +172,7 @@ func TestShop(t *testing.T) {
 	}
 
 	// a payment for a different amount is refused
-	o2 := post(t, ts.URL+"/api/order", `{"tier":"business","servers":"`+s1+`","name":"Eve","email":"eve@x.com"}`, 200)
+	o2 := post(t, ts.URL+"/api/order", `{"tier":"standard","servers":"`+s1+`","name":"Eve","email":"eve@x.com"}`, 200)
 	oid2 := o2["order_id"].(string)
 	fr.payments["pay_2"] = billing.Payment{ID: "pay_2", OrderID: oid2, Amount: 100, Currency: "INR", Status: "captured"}
 	post(t, ts.URL+"/api/paid", `{"razorpay_order_id":"`+oid2+`","razorpay_payment_id":"pay_2","razorpay_signature":"`+sig("sekret", oid2+"|pay_2")+`"}`, 400)
@@ -186,10 +186,10 @@ func TestShop(t *testing.T) {
 		t.Fatalf("other server %v", c)
 	}
 
-	// renewal by webhook: wrong email refused, then a renewal moving up to Partner
-	post(t, ts.URL+"/api/order", `{"tier":"hosting","renew":"`+l.ID+`","name":"X","email":"x@x.com"}`, 404)
-	post(t, ts.URL+"/api/order", `{"tier":"business","renew":"`+l.ID+`","name":"Ravi","email":"ravi@acme.in"}`, 400)
-	o3 := post(t, ts.URL+"/api/order", `{"tier":"partner","renew":"`+l.ID+`","name":"Ravi","email":"ravi@acme.in"}`, 200)
+	// renewal by webhook: wrong email refused, then a renewal moving up to Datacenter
+	post(t, ts.URL+"/api/order", `{"tier":"enterprise","renew":"`+l.ID+`","name":"X","email":"x@x.com"}`, 404)
+	post(t, ts.URL+"/api/order", `{"tier":"standard","renew":"`+l.ID+`","name":"Ravi","email":"ravi@acme.in"}`, 400)
+	o3 := post(t, ts.URL+"/api/order", `{"tier":"datacenter","renew":"`+l.ID+`","name":"Ravi","email":"ravi@acme.in"}`, 200)
 	if o3["amount"].(float64) != 2499900*118/100 {
 		t.Fatalf("partner amount %v", o3["amount"])
 	}
@@ -202,7 +202,7 @@ func TestShop(t *testing.T) {
 		t.Fatal("webhook", r.StatusCode)
 	}
 	rec, _ := st.Get(l.ID)
-	if rec.License.Tier != "partner" || rec.License.Expires != "2028-10-11" {
+	if rec.License.Tier != "datacenter" || rec.License.Expires != "2028-10-11" {
 		t.Fatalf("renewed %+v", rec.License)
 	}
 
@@ -215,7 +215,7 @@ func TestShop(t *testing.T) {
 	if err := lm.Check(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if s := lm.Status(); s.Tier != "partner" || s.License.Expires != "2028-10-11" {
+	if s := lm.Status(); s.Tier != "datacenter" || s.License.Expires != "2028-10-11" {
 		t.Fatalf("p8sd after renewal %+v", s)
 	}
 

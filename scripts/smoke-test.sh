@@ -202,6 +202,30 @@ else
   echo "  skipped the traffic checks (no SSH to the VM)"
 fi
 
+step "5d. containers (LXC)"
+api GET /containers
+if ! jq -e .enabled <<<"$BODY" >/dev/null 2>&1; then
+  echo "  skipped (lxc not installed)"
+else
+  api GET /ct-templates; CTT=$(jq -r '.templates[0].name // empty' <<<"$BODY")
+  if [[ -z $CTT ]]; then
+    echo "  skipped (no container template: dashboard -> Server -> Container templates -> Add)"
+  else
+    CTN=${NAME}ct; api DELETE "/containers/$CTN"
+    api POST /containers '{"name":"'"$CTN"'","template":"'"$CTT"'","vcpus":1,"memory_mib":256,"disk_gb":4,"root_password":"smoke-ct-pass-1"}'
+    expect "create container from $CTT" 201
+    [[ $(jq -r '.state // .container.state' <<<"$BODY") == running ]] && ok "container is running" || bad "container state: $BODY"
+    sudo lxc-attach -n "$CTN" -- /bin/true && ok "lxc-attach works" || bad "lxc-attach failed"
+    [[ $(sudo lxc-attach -n "$CTN" -- id -u 2>/dev/null) == 0 ]] && ok "root inside the container" || bad "not root inside"
+    pid=$(sudo lxc-info -n "$CTN" -pH 2>/dev/null)
+    [[ -n $pid && $(awk '/^Uid:/ {print $2}' /proc/$pid/status 2>/dev/null) == 100000 ]] && ok "unprivileged: container root is uid 100000 on the host" || bad "container root is not mapped to 100000"
+    api PATCH "/containers/$CTN" '{"memory_mib":512}'; expect "resize while running" 200
+    api POST "/containers/$CTN/snapshots" '{"name":"s1"}'; expect "snapshot" 201
+    api POST "/containers/$CTN/stop" '{"force":true}'; expect "force off" 200
+    api DELETE "/containers/$CTN"; expect "delete container" 204
+  fi
+fi
+
 step "6. power operations"
 api POST "/vms/$NAME/stop"; expect "ACPI stop" 202
 wait_state stopped "$STOP_TIMEOUT" && ok "guest shut down cleanly" || bad "still $(state) after ${STOP_TIMEOUT}s of ACPI shutdown"

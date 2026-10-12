@@ -25,7 +25,7 @@ func (s *Server) userLimitReached(w http.ResponseWriter) bool {
 		return false
 	}
 	writeErr(w, http.StatusPaymentRequired, "subscription",
-		fmt.Sprintf("P8S OS Home allows %d user accounts; a Business subscription removes the limit", license.HomeUsers))
+		fmt.Sprintf("P8S OS Home allows %d user accounts; a Standard subscription removes the limit", license.HomeUsers))
 	return true
 }
 

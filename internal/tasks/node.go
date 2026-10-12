@@ -20,7 +20,9 @@ type Node struct {
 	Pool      string          // ZFS pool, e.g. "tank"
 	DataDir   string          // /var/lib/p8s
 	Templates func() []string // installed template names
-	LAN       func() bool     // home-network bridge is up
+	// CTTemplates lists installed container templates; nil = containers off.
+	CTTemplates func() []string
+	LAN         func() bool // home-network bridge is up
 }
 
 // Storage is the VM pool.
@@ -54,13 +56,14 @@ type OSUpdates struct {
 
 // Overview is the Server page.
 type Overview struct {
-	Storage  Storage        `json:"storage"`
-	Catalog  []CatalogEntry `json:"catalog"`
-	LAN      bool           `json:"lan"`
-	OS       OSUpdates      `json:"os"`
-	Running  *Task          `json:"running,omitempty"`
-	Tasks    []Task         `json:"tasks"`
-	Hostname string         `json:"hostname"`
+	Storage   Storage        `json:"storage"`
+	Catalog   []CatalogEntry `json:"catalog"`
+	CTCatalog []CatalogEntry `json:"ct_catalog"` // empty when containers are off
+	LAN       bool           `json:"lan"`
+	OS        OSUpdates      `json:"os"`
+	Running   *Task          `json:"running,omitempty"`
+	Tasks     []Task         `json:"tasks"`
+	Hostname  string         `json:"hostname"`
 }
 
 const gib = 1 << 30
@@ -101,15 +104,15 @@ func (n *Node) storage(ctx context.Context) Storage {
 	return s
 }
 
-func (n *Node) catalog(ctx context.Context) []CatalogEntry {
+func (n *Node) catalog(ctx context.Context, script string, installed func() []string) []CatalogEntry {
 	have := map[string]bool{}
-	if n.Templates != nil {
-		for _, t := range n.Templates() {
+	if installed != nil {
+		for _, t := range installed() {
 			have[t] = true
 		}
 	}
 	out := []CatalogEntry{}
-	b, err := n.Run.Run(ctx, "/bin/bash", filepath.Join(n.Tasks.Scripts, "make-template.sh"), "--list")
+	b, err := n.Run.Run(ctx, "/bin/bash", filepath.Join(n.Tasks.Scripts, script), "--list")
 	if err != nil {
 		return out
 	}
@@ -125,7 +128,11 @@ func (n *Node) catalog(ctx context.Context) []CatalogEntry {
 
 // Overview collects everything for the Server page.
 func (n *Node) Overview(ctx context.Context) Overview {
-	o := Overview{Storage: n.storage(ctx), Catalog: n.catalog(ctx), Tasks: n.Tasks.List(ctx)}
+	o := Overview{Storage: n.storage(ctx), Catalog: n.catalog(ctx, "make-template.sh", n.Templates), Tasks: n.Tasks.List(ctx),
+		CTCatalog: []CatalogEntry{}}
+	if n.CTTemplates != nil {
+		o.CTCatalog = n.catalog(ctx, "make-ct-template.sh", n.CTTemplates)
+	}
 	if n.LAN != nil {
 		o.LAN = n.LAN()
 	}

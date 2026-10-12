@@ -17,6 +17,12 @@ document.body.insertAdjacentHTML("beforeend", `
   <div class="sub">Images new VMs are made from. Adding one downloads it from the publisher (a few hundred MB) and checks its checksum.</div>
   <table class="snaps"><tbody id="ndTpl"></tbody></table>
 
+  <div id="ndCTBox" hidden>
+    <h3>Container templates</h3>
+    <div class="sub">Official linuxcontainers.org images (50-200 MB each), checked against their checksums. Every container is an instant copy of one.</div>
+    <table class="snaps"><tbody id="ndCTTpl"></tbody></table>
+  </div>
+
   <h3>Home network</h3>
   <div id="ndLan"></div>
 
@@ -85,6 +91,12 @@ function renderNode(){
     : `<tr><td class="sub">The template list is not available (make-template.sh missing?).</td></tr>`;
   for (const b of $("#ndTpl").querySelectorAll("[data-tpl]")) b.onclick = () => runTask("template", b.dataset.tpl,
     "Add " + b.dataset.tpl + "? It downloads a few hundred MB; the dashboard restarts for a moment when it's done.");
+
+  $("#ndCTBox").hidden = !(n.ct_catalog || []).length;
+  $("#ndCTTpl").innerHTML = (n.ct_catalog || []).map(c => `<tr><td><b>${esc(c.label)}</b><div class="sub mono">${esc(c.name)}</div></td>
+    <td style="text-align:right">${c.installed ? `<span class="sub">✔ added</span>` : `<button class="btn" data-cttpl="${esc(c.name)}" ${dis}>Add</button>`}</td></tr>`).join("");
+  for (const b of $("#ndCTTpl").querySelectorAll("[data-cttpl]")) b.onclick = () => runTask("ct-template", b.dataset.cttpl,
+    "Add the " + b.dataset.cttpl + " container template? It downloads 50-200 MB.");
 
   $("#ndLan").innerHTML = n.lan
     ? `<div class="sub">✔ VMs can join your home network (choose "Home network" when creating a VM).</div>`

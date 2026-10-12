@@ -67,6 +67,20 @@ if ! command -v cloudflared >/dev/null; then
     apt-get update -qq && apt-get install -y -qq cloudflared >/dev/null; } 2>/dev/null &&
     ok "cloudflared installed (for public access)" || echo "  note: cloudflared not installed; public access won't work until it is"
 fi
+# Containers (LXC, unprivileged): ids 100000-165535 belong to containers' root.
+if ! command -v lxc-start >/dev/null || ! command -v newuidmap >/dev/null; then
+  apt-get install -y -qq lxc uidmap >/dev/null 2>&1 && ok "LXC installed (containers)" || echo "  note: LXC not installed; containers won't be available"
+fi
+if command -v lxc-start >/dev/null; then
+  # VMs and containers share the same bridges; LXC's own lxcbr0 isn't used
+  [[ -f /etc/default/lxc-net ]] && sed -i 's/^USE_LXC_BRIDGE=.*/USE_LXC_BRIDGE="false"/' /etc/default/lxc-net
+  grep -q '^USE_LXC_BRIDGE=' /etc/default/lxc-net 2>/dev/null || echo 'USE_LXC_BRIDGE="false"' >> /etc/default/lxc-net
+  systemctl disable --now lxc-net >/dev/null 2>&1 || true
+  grep -q '^root:100000:65536$' /etc/subuid 2>/dev/null || echo 'root:100000:65536' >> /etc/subuid
+  grep -q '^root:100000:65536$' /etc/subgid 2>/dev/null || echo 'root:100000:65536' >> /etc/subgid
+  install -d -m 0755 /var/lib/p8s /var/lib/p8s/ct /var/lib/p8s/ct-templates /var/lib/lxc
+  chmod o+x /var/lib/p8s   # containers' root (uid 100000) must reach its files
+fi
 [[ -e /dev/kvm ]] || die "/dev/kvm is missing — nested virtualization is not working. See USER.md 'Problems'."
 ok "/dev/kvm present"
 zpool list -H "$POOL" >/dev/null || die "ZFS pool '$POOL' was not created"
@@ -134,6 +148,7 @@ install -m 0755 "$REPO/scripts/setup-bridge.sh" /usr/local/share/p8s/setup-bridg
 install -m 0755 "$REPO/scripts/make-template.sh" /usr/local/share/p8s/make-template.sh
 install -m 0755 "$REPO/scripts/storage.sh" /usr/local/share/p8s/storage.sh
 install -m 0755 "$REPO/scripts/os-upgrade.sh" /usr/local/share/p8s/os-upgrade.sh
+install -m 0755 "$REPO/scripts/make-ct-template.sh" /usr/local/share/p8s/make-ct-template.sh
 ok "installed /usr/local/bin/p8sd and the 'p8' command"
 
 # ---------------------------------------------------------------------------

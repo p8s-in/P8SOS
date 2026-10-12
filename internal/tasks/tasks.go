@@ -24,6 +24,7 @@ import (
 // Kinds of task.
 const (
 	Template    = "template"     // arg: catalog name, e.g. ubuntu-24.04
+	CTTemplate  = "ct-template"  // container template, arg e.g. debian-13
 	StorageGrow = "storage-grow" // use the system disk's free space for VMs
 	LANSetup    = "lan-setup"    // bridge VMs onto the home network
 	OSCheck     = "os-check"     // apt-get update + list what can be upgraded
@@ -33,7 +34,7 @@ const (
 
 // Titles for the task log.
 var Titles = map[string]string{
-	Template: "Add OS template", StorageGrow: "Grow VM storage", LANSetup: "Set up the home network",
+	Template: "Add OS template", CTTemplate: "Add container template", StorageGrow: "Grow VM storage", LANSetup: "Set up the home network",
 	OSCheck: "Check for Debian updates", OSUpgrade: "Install Debian updates", Reboot: "Reboot the server",
 }
 
@@ -112,6 +113,11 @@ func (m *Manager) command(kind, arg string) ([]string, error) {
 			return nil, fmt.Errorf("%w: template name", ErrInvalid)
 		}
 		return sh("make-template.sh", arg, "--register"), nil
+	case CTTemplate:
+		if !reArg.MatchString(arg) {
+			return nil, fmt.Errorf("%w: template name", ErrInvalid)
+		}
+		return sh("make-ct-template.sh", arg), nil
 	case StorageGrow:
 		return sh("storage.sh", "grow"), nil
 	case LANSetup:

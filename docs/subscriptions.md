@@ -6,18 +6,29 @@ P8S runs three businesses on one OS:
 2. **P8S Cloud** sells VPSes from those servers ([p8s-cloud.md](p8s-cloud.md)).
 3. **P8S OS is sold to others**, like Proxmox but cheaper, per server instead of per CPU socket.
 
-## Tiers
+## Editions
 
-| Tier | For | Price (suggested, + 18% GST) | Unlocks |
-|---|---|---|---|
-| Home | home, lab, learning | free, no key | every VM feature, up to 3 user accounts, testing updates, a "no subscription" notice |
-| Business | companies running their own VMs | ₹4,999 / server / year | unlimited users, stable updates, email support, no notice |
-| Hosting | public use: selling servers to customers | ₹9,999 / server / year | + P8S Cloud selling (public sign-up, priced plans), own brand name |
-| Partner | outsourcing / MSPs | ₹24,999 / year for up to 10 servers | + priority support, resell licences |
-| Internal | P8S's own servers | not sold | everything |
+One installer ISO for everyone; the licence key decides the edition (like a Windows key unlocking Pro or
+Enterprise). VMs, containers and Windows VMs are in **every** edition, Home included — that is how people
+learn P8S at home and then buy it at work. Paid editions add what businesses need: stable updates,
+support, selling, scale.
+
+| Feature | **Home** (free) | **Standard** | **Enterprise** | **Datacenter** |
+|---|---|---|---|---|
+| Linux VMs, containers, Windows VMs | ✅ | ✅ | ✅ | ✅ |
+| User accounts | 3 | unlimited | unlimited | unlimited |
+| Update channel | testing | stable | stable | stable |
+| Off-site backups | – | ✅ | ✅ | ✅ |
+| Selling: P8S Cloud billing, public sign-up, own brand | – | – | ✅ | ✅ |
+| Clustering | – | – | up to 3 servers | unlimited |
+| High availability, live migration | – | – | – | ✅ |
+| Support | community | email | priority | priority + resell |
+| Price (suggested, + 18% GST) | free | ₹4,999 / server / year | ₹9,999 / server / year | ₹24,999 / year for 10 servers |
+
+P8S's own servers use **Internal** (everything, not sold). Feature checks in code: `license.Allows(edition, license.FeatX)`.
 
 What a missing or expired subscription does **not** do: stop VMs, delete anything, or cut off customers.
-Existing accounts, plans and wallets keep working. Without Hosting, new public sign-ups and plan
+Existing accounts, plans and wallets keep working. Without Enterprise, new public sign-ups and plan
 changes are refused, and the sign-in page shows the default "P8S Cloud" name.
 
 Prices live in one place for the code (`internal/license/tiers.go`, shown in the dashboard) and are
@@ -62,7 +73,7 @@ sudo p8s-licensed pubkey      # must be a line in pubkeys.txt
 
 # issue keys by hand (our own servers, bank-transfer customers, partners)
 sudo p8s-licensed issue -tier internal -server "$(sudo p8sd server-id)" -customer P8S -months 120
-sudo p8s-licensed issue -tier hosting -server P8S-AAAA-BBBB-CCCC-DDDD -customer "Acme" -email ops@acme.in
+sudo p8s-licensed issue -tier enterprise -server P8S-AAAA-BBBB-CCCC-DDDD -customer "Acme" -email ops@acme.in
 sudo p8s-licensed list | show ID | extend ID -months 12 | rebind ID -server NEWID | revoke ID -note "refunded" | invoices
 ```
 
@@ -77,7 +88,7 @@ and publish `127.0.0.1:8090` (e.g. as `licence.yourdomain` with Cloudflare Tunne
   "seller": {"name": "P8S (Problems Infinity Solutions)", "address": "…", "tax_id": "GSTIN…", "email": "billing@example.com"},
   "tax_percent": 18,
   "invoice_prefix": "P8SL",
-  "prices": {"business": 499900, "hosting": 999900, "partner": 2499900},
+  "prices": {"standard": 499900, "enterprise": 999900, "datacenter": 2499900},
   "razorpay_key_id": "rzp_live_…", "razorpay_key_secret": "…", "razorpay_webhook_secret": "…",
   "smtp_host": "smtp.example.com", "smtp_port": 587, "smtp_user": "…", "smtp_pass": "…",
   "mail_from": "P8S OS <licences@example.com>"
@@ -100,7 +111,7 @@ tree; servers install it with `update.sh`, exactly like a manual update.
 | Channel | Who | What |
 |---|---|---|
 | testing | everyone (Home included) | every release, as soon as it is published |
-| stable | Business, Hosting, Partner, Internal | releases P8S has tested and promoted |
+| stable | Standard, Enterprise, Datacenter, Internal | releases P8S has tested and promoted |
 
 Publishing (on the licence server, from a checkout of the repo):
 

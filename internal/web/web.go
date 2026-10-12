@@ -23,6 +23,16 @@ var (
 	licenseJS []byte
 	//go:embed node.js
 	nodeJS []byte
+	//go:embed containers.js
+	containersJS []byte
+	//go:embed terminal.html
+	terminalPage []byte
+	//go:embed xterm.min.js
+	xtermJS []byte
+	//go:embed xterm-fit.min.js
+	xtermFitJS []byte
+	//go:embed xterm-LICENSE.txt
+	xtermLicense []byte
 	//go:embed novnc-LICENSE.txt
 	novncLicense []byte
 )
@@ -40,6 +50,11 @@ var assets = map[string]asset{
 	"/cloud.js":          {cloudJS, "text/javascript; charset=utf-8", "no-cache"},
 	"/license.js":        {licenseJS, "text/javascript; charset=utf-8", "no-cache"},
 	"/node.js":           {nodeJS, "text/javascript; charset=utf-8", "no-cache"},
+	"/containers.js":     {containersJS, "text/javascript; charset=utf-8", "no-cache"},
+	"/terminal":          {terminalPage, "text/html; charset=utf-8", "no-cache"},
+	"/xterm.min.js":      {xtermJS, "text/javascript; charset=utf-8", "public, max-age=86400"},
+	"/xterm-fit.min.js":  {xtermFitJS, "text/javascript; charset=utf-8", "public, max-age=86400"},
+	"/xterm-LICENSE.txt": {xtermLicense, "text/plain; charset=utf-8", "public, max-age=86400"},
 	"/novnc-LICENSE.txt": {novncLicense, "text/plain; charset=utf-8", "public, max-age=86400"},
 }
 

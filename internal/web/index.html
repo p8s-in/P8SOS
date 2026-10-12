@@ -130,6 +130,7 @@ dialog form.uform{padding:0}
 #side svg{width:16px;height:16px;flex:0 0 16px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;opacity:.75}
 .tree-vm{padding-left:30px;font-size:13px}
 .tree-vm .dot{flex:0 0 8px}
+.tree-vm svg{width:14px!important;height:14px!important;flex:0 0 14px!important;opacity:.6}
 .tree-vm .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tree-node{font-weight:600}
 #side .badge{margin-left:auto}
@@ -499,6 +500,7 @@ function render(){
   if (!token) return renderLogin();
   if (!$("#vmBody")) renderShell();
   renderHost(); renderVMs();
+  if (typeof renderCTs === "function") renderCTs();
   if ($("#dlgManage").open) renderManage();
 }
 
@@ -666,6 +668,8 @@ const IC = {
   key: '<circle cx="7.5" cy="15.5" r="4"/><path d="M10.5 12.5L20 3M16 7l3 3M14 9l2 2"/>',
   activity: '<path d="M3 12h4l3 8 4-16 3 8h4"/>',
   menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
+  box: '<path d="M21 8l-9-5-9 5v8l9 5 9-5z"/><path d="M3 8l9 5 9-5M12 13v8"/>',
+  vm: '<rect x="3" y="4" width="18" height="12" rx="1.5"/><path d="M8 20h8M12 16v4"/>',
 };
 const ic = n => `<svg viewBox="0 0 24 24" aria-hidden="true">${IC[n]}</svg>`;
 
@@ -677,8 +681,9 @@ function renderShell(){
     <span class="logo" id="hBrand"></span>
     <span class="sub" id="hVer"></span>
     <span class="spacer"></span>
-    <input id="vmFilter" type="search" placeholder="Search VMs" aria-label="Search VMs">
+    <input id="vmFilter" type="search" placeholder="Search" aria-label="Search VMs and containers">
     <button class="btn primary" id="bNew">+ Create VM</button>
+    <button class="btn primary" id="bNewCT" hidden>+ Create CT</button>
     <button class="btn" id="bMe" title="Your account: password, two-factor sign-in, keys"></button>
     <button class="btn" id="bOut">Sign out</button>
   </header>
@@ -687,6 +692,7 @@ function renderShell(){
     <button class="btn tree-node" id="bNode" hidden>${ic("server")}<span id="hName2">server</span></button>
     <button class="btn tree-node" id="bNodeLabel" hidden>${ic("server")}<span>Your servers</span></button>
     <div id="sideVMs"></div>
+    <div id="sideCTs"></div>
     <div class="side-group"><div class="side-h">Storage</div>
       <button class="btn" id="bIsos" hidden>${ic("disc")}<span>ISO images</span></button>
       <button class="btn" id="bBackups">${ic("archive")}<span>Backups</span></button>
@@ -715,6 +721,11 @@ function renderShell(){
       <div class="panel-head"><h2>Virtual machines</h2><span class="sub" id="vmCount"></span></div>
       <table><thead><tr><th>State</th><th>Name</th><th>IP address</th><th>CPU</th><th>RAM</th><th>Disk</th><th>Autostart</th><th></th></tr></thead>
       <tbody id="vmBody"></tbody></table>
+    </section>
+    <section class="panel" id="ctPanel" style="margin-top:16px" hidden>
+      <div class="panel-head"><h2>Containers</h2><span class="sub" id="ctCount"></span></div>
+      <table><thead><tr><th>State</th><th>Name</th><th>IP address</th><th>CPU</th><th>RAM</th><th>Disk</th><th>Autostart</th><th></th></tr></thead>
+      <tbody id="ctBody"></tbody></table>
     </section>
   </main>
   </div>`;
@@ -801,7 +812,7 @@ function renderVMs(){
   const q = ($("#vmFilter")?.value || "").trim().toLowerCase();
   const list = q ? vms.filter(v => (v.name + " " + (v.ip || "") + " " + (v.owner || "") + " " + v.template).toLowerCase().includes(q)) : vms;
   // sidebar tree: one line per VM, like Proxmox's resource tree
-  if ($("#sideVMs")) $("#sideVMs").innerHTML = list.map(v => `<button class="tree-vm ${esc(v.state)}" data-vm="${esc(v.name)}" title="${esc(v.name)} — ${esc(v.state)}"><span class="dot"></span><span class="nm">${esc(v.name)}</span></button>`).join("");
+  if ($("#sideVMs")) $("#sideVMs").innerHTML = list.map(v => `<button class="tree-vm ${esc(v.state)}" data-vm="${esc(v.name)}" title="VM ${esc(v.name)} — ${esc(v.state)}"><span class="dot"></span>${ic("vm")}<span class="nm">${esc(v.name)}</span></button>`).join("");
   if (!vms.length) { body.innerHTML = `<tr><td colspan="8" class="empty">No VMs yet. Click <b>+ Create VM</b> to make one.</td></tr>`; return; }
   if (!list.length) { body.innerHTML = `<tr><td colspan="8" class="empty">No VM matches “${esc(q)}”.</td></tr>`; return; }
   body.innerHTML = list.map(v => {
@@ -825,7 +836,7 @@ function renderVMs(){
 
 // sidebar VM entry -> its Manage page; close open "⋯" menus on outside clicks
 document.addEventListener("click", e => {
-  const t = e.target.closest(".tree-vm");
+  const t = e.target.closest(".tree-vm[data-vm]");
   if (t) { openManage(t.dataset.vm); return; }
   for (const m of document.querySelectorAll("details.menu[open]")) if (!m.contains(e.target)) m.open = false;
 });
@@ -1640,6 +1651,7 @@ async function refresh(withHost){
   if (!token) return;
   try {
     vms = (await call("GET", "/vms")).vms;
+    if (typeof loadCTs === "function") await loadCTs();
     if (withHost || tick % 4 === 0 || !me) me = await call("GET", "/me");
     if (isAdmin() && (withHost || tick % 4 === 0)) { host = await call("GET", "/host").catch(() => null); await loadHostMetrics(); }
     if (withHost && !templates.length) templates = (await call("GET", "/templates").catch(() => ({templates: []}))).templates;
@@ -1658,5 +1670,6 @@ document.addEventListener("DOMContentLoaded", render); // after cloud.js has loa
 <script src="/cloud.js"></script>
 <script src="/license.js"></script>
 <script src="/node.js"></script>
+<script src="/containers.js"></script>
 </body>
 </html>

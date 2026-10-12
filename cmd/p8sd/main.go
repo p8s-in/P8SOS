@@ -19,6 +19,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -32,6 +33,7 @@ import (
 	"p8sos/internal/cloud"
 	"p8sos/internal/cloudinit"
 	"p8sos/internal/config"
+	"p8sos/internal/ct"
 	"p8sos/internal/execx"
 	"p8sos/internal/firewall"
 	"p8sos/internal/guard"
@@ -231,6 +233,22 @@ func serve(args []string) error {
 		}
 	}()
 
+	var cts *ct.Service
+	if _, err := exec.LookPath("lxc-start"); err == nil {
+		cts = &ct.Service{Run: run, Pool: strings.SplitN(cfg.VMDataset, "/", 2)[0], MountDir: filepath.Join(cfg.DataDir, "ct"),
+			LXCDir: "/var/lib/lxc", MetaFile: filepath.Join(cfg.DataDir, "containers.json"), Bridge: cfg.Bridge,
+			LANBridge: cfg.LANBridge, LANUp: svc.LANAvailable, SSHKeys: cfg.SSHKeys,
+			Limits: ct.Limits{MaxVCPUs: cfg.MaxVCPUs, MaxMemoryMiB: cfg.MaxMemoryMiB, MaxDiskGB: cfg.MaxDiskGB}}
+		go func() { // after the server boots: start containers marked autostart (not on every p8sd restart)
+			if !newBoot(filepath.Join(cfg.DataDir, "ct-boot-id")) {
+				return
+			}
+			cts.Autostart(ctx, func(name string, err error) { log.Error("container autostart", "container", name, "err", err) })
+		}()
+	} else {
+		log.Warn("containers are off: lxc is not installed (sudo bash update.sh installs it)")
+	}
+
 	apiSrv := &api.Server{
 		VMs: svc, Templates: cfg.Templates, Tokens: cfg.Tokens, Version: version, Log: log,
 		BackupKeep: cfg.BackupKeep, BackupTime: cfg.BackupTime, Metrics: mc,
@@ -252,6 +270,7 @@ func serve(args []string) error {
 		Issuer:   issuer(),
 		License:  lic,
 		Updates:  upd,
+		CTs:      cts,
 		Node: &tasks.Node{
 			Tasks: &tasks.Manager{Dir: filepath.Join(cfg.DataDir, "tasks"), Scripts: scriptsDir(), Run: run},
 			Run:   run, Pool: strings.SplitN(cfg.VMDataset, "/", 2)[0], DataDir: cfg.DataDir,
@@ -263,6 +282,16 @@ func serve(args []string) error {
 				return l
 			},
 			LAN: svc.LANAvailable,
+			CTTemplates: func() []string {
+				if cts == nil {
+					return nil
+				}
+				var l []string
+				for _, t := range cts.Templates(context.Background()) {
+					l = append(l, t.Name)
+				}
+				return l
+			},
 		},
 	}
 	go func() { // P8S Cloud billing: hourly charges, low/negative balance, suspension
@@ -421,4 +450,18 @@ func scriptsDir() string {
 		return d
 	}
 	return "/usr/local/share/p8s"
+}
+
+// newBoot reports whether the server booted since the last call (boot_id changed).
+func newBoot(stamp string) bool {
+	b, err := os.ReadFile("/proc/sys/kernel/random/boot_id")
+	if err != nil {
+		return false
+	}
+	id := strings.TrimSpace(string(b))
+	if old, _ := os.ReadFile(stamp); strings.TrimSpace(string(old)) == id {
+		return false
+	}
+	_ = os.WriteFile(stamp, []byte(id+"\n"), 0o600)
+	return true
 }

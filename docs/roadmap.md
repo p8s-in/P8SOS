@@ -47,12 +47,15 @@ Each phase ships something usable on its own.
 - [x] P8S OS subscriptions (v0.6): Home (free) / Business / Hosting / Partner / Internal, Ed25519-signed keys tied to
       server IDs, offline check + optional daily online check, 14-day grace, dashboard Subscription page and notice,
       `p8 license`; `p8s-licensed` licence server with a Razorpay shop, GST invoices, renew/rebind/revoke ([subscriptions.md](subscriptions.md))
+- [x] Containers (LXC, unprivileged, ZFS clones, cgroup limits, cloud-init, browser terminal with xterm.js), Create CT, Manage, container templates on the Server page, `p8 ct` ([containers.md](containers.md))
+- [x] Editions: Home / Standard / Enterprise / Datacenter (one ISO, the licence key decides)
+- [x] Proxmox-style dashboard: top bar, sidebar tree (server → VMs and containers), grouped menus, ⋯ action menus
 - [x] Server page in the dashboard: storage + grow, add OS templates, home-network setup, Debian updates, reboot, task log with live output
 - [x] Update server: signed release bundles, testing / stable channels (stable for subscribers), one-click install from the dashboard, `p8 update`
 
 Still to do: projects, scoped API tokens per user; per-tenant VLAN/bridge;
 nftables firewall per VM; IP pools (static assignment via cloud-init network
-config); containers via Incus. Replaces Proxmox on the home lab.
+config); container backups / firewall / public IPs. Replaces Proxmox on the home lab.
 
 ## Phase 3 — Web UI and console (months 4–5)
 

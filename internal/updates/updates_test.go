@@ -112,8 +112,8 @@ func TestUpdateFlow(t *testing.T) {
 		t.Fatal("installed an unsigned release")
 	}
 
-	// stable with a Business subscription
-	lic, err := st.Issue(license.Business, []string{server}, "Acme", "", 12, "")
+	// stable with a Standard subscription
+	lic, err := st.Issue(license.Standard, []string{server}, "Acme", "", 12, "")
 	if err != nil {
 		t.Fatal(err)
 	}

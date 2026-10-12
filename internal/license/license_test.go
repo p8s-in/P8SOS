@@ -31,12 +31,12 @@ func lic(tier, expires string) License {
 func TestSignParse(t *testing.T) {
 	pub, priv := keypair(t)
 	other, _ := keypair(t)
-	key, err := Sign(priv, lic(Hosting, "2027-01-01"))
+	key, err := Sign(priv, lic(Enterprise, "2027-01-01"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	l, err := Parse([]ed25519.PublicKey{other, pub}, key[:20]+"\n"+key[20:]) // wrapped paste
-	if err != nil || l.Tier != Hosting || !l.Covers(srv) {
+	if err != nil || l.Tier != Enterprise || !l.Covers(srv) {
 		t.Fatalf("parse: %v %+v", err, l)
 	}
 	if _, err := Parse([]ed25519.PublicKey{other}, key); !errors.Is(err, ErrKey) {
@@ -45,7 +45,7 @@ func TestSignParse(t *testing.T) {
 	// tamper: change tier in the payload
 	p, s, _ := strings.Cut(strings.TrimPrefix(key, KeyPrefix), ".")
 	raw, _ := b64.DecodeString(p)
-	raw = []byte(strings.Replace(string(raw), "hosting", "partner", 1))
+	raw = []byte(strings.Replace(string(raw), "enterprise", "datacenter", 1))
 	if _, err := Parse([]ed25519.PublicKey{pub}, KeyPrefix+b64.EncodeToString(raw)+"."+s); err == nil {
 		t.Fatal("tampered key accepted")
 	}
@@ -69,24 +69,24 @@ func TestManagerStates(t *testing.T) {
 	if st.Tier != Home || !st.Notice || st.UserLimit != HomeUsers || st.Channel != "testing" || m.Allows(FeatSelling) {
 		t.Fatalf("home: %+v", st)
 	}
-	other := lic(Business, "2027-01-01")
+	other := lic(Standard, "2027-01-01")
 	other.Servers = []string{"P8S-0000-0000-0000-0000"}
 	k, _ := Sign(priv, other)
 	if _, err := m.Install(k); !errors.Is(err, ErrServer) {
 		t.Fatalf("other server: %v", err)
 	}
-	k, _ = Sign(priv, lic(Hosting, "2026-06-20"))
+	k, _ = Sign(priv, lic(Enterprise, "2026-06-20"))
 	st, err := m.Install(k)
-	if err != nil || st.State != "expiring" || st.Tier != Hosting || st.Notice || !m.Allows(FeatSelling) || st.UserLimit != 0 {
+	if err != nil || st.State != "expiring" || st.Tier != Enterprise || st.Notice || !m.Allows(FeatSelling) || st.UserLimit != 0 {
 		t.Fatalf("install: %v %+v", err, st)
 	}
 	// survives a restart
 	m2 := &Manager{Path: m.Path, Keys: []ed25519.PublicKey{pub}, Now: m.Now}
-	if m2.ID() != srv || m2.Status().Tier != Hosting {
+	if m2.ID() != srv || m2.Status().Tier != Enterprise {
 		t.Fatalf("reload: %+v", m2.Status())
 	}
 	now = time.Date(2026, 6, 25, 0, 0, 0, 0, time.UTC)
-	if st := m.Status(); st.State != "grace" || st.Tier != Hosting {
+	if st := m.Status(); st.State != "grace" || st.Tier != Enterprise {
 		t.Fatalf("grace: %+v", st)
 	}
 	now = time.Date(2026, 7, 10, 0, 0, 0, 0, time.UTC)
@@ -116,11 +116,11 @@ func TestCheckRevokeRenew(t *testing.T) {
 	}))
 	defer ts.Close()
 	m := &Manager{Path: filepath.Join(t.TempDir(), "l.json"), ServerID: srv, Keys: []ed25519.PublicKey{pub}, CheckURL: ts.URL, Now: func() time.Time { return now }}
-	k, _ := Sign(priv, lic(Business, "2026-12-31"))
+	k, _ := Sign(priv, lic(Standard, "2026-12-31"))
 	if _, err := m.Install(k); err != nil {
 		t.Fatal(err)
 	}
-	renewed, _ := Sign(priv, lic(Business, "2027-12-31"))
+	renewed, _ := Sign(priv, lic(Standard, "2027-12-31"))
 	reply["key"] = renewed
 	if err := m.Check(context.Background()); err != nil {
 		t.Fatal(err)
