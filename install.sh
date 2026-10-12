@@ -211,11 +211,14 @@ plog=$(journalctl -u p8sd --since "$since" --no-pager)
 grep -q "snapshot missing" <<<"$plog" && die "p8sd can't see the template snapshot"
 ok "p8sd running: $(curl -kfs https://127.0.0.1:8006/api/v1/health)"
 
+# P8S OS name on the boot menu, login screen and SSH welcome (Debian stays underneath)
+bash "$REPO/scripts/branding.sh" >/dev/null 2>&1 || echo "  note: branding not applied"
+
 # Installed from the ISO? Mark first-boot setup as done (also when it was finished by hand).
 if [[ -f /etc/systemd/system/p8s-firstboot.service ]]; then
   touch /var/lib/p8s/.firstboot-done
   systemctl disable p8s-firstboot.service >/dev/null 2>&1 || true
-  printf '\n  P8S OS (alpha) is ready.   Dashboard: https://\\4:8006\n\n  Log in as %s, then: p8 status | p8 create web1 | p8 ssh web1 | p8 test\n\n' "$USER_NAME" > /etc/issue
+  bash "$REPO/scripts/branding.sh" >/dev/null 2>&1 || true   # login screen now that setup is done
 fi
 
 trap - ERR
