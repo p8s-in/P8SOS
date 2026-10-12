@@ -59,6 +59,14 @@ if zpool list -H "$POOL" >/dev/null 2>&1 && command -v virsh >/dev/null && comma
 else
   P8S_BRIDGE=$BRIDGE bash "$REPO/scripts/bootstrap-debian13.sh" $DEV
 fi
+# cloudflared: used only if public access is switched on (dashboard → Settings).
+if ! command -v cloudflared >/dev/null; then
+  { mkdir -p --mode=0755 /usr/share/keyrings &&
+    curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg -o /usr/share/keyrings/cloudflare-main.gpg &&
+    echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main' > /etc/apt/sources.list.d/cloudflared.list &&
+    apt-get update -qq && apt-get install -y -qq cloudflared >/dev/null; } 2>/dev/null &&
+    ok "cloudflared installed (for public access)" || echo "  note: cloudflared not installed; public access won't work until it is"
+fi
 [[ -e /dev/kvm ]] || die "/dev/kvm is missing — nested virtualization is not working. See USER.md 'Problems'."
 ok "/dev/kvm present"
 zpool list -H "$POOL" >/dev/null || die "ZFS pool '$POOL' was not created"
@@ -195,7 +203,9 @@ cat <<DONE
 $(printf '\033[1;32m')✔ P8S OS is installed.$(printf '\033[0m')
 
   Web dashboard:  https://${HOST_IP:-<this-host-ip>}:8006
-                  (accept the certificate warning once; sign in with the token: cat ~/.p8s-token)
+                  Accept the certificate warning once. The first visit asks you to create
+                  your admin account, with this one-time setup code:  cat ~/.p8s-token
+                  Everything else (users, public access, ...) is in the dashboard.
 
   Next, as $USER_NAME (no sudo):
 

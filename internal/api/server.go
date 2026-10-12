@@ -159,6 +159,7 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("PUT /api/v1/vms/{name}/owner", s.setOwner)
 	auth.HandleFunc("GET /api/v1/tunnel", s.getTunnel)
 	auth.HandleFunc("POST /api/v1/tunnel/setup", s.setupTunnel)
+	auth.HandleFunc("DELETE /api/v1/tunnel", s.disconnectTunnel)
 	auth.HandleFunc("PUT /api/v1/tunnel/dashboard", s.setDashboardHost)
 	auth.HandleFunc("GET /api/v1/sites", s.listSites)
 	auth.HandleFunc("GET /api/v1/vms/{name}/sites", s.listSites)

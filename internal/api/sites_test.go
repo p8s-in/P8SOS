@@ -50,7 +50,7 @@ func TestSites(t *testing.T) {
 	m.req("POST", "/api/v1/vms/shop/sites", alice, `{"name":"shop","port":80}`, 409) // not set up yet
 	m.req("POST", "/api/v1/tunnel/setup", alice, `{"api_token":"x","domain":"example.com"}`, 403)
 	v := m.req("POST", "/api/v1/tunnel/setup", secret, `{"api_token":"x","domain":"example.com"}`, 200)
-	if v["tunnel_token"] != "tunnel-token" {
+	if v["set_up"] != true || v["domain"] != "example.com" || v["tunnel_token"] != nil {
 		t.Fatalf("setup %v", v)
 	}
 	if v := m.req("GET", "/api/v1/tunnel", alice, "", 200); v["domain"] != "example.com" || v["tunnel_id"] != nil {
@@ -81,5 +81,10 @@ func TestSites(t *testing.T) {
 	m.req("DELETE", "/api/v1/vms/shop", alice, "", 204)
 	if v := m.req("GET", "/api/v1/sites", secret, "", 200); len(v["sites"].([]any)) != 0 {
 		t.Fatalf("site of deleted VM left: %v", v)
+	}
+	m.req("DELETE", "/api/v1/tunnel", alice, "", 403)
+	m.req("DELETE", "/api/v1/tunnel", secret, "", 204)
+	if v := m.req("GET", "/api/v1/tunnel", secret, "", 200); v["set_up"] != false {
+		t.Fatalf("after disconnect %v", v)
 	}
 }

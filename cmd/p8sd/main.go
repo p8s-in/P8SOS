@@ -141,6 +141,7 @@ func serve(args []string) error {
 
 	tun := &tunnel.Manager{
 		Dir:       cfg.DataDir,
+		Connector: &tunnel.Connector{},
 		Dashboard: localURL(cfg),
 		IPs: func(ctx context.Context) (map[string]string, error) {
 			vms, err := svc.List(ctx)
@@ -151,6 +152,8 @@ func serve(args []string) error {
 			return ips, err
 		},
 	}
+	tun.Start() // cloudflared, when public access is on
+	defer tun.Connector.Stop()
 	go func() { // follow VM address changes (DHCP) and re-push routes
 		last := ""
 		for {

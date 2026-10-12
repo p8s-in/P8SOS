@@ -482,7 +482,7 @@ case $cmd in
         echo "Domain:     $(jq -r .domain <<<"$st")"
         echo "Tunnel:     $(jq -r '.tunnel_name + " (" + .tunnel_id + ")"' <<<"$st")"
         echo "Dashboard:  $(jq -r 'if .dashboard then "https://" + .dashboard else "not on the internet (p8 tunnel dashboard panel)" end' <<<"$st")"
-        echo "cloudflared: $(systemctl is-active cloudflared 2>/dev/null || echo 'not installed')" ;;
+        echo "Connection: $(jq -r '.connector.state + (if (.connector.detail // "") != "" then " (" + .connector.detail + ")" else "" end)' <<<"$st")" ;;
       setup)
         cat <<'TXT'
 Public access with a Cloudflare Tunnel (free). You need:
@@ -502,34 +502,23 @@ TXT
           curl -ks -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' --data-binary @- -w '\n%{http_code}' "$URL/tunnel/setup")
         code=${out##*$'\n'}; body=${out%$'\n'*}
         (( code == 200 )) || { red "error ($code): $(jq -r '.error.message // .' <<<"$body" 2>/dev/null)"; exit 1; }
-        ttok=$(jq -r .tunnel_token <<<"$body"); tid=$(jq -r .status.tunnel_id <<<"$body")
-        green "✔ tunnel $(jq -r .status.tunnel_name <<<"$body") ready for $(jq -r .status.domain <<<"$body")"
-        if ! command -v cloudflared >/dev/null; then
-          echo "Installing cloudflared (Cloudflare's package repository) ..."
-          sudo mkdir -p --mode=0755 /usr/share/keyrings
-          curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | sudo tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null
-          echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main' | sudo tee /etc/apt/sources.list.d/cloudflared.list >/dev/null
-          sudo apt-get update -qq && sudo apt-get install -y -qq cloudflared >/dev/null || { red "could not install cloudflared"; exit 1; }
-        fi
-        # (Re)install the service for this tunnel; an old one for another tunnel is replaced.
-        if systemctl list-unit-files cloudflared.service >/dev/null 2>&1 && systemctl cat cloudflared 2>/dev/null | grep -q -- '--token'; then
-          sudo cloudflared service uninstall >/dev/null 2>&1 || true
-        fi
-        sudo cloudflared service install "$ttok" >/dev/null 2>&1 || { red "cloudflared service install failed (see: sudo journalctl -u cloudflared)"; exit 1; }
-        sleep 3
-        systemctl is-active --quiet cloudflared && green "✔ cloudflared is running (connected out to Cloudflare)" || red "cloudflared isn't running yet: sudo journalctl -u cloudflared -n 30"
+        green "✔ connected $(jq -r .domain <<<"$body") (tunnel $(jq -r .tunnel_name <<<"$body")); p8sd runs cloudflared itself"
         if [[ $dash != - ]]; then
           b=$(call PUT /tunnel/dashboard "$(jq -nc --arg n "$dash" '{name:$n}')") || exit 1
           green "✔ dashboard: https://$(jq -r .dashboard <<<"$b")  (give DNS a minute)"
           echo "  Sign in there with a user name and password; turn on two-factor sign-in for every admin."
         fi
-        echo "Publish a VM's website:  p8 publish web1 shop 80   ->  https://shop.$(jq -r .status.domain <<<"$body")" ;;
+        echo "Publish a VM's website:  p8 publish web1 shop 80   ->  https://shop.$(jq -r .domain <<<"$body")"
+        echo "(The same setup is in the dashboard: Settings → Public access.)" ;;
       dashboard)
         n=${2:-}; [[ -n $n ]] || { red "usage: p8 tunnel dashboard NAME|off"; exit 1; }
         [[ $n == off ]] && n=""
         b=$(call PUT /tunnel/dashboard "$(jq -nc --arg n "$n" '{name:$n}')") || exit 1
         [[ -n $n ]] && green "✔ dashboard: https://$(jq -r .dashboard <<<"$b")" || green "✔ dashboard is no longer on the internet" ;;
-      *) red "usage: p8 tunnel [status|setup|dashboard NAME|off]"; exit 1 ;;
+      disconnect)
+        read -r -p "Remove all public addresses (dashboard and websites)? [y/N] " a; [[ $a == [yY]* ]] || { echo cancelled; exit 0; }
+        call DELETE /tunnel >/dev/null || exit 1; green "✔ public access switched off" ;;
+      *) red "usage: p8 tunnel [status|setup|dashboard NAME|off|disconnect]"; exit 1 ;;
     esac ;;
 
   publish)

@@ -60,7 +60,8 @@ customers only a reference (`ref 1a2b3c4d`); the details are in p8sd's log.
 | endpoint | who | what |
 |---|---|---|
 | `GET /tunnel` | signed in | `{"set_up","domain","dashboard"}` (+ tunnel id/name for admins) |
-| `POST /tunnel/setup` | admin | `{"api_token","domain","name"}` → `{"status","tunnel_token"}` (for `cloudflared service install`) |
+| `POST /tunnel/setup` | admin | `{"api_token","domain","name"}` → status; p8sd then runs cloudflared itself (`connector.state`: starting / connected / error / not_installed) |
+| `DELETE /tunnel` | admin | public access off: routes, DNS records and cloudflared removed |
 | `PUT /tunnel/dashboard` | admin | `{"name":"panel"}` publishes the dashboard as panel.<domain>; `""` removes it |
 | `GET /sites`, `GET /vms/{name}/sites` | signed in | published websites (customers: their own) |
 | `POST /vms/{name}/sites` | owner/admin | `{"name":"shop","port":80,"https":false}` → `201` site; counts against `quota.sites` |

@@ -33,6 +33,8 @@ type Settings struct {
 	TunnelID   string `json:"tunnel_id"`
 	TunnelName string `json:"tunnel_name"`
 	Dashboard  string `json:"dashboard,omitempty"` // public hostname of the dashboard, "" = not published
+	// TunnelToken lets cloudflared connect (p8sd runs it; see Connector).
+	TunnelToken string `json:"tunnel_token,omitempty"`
 }
 
 // Site is one published web service of a VM.
@@ -72,6 +74,8 @@ type Manager struct {
 	// Client makes the Cloudflare client (tests point it at a fake).
 	Client func(token string) *Cloudflare
 	Now    func() time.Time
+	// Connector runs cloudflared; nil = the admin runs it (tests).
+	Connector *Connector
 
 	mu      sync.Mutex
 	lastPut string // hash of the routes Cloudflare has
@@ -143,21 +147,77 @@ func (m *Manager) sites() ([]Site, error) {
 
 // Status is what the dashboard shows (no API token).
 type Status struct {
-	SetUp      bool   `json:"set_up"`
-	Domain     string `json:"domain,omitempty"`
-	TunnelName string `json:"tunnel_name,omitempty"`
-	TunnelID   string `json:"tunnel_id,omitempty"`
-	Dashboard  string `json:"dashboard,omitempty"`
+	SetUp      bool             `json:"set_up"`
+	Domain     string           `json:"domain,omitempty"`
+	TunnelName string           `json:"tunnel_name,omitempty"`
+	TunnelID   string           `json:"tunnel_id,omitempty"`
+	Dashboard  string           `json:"dashboard,omitempty"`
+	Connector  *ConnectorStatus `json:"connector,omitempty"`
 }
 
 func (m *Manager) Status() Status {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	s, err := m.settings()
-	if err != nil {
-		return Status{}
+	st := Status{}
+	if err == nil {
+		st = Status{SetUp: true, Domain: s.Domain, TunnelName: s.TunnelName, TunnelID: s.TunnelID, Dashboard: s.Dashboard}
 	}
-	return Status{SetUp: true, Domain: s.Domain, TunnelName: s.TunnelName, TunnelID: s.TunnelID, Dashboard: s.Dashboard}
+	if m.Connector != nil {
+		cs := m.Connector.Status()
+		st.Connector = &cs
+	}
+	return st
+}
+
+// Start runs cloudflared if public access is set up (p8sd start-up).
+func (m *Manager) Start() {
+	m.mu.Lock()
+	s, err := m.settings()
+	m.mu.Unlock()
+	if err == nil && m.Connector != nil {
+		m.Connector.Run(s.TunnelToken)
+	}
+}
+
+// Disconnect switches public access off: routes and DNS records removed,
+// cloudflared stopped, settings forgotten (the tunnel itself stays in the
+// Cloudflare account and is reused if set up again).
+func (m *Manager) Disconnect(ctx context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s, err := m.settings()
+	if err != nil {
+		return err
+	}
+	cf := m.client(s.APIToken)
+	all, _ := m.sites()
+	var errs []error
+	if err := cf.PutIngress(ctx, s.AccountID, s.TunnelID, nil); err != nil {
+		errs = append(errs, err)
+	}
+	for _, h := range append(hosts(all), s.Dashboard) {
+		if h != "" {
+			errs = append(errs, cf.DeleteCNAME(ctx, s.ZoneID, h, s.TunnelID))
+		}
+	}
+	if m.Connector != nil {
+		m.Connector.Run("")
+	}
+	_ = os.Remove(m.sitesPath())
+	if err := os.Remove(m.settingsPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
+		errs = append(errs, err)
+	}
+	m.lastPut = ""
+	return errors.Join(errs...)
+}
+
+func hosts(l []Site) []string {
+	out := make([]string, 0, len(l))
+	for _, x := range l {
+		out = append(out, x.Host)
+	}
+	return out
 }
 
 // Setup connects the host to Cloudflare: checks the API token, finds the
@@ -199,7 +259,7 @@ func (m *Manager) Setup(ctx context.Context, apiToken, domain, name string) (Sta
 		return Status{}, "", err
 	}
 	old, _ := m.settings()
-	s := Settings{APIToken: apiToken, AccountID: account, ZoneID: zone, Domain: domain, TunnelID: id, TunnelName: name}
+	s := Settings{APIToken: apiToken, AccountID: account, ZoneID: zone, Domain: domain, TunnelID: id, TunnelName: name, TunnelToken: tok}
 	if old.TunnelID == id && old.Domain == domain {
 		s.Dashboard = old.Dashboard
 	}
@@ -207,6 +267,9 @@ func (m *Manager) Setup(ctx context.Context, apiToken, domain, name string) (Sta
 		return Status{}, "", err
 	}
 	m.lastPut = ""
+	if m.Connector != nil {
+		m.Connector.Run(tok)
+	}
 	if err := m.sync(ctx); err != nil {
 		return Status{}, "", err
 	}

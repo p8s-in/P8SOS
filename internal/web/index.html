@@ -99,6 +99,8 @@ dialog form.uform{padding:0}
 .fw td{padding:4px 4px 4px 0}
 .fw select,.fw input{padding:5px 7px}
 .fw select{width:86px}.fw td:nth-child(2){width:24%}.fw td:last-child{width:1%}
+.steps{margin:8px 0 4px;padding-left:20px}.steps li{margin:3px 0}
+.state.connected .dot{background:var(--ok)} .state.starting .dot{background:var(--warn)} .state.error .dot,.state.not_installed .dot{background:var(--bad)}
 .btn.confirm{background:var(--bad);border-color:var(--bad);color:#fff}
 @media (max-width:760px){
   header{padding:10px 16px} main{padding:16px} .panel-head{flex-wrap:wrap} #hVer{display:none}
@@ -289,6 +291,44 @@ dialog form.uform{padding:0}
   <div class="dlg-actions"><button class="btn" id="uClose">Close</button></div>
 </div></dialog>
 
+<dialog id="dlgSettings" class="wide"><div class="dlg-body">
+  <h2>Settings</h2>
+  <h3>Public access (internet)</h3>
+  <div id="tOff">
+    <div class="sub">Put the dashboard and your VMs' websites on the internet with HTTPS, through a free
+      Cloudflare Tunnel: this server connects out to Cloudflare, so nothing is opened on your router and it works
+      without a public IP.</div>
+    <ol class="sub steps">
+      <li>Add your domain to Cloudflare (<a href="https://dash.cloudflare.com" target="_blank" rel="noopener">dash.cloudflare.com</a> → Add a domain) and switch its nameservers at your registrar.</li>
+      <li>Create an API token: My Profile → API Tokens → Create Token → <b>Custom token</b> with
+        <b>Account · Cloudflare Tunnel · Edit</b> and <b>Zone · DNS · Edit</b> (for your domain).</li>
+      <li>Fill in below and press Connect.</li>
+    </ol>
+    <div class="row" style="grid-template-columns:1fr 1fr">
+      <div><label for="tDomain">Domain</label><input id="tDomain" placeholder="example.com" autocomplete="off"></div>
+      <div><label for="tDash">Dashboard address</label>
+        <div class="inline" style="margin:0"><input id="tDash" value="panel" autocomplete="off"><span class="sub" id="tDashDom">.example.com</span></div></div>
+    </div>
+    <label for="tToken">Cloudflare API token</label>
+    <input id="tToken" type="password" autocomplete="off" placeholder="paste the token">
+    <label class="check"><input id="tDashOn" type="checkbox" checked> Put the dashboard on the internet too</label>
+    <div class="dlg-actions"><button class="btn primary" id="tGo">Connect</button></div>
+  </div>
+  <div id="tOn" hidden>
+    <div class="inline"><span class="state" id="tState"><span class="dot"></span><span></span></span><span class="sub" id="tDetail"></span></div>
+    <div class="sub" id="tInfo"></div>
+    <label for="tDash2">Dashboard on the internet</label>
+    <div class="inline"><input id="tDash2" placeholder="panel (empty = not on the internet)" autocomplete="off"><span class="sub" id="tDashDom2"></span>
+      <button class="btn" id="tDashGo">Save</button></div>
+    <div class="hint">Anyone can reach the sign-in page there: use strong passwords and two-factor sign-in for admins.</div>
+    <h3>Published websites</h3>
+    <table class="snaps"><tbody id="tSites"></tbody></table>
+    <div class="hint">Add websites under Manage on a VM.</div>
+    <div class="dlg-actions"><button class="btn danger" id="tOffGo">Disconnect public access</button></div>
+  </div>
+  <div class="dlg-actions"><button class="btn" id="tClose">Close</button></div>
+</div></dialog>
+
 <dialog id="dlgAudit" class="wide"><div class="dlg-body">
   <h2>Activity</h2>
   <div class="sub" id="aSub">Every change and sign-in, newest first.</div>
@@ -396,6 +436,20 @@ function renderLogin(){
       <label class="check"><input id="lRem" type="checkbox"> Remember on this device</label>
       <div class="dlg-actions"><button type="button" class="linkbtn" id="lTokLink">Use an API token instead</button><span class="spacer"></span><button class="btn primary">Sign in</button></div>
     </form>
+    <form id="fFirst" hidden>
+      <div class="sub">Welcome! Create your admin account. You'll sign in with it from now on.</div>
+      <label for="fCode">Setup code</label>
+      <input id="fCode" type="password" placeholder="p8s_…" autocomplete="off" required>
+      <div class="hint">On the server: <span class="mono">cat ~/.p8s-token</span> (also shown at the end of the install)</div>
+      <label for="fUser">Your user name</label>
+      <input id="fUser" autocomplete="username" autocapitalize="none" pattern="[a-z][a-z0-9._\-]{1,31}" placeholder="e.g. admin or your name" required>
+      <div class="row" style="grid-template-columns:1fr 1fr">
+        <div><label for="fPw">Password</label><input id="fPw" type="password" minlength="10" autocomplete="new-password" required></div>
+        <div><label for="fPw2">Repeat</label><input id="fPw2" type="password" minlength="10" autocomplete="new-password" required></div>
+      </div>
+      <div class="hint">10+ characters. Turn on two-factor sign-in afterwards (top right, your name).</div>
+      <div class="dlg-actions"><button type="button" class="linkbtn" id="fTokLink">Just use the token</button><span class="spacer"></span><button class="btn primary">Create account</button></div>
+    </form>
     <form id="fTok" hidden>
       <div class="sub">Sign in with the host's API token.</div>
       <label for="tok">API token</label>
@@ -406,10 +460,34 @@ function renderLogin(){
       <div class="dlg-actions"><button type="button" class="linkbtn" id="lUserLink" hidden>Sign in with a user name</button><span class="spacer"></span><button class="btn primary">Sign in</button></div>
     </form>
   </div>`;
-  const show = acc => { $("#fLogin").hidden = !acc; $("#fTok").hidden = acc; $("#tokNoAcc").hidden = acc; (acc ? $("#lUser") : $("#tok")).focus(); };
-  fetch(API + "/auth").then(r => r.json()).then(a => { $("#lUserLink").hidden = !a.accounts; show(!!a.accounts); }).catch(() => show(false));
-  $("#lTokLink").onclick = () => show(false);
-  $("#lUserLink").onclick = () => show(true);
+  const show = mode => { // "login", "first" (no accounts yet) or "token"
+    $("#fLogin").hidden = mode !== "login"; $("#fFirst").hidden = mode !== "first"; $("#fTok").hidden = mode !== "token";
+    $("#tokNoAcc").hidden = true;
+    ({login: $("#lUser"), first: $("#fCode"), token: $("#tok")})[mode].focus();
+  };
+  let accounts = false;
+  fetch(API + "/auth").then(r => r.json()).then(a => { accounts = !!a.accounts; $("#lUserLink").hidden = !accounts; show(accounts ? "login" : "first"); }).catch(() => show("token"));
+  $("#lTokLink").onclick = () => show("token");
+  $("#fTokLink").onclick = () => show("token");
+  $("#fFirst").onsubmit = async e => {
+    e.preventDefault();
+    const code = $("#fCode").value.trim(), user = $("#fUser").value.trim().toLowerCase(), password = $("#fPw").value;
+    if (password !== $("#fPw2").value) return toast("The passwords don't match", true);
+    const post = (path, body, auth) => fetch(API + path, {method: "POST", body: JSON.stringify(body),
+      headers: {"Content-Type": "application/json", ...(auth ? {"Authorization": "Bearer " + auth} : {})}});
+    let r = await post("/users", {name: user, role: "admin", password}, code).catch(() => null);
+    if (!r) return toast("Can't reach the server", true);
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      return toast(r.status === 401 ? "That setup code is wrong. On the server: cat ~/.p8s-token" : (d?.error?.message || "Could not create the account"), true);
+    }
+    r = await post("/login", {user, password});
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) return toast(d?.error?.message || "Account created; please sign in", true);
+    token = d.token; store.set(token, false); $("#app").innerHTML = ""; render();
+    toast(`Welcome, ${user}! Next: two-factor sign-in (top right), Users, Settings.`);
+  };
+  $("#lUserLink").onclick = () => show("login");
   $("#fLogin").onsubmit = async e => {
     e.preventDefault();
     const body = {user: $("#lUser").value.trim(), password: $("#lPw").value, otp: $("#lOtp").value.trim()};
@@ -439,6 +517,7 @@ function renderShell(){
     <button class="btn" id="bIsos" hidden>ISOs</button>
     <button class="btn" id="bBackups">Backups</button>
     <button class="btn" id="bUsers" hidden>Users</button>
+    <button class="btn" id="bSettings" hidden>Settings</button>
     <button class="btn" id="bAudit">Activity</button>
     <button class="btn" id="bMe" title="Password and two-factor sign-in"></button>
     <button class="btn" id="bOut">Sign out</button>
@@ -454,6 +533,7 @@ function renderShell(){
   </main>`;
   $("#bOut").onclick = async () => { await call("POST", "/logout").catch(() => {}); store.clear(); token = ""; me = null; render(); };
   $("#bUsers").onclick = openUsers;
+  $("#bSettings").onclick = openSettings;
   $("#bAudit").onclick = openAudit;
   $("#bMe").onclick = openAccount;
   $("#bBackups").onclick = openAllBackups;
@@ -484,7 +564,7 @@ function renderHost(){
   $("#vmCount").textContent = vms.length ? `${run} running · ${vms.length} total` : "";
   if (me) {
     $("#bMe").textContent = me.account ? me.name : "admin (token)";
-    $("#bIsos").hidden = $("#bUsers").hidden = !isAdmin();
+    $("#bIsos").hidden = $("#bUsers").hidden = $("#bSettings").hidden = !isAdmin();
   }
   if (me && !isAdmin()) {
     const q = me.quota, u = me.usage;
@@ -777,7 +857,7 @@ async function loadSites(){
   $("#mSiteAdd").hidden = !tun.set_up;
   if (!tun.set_up) {
     $("#mSiteSub").innerHTML = isAdmin()
-      ? `Give VMs a public https:// address without opening your router. Set it up once on the host: <span class="mono">p8 tunnel setup</span>`
+      ? `Give VMs a public https:// address without opening your router: set up public access once under <b>Settings</b>.`
       : "Publishing websites isn't available on this server yet.";
     $("#mSites").innerHTML = ""; return;
   }
@@ -1143,6 +1223,67 @@ $("#uList").addEventListener("click", async e => {
   } catch (err) { toast(err.message, true); btn.disabled = false; }
 });
 $("#uClose").onclick = () => $("#dlgUsers").close();
+
+/* ---------- settings: public access ---------- */
+let tTimer = null;
+async function openSettings(){
+  $("#tToken").value = "";
+  $("#dlgSettings").showModal();
+  await loadTunnel();
+  clearInterval(tTimer);
+  tTimer = setInterval(() => { if ($("#dlgSettings").open) loadTunnel(true); else clearInterval(tTimer); }, 3000);
+}
+const tStates = {connected: "Connected", starting: "Connecting…", error: "Problem", not_installed: "cloudflared missing", off: "Not running"};
+async function loadTunnel(quiet){
+  let st;
+  try { st = await call("GET", "/tunnel"); } catch (err) { if (!quiet) toast(err.message, true); return; }
+  $("#tOff").hidden = st.set_up; $("#tOn").hidden = !st.set_up;
+  if (!st.set_up) return;
+  const c = st.connector || {state: "off"};
+  $("#tState").className = "state " + c.state;
+  $("#tState").lastElementChild.textContent = tStates[c.state] || c.state;
+  $("#tDetail").textContent = c.state === "connected" ? "" : (c.detail || "");
+  $("#tInfo").textContent = `Domain ${st.domain} · tunnel ${st.tunnel_name}`;
+  $("#tDashDom2").textContent = "." + st.domain;
+  if (!quiet) {
+    $("#tDash2").value = st.dashboard ? st.dashboard.slice(0, -(st.domain.length + 1)) : "";
+    try {
+      const l = (await call("GET", "/sites")).sites;
+      $("#tSites").innerHTML = l.length ? l.map(x => `<tr><td><a href="https://${esc(x.host)}" target="_blank" rel="noopener"><b>${esc(x.host)}</b></a>
+        <div class="sub">→ ${esc(x.vm)} port ${x.port}${x.owner ? " · " + esc(x.owner) : ""}</div></td></tr>`).join("")
+        : `<tr><td class="muted">None yet.</td></tr>`;
+    } catch {}
+  }
+}
+$("#tDomain").oninput = () => { $("#tDashDom").textContent = "." + ($("#tDomain").value.trim() || "example.com"); };
+$("#tDashOn").onchange = () => { $("#tDash").disabled = !$("#tDashOn").checked; };
+$("#tGo").onclick = async () => {
+  const domain = $("#tDomain").value.trim(), api_token = $("#tToken").value.trim(), go = $("#tGo");
+  if (!domain || !api_token) return toast("Fill in the domain and the API token", true);
+  go.disabled = true; go.textContent = "Connecting…";
+  try {
+    await call("POST", "/tunnel/setup", {domain, api_token});
+    $("#tToken").value = "";
+    if ($("#tDashOn").checked && $("#tDash").value.trim()) {
+      const st = await call("PUT", "/tunnel/dashboard", {name: $("#tDash").value.trim()});
+      toast(`Connected. Dashboard: https://${st.dashboard} (DNS can take a minute)`);
+    } else toast("Connected to Cloudflare");
+    await loadTunnel();
+  } catch (err) { toast(err.message, true); }
+  go.disabled = false; go.textContent = "Connect";
+};
+$("#tDashGo").onclick = async () => {
+  try {
+    const st = await call("PUT", "/tunnel/dashboard", {name: $("#tDash2").value.trim()});
+    toast(st.dashboard ? `Dashboard: https://${st.dashboard}` : "The dashboard is no longer on the internet"); loadTunnel();
+  } catch (err) { toast(err.message, true); }
+};
+$("#tOffGo").onclick = async e => {
+  if (!armed(e.target, "Removes all public addresses — sure?")) return;
+  try { await call("DELETE", "/tunnel"); toast("Public access switched off"); loadTunnel(); }
+  catch (err) { toast(err.message, true); }
+};
+$("#tClose").onclick = () => $("#dlgSettings").close();
 
 /* ---------- activity ---------- */
 async function openAudit(){

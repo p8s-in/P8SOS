@@ -19,15 +19,12 @@ You need a domain on Cloudflare (free plan is fine) and an API token:
 2. **My Profile → API Tokens → Create Token → Custom token** with:
    - Account · Cloudflare Tunnel · Edit
    - Zone · DNS · Edit (Zone Resources: include your domain)
-3. On the P8S server:
+3. In the dashboard: **Settings → Public access**, enter the domain and the
+   token, press **Connect**. (Or on the server: `p8 tunnel setup`.)
 
-```
-p8 tunnel setup
-```
-
-It asks for the domain and the token, creates the tunnel (`p8s-<host>`),
-installs `cloudflared` from Cloudflare's package repository and starts it, and
-puts the dashboard on `https://panel.<domain>` (or a name you pick, or none).
+p8sd creates the tunnel (`p8s-<host>`), runs `cloudflared` itself (installed
+by install.sh / update.sh; no separate service), shows the connection state,
+and puts the dashboard on `https://panel.<domain>` if you leave that ticked.
 
 The API token is stored only in `/var/lib/p8s/tunnel.json` (mode 0600).
 
@@ -64,4 +61,4 @@ Anyone can reach the sign-in page, so:
   visitor's real IP (Cloudflare's `CF-Connecting-IP`, trusted only from
   `cloudflared` on the server itself).
 
-Take it off again: `p8 tunnel dashboard off`. Status: `p8 tunnel`.
+Take it off again: Settings → Public access (or `p8 tunnel dashboard off`). Switch everything off: **Disconnect public access** (`p8 tunnel disconnect`). Status: `p8 tunnel`.

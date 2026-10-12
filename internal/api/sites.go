@@ -42,7 +42,7 @@ func (s *Server) getTunnel(w http.ResponseWriter, r *http.Request) {
 	}
 	st := s.Tunnel.Status()
 	if !who(r).Admin {
-		st.TunnelID, st.TunnelName = "", ""
+		st.TunnelID, st.TunnelName, st.Connector = "", "", nil
 	}
 	writeJSON(w, http.StatusOK, st)
 }
@@ -62,12 +62,24 @@ func (s *Server) setupTunnel(w http.ResponseWriter, r *http.Request) {
 	if body.Name == "" {
 		body.Name = "p8s-" + strings.ReplaceAll(s.issuerHost(), ".", "-")
 	}
-	st, tok, err := s.Tunnel.Setup(r.Context(), body.APIToken, body.Domain, body.Name)
+	st, _, err := s.Tunnel.Setup(r.Context(), body.APIToken, body.Domain, body.Name)
 	if err != nil {
 		s.tunnelErr(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"status": st, "tunnel_token": tok})
+	writeJSON(w, http.StatusOK, st)
+}
+
+// disconnectTunnel switches public access off (routes, DNS records, cloudflared).
+func (s *Server) disconnectTunnel(w http.ResponseWriter, r *http.Request) {
+	if !s.adminOnly(w, r) || !s.tunnelOn(w) {
+		return
+	}
+	if err := s.Tunnel.Disconnect(r.Context()); err != nil {
+		s.tunnelErr(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) setDashboardHost(w http.ResponseWriter, r *http.Request) {
