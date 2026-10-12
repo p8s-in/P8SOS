@@ -84,6 +84,12 @@ dialog h2{margin:0 0 4px;font-size:17px}
   <input id="cName" required pattern="[a-z][a-z0-9\-]{0,47}[a-z0-9]" placeholder="web1" autocomplete="off">
   <div class="hint">Lowercase letters, digits and hyphens.</div>
   <label for="cTpl">Template</label><select id="cTpl"></select>
+  <label for="cNet">Network</label>
+  <select id="cNet">
+    <option value="nat">Private — reachable from the host (NAT)</option>
+    <option value="lan">Home network — IP from your router</option>
+  </select>
+  <div class="hint" id="cNetHint"></div>
   <div class="row">
     <div><label for="cCpu">CPUs</label><input id="cCpu" type="number" min="1" value="1"></div>
     <div><label for="cMem">RAM</label><select id="cMem">
@@ -227,7 +233,7 @@ function renderVMs(){
     const ip = v.ip ? `<span class="mono copy" data-copy="ssh debian@${esc(v.ip)}" title="Click to copy the SSH command">${esc(v.ip)}</span>` : `<span class="muted">${v.state === "running" ? "booting…" : "—"}</span>`;
     return `<tr data-n="${esc(v.name)}">
       <td data-k="State"><span class="state ${esc(v.state)}"><span class="dot"></span>${b ? "working…" : esc(v.state)}</span></td>
-      <td data-k="Name"><b>${esc(v.name)}</b><div class="sub">${esc(v.template)}</div></td>
+      <td data-k="Name"><b>${esc(v.name)}</b><div class="sub">${esc(v.template)}${v.network === "lan" ? " · home network" : ""}</div></td>
       <td data-k="IP">${ip}</td>
       <td data-k="CPU">${v.vcpus}</td><td data-k="RAM">${gb(v.memory_mib)}</td><td data-k="Disk">${v.disk_gb} GB</td>
       <td data-k="Autostart">${v.autostart ? "yes" : "no"}</td>
@@ -257,8 +263,21 @@ async function openCreate(){
   const min = templates[0]?.min_disk_gb || 1;
   $("#cDisk").min = min; if (+$("#cDisk").value < min) $("#cDisk").value = Math.max(10, min);
   $("#cName").value = ""; $("#cKeys").value = "";
+  host = await call("GET", "/host").catch(() => host);
+  const lan = !!host?.networks?.includes("lan");
+  $("#cNet").querySelector('[value="lan"]').disabled = !lan;
+  if (!lan) $("#cNet").value = "nat";
+  netHint();
   $("#dlgCreate").showModal(); $("#cName").focus();
 }
+function netHint(){
+  const lan = !!host?.networks?.includes("lan");
+  $("#cNetHint").innerHTML = !lan
+    ? `Home network is off. To turn it on (Ethernet cable needed), run once on the host: <span class="mono">sudo p8 lan-setup</span>`
+    : $("#cNet").value === "lan" ? "Other computers and phones at home can reach this VM directly."
+    : "Only the host can reach this VM. Choose Home network to reach it from other devices.";
+}
+$("#cNet").onchange = netHint;
 $("#cTpl").onchange = e => { const min = +e.target.selectedOptions[0].dataset.min; $("#cDisk").min = min; if (+$("#cDisk").value < min) $("#cDisk").value = min; };
 $("#fCreate").onsubmit = async e => {
   if (e.submitter?.value !== "ok") return;
@@ -268,7 +287,7 @@ $("#fCreate").onsubmit = async e => {
   const go = $("#cGo"); go.disabled = true; go.textContent = "Creating…";
   try {
     await call("POST", "/vms", {name, template: $("#cTpl").value, vcpus: +$("#cCpu").value,
-      memory_mib: +$("#cMem").value, disk_gb: +$("#cDisk").value, ssh_keys: keys});
+      memory_mib: +$("#cMem").value, disk_gb: +$("#cDisk").value, ssh_keys: keys, network: $("#cNet").value});
     $("#dlgCreate").close(); toast(`${name} created — it gets an IP in ~30-60 s`); refresh();
   } catch (err) { toast(err.message, true); }
   go.disabled = false; go.textContent = "Create";

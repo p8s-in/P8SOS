@@ -115,6 +115,7 @@ chown -R "$USER_NAME": "$REPO/bin" 2>/dev/null || true
 install -m 0755 "$REPO/scripts/p8" /usr/local/bin/p8
 install -d -m 0755 /usr/local/share/p8s
 install -m 0755 "$REPO/scripts/smoke-test.sh" /usr/local/share/p8s/smoke-test.sh
+install -m 0755 "$REPO/scripts/setup-bridge.sh" /usr/local/share/p8s/setup-bridge.sh
 ok "installed /usr/local/bin/p8sd and the 'p8' command"
 
 # ---------------------------------------------------------------------------
@@ -156,6 +157,13 @@ if ! jq -e '.tls_auto == true and .listen == "0.0.0.0:8006" and (.default_ssh_ke
       | .default_ssh_keys = ((.default_ssh_keys // []) + [$key] | unique)' "$CONF" > "$tmp" && mv "$tmp" "$CONF"
   chmod 0600 "$CONF"
   ok "web dashboard enabled (HTTPS on port 8006)"
+fi
+
+# Home-network bridge made earlier (sudo p8 lan-setup) but not in the config yet?
+if [[ -d /sys/class/net/br0/bridge && $BRIDGE != br0 ]] && ! jq -e '.lan_bridge == "br0"' "$CONF" >/dev/null 2>&1; then
+  tmp=$(mktemp)
+  jq '.lan_bridge = "br0"' "$CONF" > "$tmp" && mv "$tmp" "$CONF" && chmod 0600 "$CONF"
+  ok "home network (br0) available for VMs"
 fi
 
 # ---------------------------------------------------------------------------

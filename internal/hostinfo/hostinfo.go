@@ -13,14 +13,15 @@ import (
 )
 
 type Info struct {
-	Hostname    string  `json:"hostname"`
-	CPUs        int     `json:"cpus"`
-	Load1       float64 `json:"load1"`
-	MemTotalMiB int     `json:"mem_total_mib"`
-	MemFreeMiB  int     `json:"mem_free_mib"` // available, not just free
-	PoolSizeGB  float64 `json:"pool_size_gb"`
-	PoolFreeGB  float64 `json:"pool_free_gb"`
-	UptimeSec   int     `json:"uptime_sec"`
+	Hostname    string   `json:"hostname"`
+	CPUs        int      `json:"cpus"`
+	Load1       float64  `json:"load1"`
+	MemTotalMiB int      `json:"mem_total_mib"`
+	MemFreeMiB  int      `json:"mem_free_mib"` // available, not just free
+	PoolSizeGB  float64  `json:"pool_size_gb"`
+	PoolFreeGB  float64  `json:"pool_free_gb"`
+	UptimeSec   int      `json:"uptime_sec"`
+	Networks    []string `json:"networks"` // networks new VMs can join: "nat", and "lan" once set up
 }
 
 // Collect never fails as a whole: missing pieces are left at zero.

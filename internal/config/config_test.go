@@ -31,3 +31,15 @@ func TestPlaceholderTokenRejected(t *testing.T) {
 		t.Fatalf("want sha256 error, got %v", err)
 	}
 }
+
+func TestLANBridgeMustDiffer(t *testing.T) {
+	c := Config{VMDataset: "tank/p8s/vms", Bridge: "virbr0", LANBridge: "virbr0",
+		Tokens: []Token{{Name: "a", SHA256: strings.Repeat("a", 64)}}}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "lan_bridge") {
+		t.Fatalf("want lan_bridge error, got %v", err)
+	}
+	c.LANBridge = "br0"
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -17,8 +17,9 @@ usage() {
 p8 — manage P8S OS virtual machines
 
   p8 list                          show all VMs
-  p8 create NAME [CPUS] [RAM_MB] [DISK_GB]
+  p8 create NAME [CPUS] [RAM_MB] [DISK_GB] [--lan]
                                    make a VM (default 1 CPU, 1024 MB, template size)
+                                   --lan: on your home network, IP from your router
   p8 show NAME                     details of one VM
   p8 start NAME                    power on
   p8 stop NAME                     shut down politely (like pressing the power button)
@@ -31,6 +32,7 @@ p8 — manage P8S OS virtual machines
   p8 bootlog NAME                  follow the VM's boot messages (Ctrl+C to stop)
   p8 templates                     available templates
   p8 dashboard                     web dashboard address + how to sign in
+  p8 lan-setup                     let VMs join your home network (Ethernet only, once)
   p8 status                        is p8sd healthy?
   p8 logs                          follow p8sd logs
   p8 test                          run the full automatic test
@@ -38,6 +40,7 @@ p8 — manage P8S OS virtual machines
 
 Examples:
   p8 create web1 2 2048 20
+  p8 create web2 2 2048 20 --lan
   p8 ssh web1
 EOF
 }
@@ -61,10 +64,10 @@ call() {
 vm_ip() { call GET "/vms/$1" 2>/dev/null | jq -r '.ip // empty'; }
 
 table() {
-  jq -r '(["NAME","STATE","IP","CPUS","RAM_MB","DISK_GB","AUTOSTART","TEMPLATE"]),
-         (.vms[] | [.name, .state, (if .ip == "" then "-" else .ip end), .vcpus, .memory_mib, .disk_gb,
-                    (if .autostart then "yes" else "no" end), .template]) | @tsv' |
-    awk -F'\t' '{printf "%-18s %-9s %-16s %-5s %-7s %-8s %-10s %s\n", $1,$2,$3,$4,$5,$6,$7,$8}'
+  jq -r '(["NAME","STATE","IP","NET","CPUS","RAM_MB","DISK_GB","AUTOSTART","TEMPLATE"]),
+         (.vms[] | [.name, .state, (if .ip == "" then "-" else .ip end), (.network // "nat"), .vcpus, .memory_mib,
+                    .disk_gb, (if .autostart then "yes" else "no" end), .template]) | @tsv' |
+    awk -F'\t' '{printf "%-18s %-9s %-16s %-4s %-5s %-7s %-8s %-10s %s\n", $1,$2,$3,$4,$5,$6,$7,$8,$9}'
 }
 
 cmd=${1:-help}; shift || true
@@ -75,15 +78,21 @@ case $cmd in
     table <<<"$body" ;;
 
   create|new)
+    net=nat; args=()
+    for a in "$@"; do case $a in --lan) net=lan ;; --nat) net=nat ;; *) args+=("$a") ;; esac; done
+    set -- "${args[@]}"
     need "${1:-}"
     keys='[]'
     [[ -f $PUBKEY ]] && keys=$(jq -Rc '[.]' <"$PUBKEY") || red "note: $PUBKEY not found, you won't be able to SSH in"
     req=$(jq -nc --arg n "$1" --argjson k "$keys" --arg c "${2:-0}" --arg m "${3:-0}" --arg d "${4:-0}" \
-      '{name:$n, template:"debian-13", vcpus:($c|tonumber), memory_mib:($m|tonumber), disk_gb:($d|tonumber), ssh_keys:$k}')
+      --arg net "$net" \
+      '{name:$n, template:"debian-13", vcpus:($c|tonumber), memory_mib:($m|tonumber), disk_gb:($d|tonumber), ssh_keys:$k, network:$net}')
     echo "Creating $1 ..."
     body=$(call POST /vms "$req") || exit 1
-    green "✔ $1 is $(jq -r .state <<<"$body") ($(jq -r '"\(.vcpus) CPU, \(.memory_mib) MB, \(.disk_gb) GB"' <<<"$body"))"
-    echo "  It needs ~30-60 s to boot. Then:  p8 ssh $1" ;;
+    green "✔ $1 is $(jq -r .state <<<"$body") ($(jq -r '"\(.vcpus) CPU, \(.memory_mib) MB, \(.disk_gb) GB, network \(.network)"' <<<"$body"))"
+    echo "  It needs ~30-60 s to boot. Then:  p8 ssh $1"
+    [[ $net == lan ]] && echo "  Its IP comes from your router; other computers at home can reach it directly."
+    true ;;
 
   show|get)
     need "${1:-}"; body=$(call GET "/vms/$1") || exit 1
@@ -137,6 +146,11 @@ case $cmd in
     echo "     $TOKEN" ;;
   logs) exec journalctl -u p8sd -f ;;
 
+  lan-setup|lan)
+    T=/usr/local/share/p8s/setup-bridge.sh
+    [[ -f $T ]] || T=$(dirname "$(readlink -f "$0")")/setup-bridge.sh
+    exec sudo bash "$T" ;;
+
   test)
     T=/usr/local/share/p8s/smoke-test.sh
     [[ -f $T ]] || T=$(dirname "$(readlink -f "$0")")/smoke-test.sh
@@ -150,6 +164,7 @@ case $cmd in
       echo "== service";   systemctl --no-pager status p8sd | head -5
       echo "== logs";      sudo journalctl -u p8sd -n 80 --no-pager
       echo "== libvirt";   sudo virsh list --all; sudo virsh net-list --all
+      echo "== network";   ip -br addr; ip route; cat /etc/network/interfaces; cat /var/lib/p8s/bridge/apply.log 2>/dev/null
       echo "== zfs";       sudo zpool status -x; sudo zfs list -t all -r tank/p8s
       echo "== seeds";     ls -la /var/lib/p8s/seeds
       echo "== kvm";       ls -l /dev/kvm; grep -cE 'vmx|svm' /proc/cpuinfo

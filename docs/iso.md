@@ -70,6 +70,12 @@ Open that address in a browser on any PC or phone on the same network:
    Delete (type the name to confirm) are all buttons. VMs created here trust the host user's SSH key,
    so `p8 ssh <name>` works on the laptop.
 
+## 6. VMs on your home network (optional)
+
+By default VMs are only reachable from the laptop. To let other PCs/phones reach them:
+Ethernet cable in, then `sudo p8 lan-setup` once, then `p8 create web2 --lan` (or choose
+**Home network** in the dashboard). Details: [networking.md](networking.md).
+
 ## Updating an installed host
 
 Copy the newest `P8SOS` folder to the host (USB stick, or `git clone`), then: `sudo bash update.sh`.

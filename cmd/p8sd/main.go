@@ -78,6 +78,8 @@ func serve(args []string) error {
 		Seeds:     &cloudinit.Builder{Run: run, Dir: filepath.Join(cfg.DataDir, "seeds")},
 		Templates: cfg.Templates,
 		Bridge:    cfg.Bridge,
+		LANBridge: cfg.LANBridge,
+		BridgeUp:  func(n string) bool { _, err := os.Stat("/sys/class/net/" + n + "/bridge"); return err == nil },
 		Limits:    vm.Limits{MaxVCPUs: cfg.MaxVCPUs, MaxMemoryMiB: cfg.MaxMemoryMiB, MaxDiskGB: cfg.MaxDiskGB},
 		SSHKeys:   cfg.SSHKeys,
 		Log:       log,
@@ -95,8 +97,12 @@ func serve(args []string) error {
 		Addr: cfg.Listen,
 		Handler: (&api.Server{
 			VMs: svc, Templates: cfg.Templates, Tokens: cfg.Tokens, Version: version, Log: log,
-			Host: func(ctx context.Context) any { return hostinfo.Collect(ctx, run, cfg.VMDataset) },
-			UI:   web.Handler(),
+			Host: func(ctx context.Context) any {
+				in := hostinfo.Collect(ctx, run, cfg.VMDataset)
+				in.Networks = svc.Networks()
+				return in
+			},
+			UI: web.Handler(),
 		}).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		// VM create can take a while (clone + seed + define + start).

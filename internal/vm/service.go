@@ -47,10 +47,13 @@ type Service struct {
 	Disks     Disks
 	Seeds     Seeds
 	Templates []config.Template
-	Bridge    string
-	Limits    Limits
-	SSHKeys   []string // default keys for creates that pass none
-	Log       *slog.Logger
+	Bridge    string // NAT bridge (network "nat", the default)
+	LANBridge string // bridge onto the home network (network "lan"); empty = not set up
+	// BridgeUp reports whether a host bridge exists; nil means "assume yes".
+	BridgeUp func(name string) bool
+	Limits   Limits
+	SSHKeys  []string // default keys for creates that pass none
+	Log      *slog.Logger
 
 	locks sync.Map // name -> *sync.Mutex; serializes ops per VM
 }
@@ -65,6 +68,7 @@ type VM struct {
 	MemoryMiB int        `json:"memory_mib"`
 	DiskGB    int        `json:"disk_gb"`
 	MAC       string     `json:"mac"`
+	Network   string     `json:"network"`   // "nat" (private, behind the host) or "lan" (home network)
 	IP        string     `json:"ip"`        // first IPv4; empty while booting or stopped
 	Autostart bool       `json:"autostart"` // starts when the host boots
 	UUID      string     `json:"uuid"`
@@ -79,8 +83,42 @@ type CreateRequest struct {
 	DiskGB    int      `json:"disk_gb"`
 	SSHKeys   []string `json:"ssh_keys"`
 	UserData  string   `json:"user_data,omitempty"`
+	Network   string   `json:"network,omitempty"`   // "nat" (default) or "lan"
 	Start     *bool    `json:"start,omitempty"`     // default true
 	Autostart *bool    `json:"autostart,omitempty"` // default true: start when the host boots
+}
+
+// Network names a VM can be attached to.
+const (
+	NetNAT = "nat" // private network behind the host (libvirt virbr0)
+	NetLAN = "lan" // bridged onto the home network; the router gives the IP
+)
+
+// LANAvailable reports whether VMs can be put on the home network.
+func (s *Service) LANAvailable() bool {
+	return s.LANBridge != "" && (s.BridgeUp == nil || s.BridgeUp(s.LANBridge))
+}
+
+// Networks lists the networks new VMs can use on this host.
+func (s *Service) Networks() []string {
+	if s.LANAvailable() {
+		return []string{NetNAT, NetLAN}
+	}
+	return []string{NetNAT}
+}
+
+func (s *Service) bridgeFor(network string) string {
+	if network == NetLAN {
+		return s.LANBridge
+	}
+	return s.Bridge
+}
+
+func (s *Service) networkOf(bridge string) string {
+	if s.LANBridge != "" && bridge == s.LANBridge {
+		return NetLAN
+	}
+	return NetNAT
 }
 
 func (s *Service) lock(name string) func() {
@@ -131,6 +169,16 @@ func (s *Service) validate(r *CreateRequest) (config.Template, error) {
 			errs = append(errs, "ssh_keys must be OpenSSH public keys")
 			break
 		}
+	}
+	switch r.Network {
+	case "", NetNAT:
+		r.Network = NetNAT
+	case NetLAN:
+		if !s.LANAvailable() {
+			errs = append(errs, "network \"lan\" is not set up on this host (run: sudo p8 lan-setup)")
+		}
+	default:
+		errs = append(errs, `network must be "nat" or "lan"`)
 	}
 	if r.UserData != "" && !strings.HasPrefix(r.UserData, "#cloud-config") {
 		errs = append(errs, "user_data must start with #cloud-config")
@@ -197,7 +245,7 @@ func (s *Service) Create(ctx context.Context, r CreateRequest) (VM, error) {
 
 	spec := virt.Spec{
 		Name: dom, UUID: uuid, VCPUs: r.VCPUs, MemoryMiB: r.MemoryMiB, DiskGB: r.DiskGB,
-		DiskPath: disk, SeedISO: seed, Bridge: s.Bridge, MAC: virt.RandomMAC(),
+		DiskPath: disk, SeedISO: seed, Bridge: s.bridgeFor(r.Network), MAC: virt.RandomMAC(),
 		Template: t.Name, CreatedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 	xml, err := virt.DomainXML(spec)
@@ -248,7 +296,7 @@ func (s *Service) get(ctx context.Context, dom string) (VM, error) {
 	v := VM{
 		Name: strings.TrimPrefix(spec.Name, Prefix), State: st, Template: spec.Template,
 		VCPUs: spec.VCPUs, MemoryMiB: spec.MemoryMiB, DiskGB: spec.DiskGB,
-		MAC: spec.MAC, UUID: spec.UUID, CreatedAt: spec.CreatedAt,
+		MAC: spec.MAC, Network: s.networkOf(spec.Bridge), UUID: spec.UUID, CreatedAt: spec.CreatedAt,
 	}
 	// Best effort: these must never make GET/list fail.
 	v.Autostart, _ = s.HV.Autostart(ctx, dom)

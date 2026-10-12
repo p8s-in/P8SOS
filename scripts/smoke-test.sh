@@ -50,7 +50,13 @@ cleanup() {
   api GET "/vms/$NAME"
   [[ $CODE == 200 ]] && { echo; echo "(cleanup) deleting $NAME"; api DELETE "/vms/$NAME"; }
 }
-trap cleanup EXIT
+LAN_NAME=${NAME}lan
+cleanup_lan() {
+  [[ ${KEEP:-0} == 1 ]] && return
+  api GET "/vms/$LAN_NAME"
+  [[ $CODE == 200 ]] && { echo "(cleanup) deleting $LAN_NAME"; api DELETE "/vms/$LAN_NAME"; }
+}
+trap 'cleanup; cleanup_lan' EXIT
 
 for bin in curl jq sudo; do command -v $bin >/dev/null || { echo "missing $bin" >&2; exit 2; }; done
 sudo -v || exit 2
@@ -154,6 +160,35 @@ else
   sudo zfs list -H "$DATASET/$DOM-disk0" >/dev/null 2>&1 && bad "zfs disk still exists" || ok "zfs disk destroyed"
   sudo test -f "$SEED_DIR/$DOM-seed.iso" && bad "seed ISO still exists" || ok "seed ISO removed"
   sudo zfs list -H "${origin%@*}" >/dev/null 2>&1 && ok "template survived" || bad "template dataset missing!"
+fi
+
+step "8. home network (only after: sudo p8 lan-setup)"
+api GET /host
+if jq -e '.networks | index("lan")' <<<"$BODY" >/dev/null 2>&1; then
+  api POST /vms '{"name":"'"$LAN_NAME"'","template":"'"$TEMPLATE"'","network":"lan","ssh_keys":'"$keys"'}'
+  expect "create VM on the home network" 201
+  [[ $(jq -r .network <<<"$BODY") == lan ]] && ok "API reports network lan" || bad "network: $BODY"
+  br=$(sudo virsh domiflist "p8s-$LAN_NAME" 2>/dev/null | awk 'NR>2 && $3 {print $3; exit}')
+  [[ $br == br0 ]] && ok "attached to br0" || bad "attached to '$br', want br0"
+  lip=""
+  for ((i = 0; i < IP_TIMEOUT; i += 5)); do
+    api GET "/vms/$LAN_NAME"; lip=$(jq -r '.ip // empty' <<<"$BODY"); [[ -n $lip ]] && break; sleep 5
+  done
+  if [[ -n $lip ]]; then
+    [[ $lip != 192.168.122.* ]] && ok "got home-network IP $lip from the router" || bad "IP $lip is from the NAT network"
+    out=""
+    for ((i = 0; i < SSH_TIMEOUT; i += 5)); do
+      out=$(ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -o BatchMode=yes \
+        -o LogLevel=ERROR "debian@$lip" 'ip -4 route show default' 2>/dev/null) && break
+      sleep 5
+    done
+    [[ -n $out ]] && ok "SSH to $lip works (gateway: $(awk '{print $3; exit}' <<<"$out"))" || bad "SSH to $lip failed"
+  else
+    bad "LAN VM got no IP in ${IP_TIMEOUT}s (does your router hand out DHCP? p8 bootlog $LAN_NAME)"
+  fi
+  if [[ ${KEEP:-0} != 1 ]]; then api DELETE "/vms/$LAN_NAME"; expect "delete LAN VM" 204; fi
+else
+  echo "  skipped: home network not set up on this host"
 fi
 
 echo

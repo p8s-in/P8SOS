@@ -14,7 +14,8 @@ type Config struct {
 	DataDir      string     `json:"data_dir"`         // e.g. "/var/lib/p8s"
 	LibvirtURI   string     `json:"libvirt_uri"`      // e.g. "qemu:///system"
 	VMDataset    string     `json:"vm_dataset"`       // ZFS dataset holding VM disks, e.g. "tank/p8s/vms"
-	Bridge       string     `json:"bridge"`           // host bridge VMs attach to, e.g. "vmbr0"
+	Bridge       string     `json:"bridge"`           // NAT bridge VMs attach to by default, e.g. "virbr0"
+	LANBridge    string     `json:"lan_bridge"`       // optional bridge onto the home network, e.g. "br0"
 	TLSCert      string     `json:"tls_cert"`         // optional; plain HTTP if empty
 	TLSKey       string     `json:"tls_key"`          // optional
 	TLSAuto      bool       `json:"tls_auto"`         // HTTPS with a self-signed cert in data_dir/tls
@@ -73,6 +74,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Bridge == "" {
 		errs = append(errs, errors.New("bridge is required"))
+	}
+	if c.LANBridge != "" && c.LANBridge == c.Bridge {
+		errs = append(errs, errors.New("lan_bridge must differ from bridge"))
 	}
 	if len(c.Tokens) == 0 {
 		errs = append(errs, errors.New("at least one token is required (run: p8sd token)"))

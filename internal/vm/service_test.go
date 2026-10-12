@@ -3,6 +3,7 @@ package vm
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 
@@ -284,5 +285,51 @@ func TestDefaultSSHKeysUsedWhenNoneGiven(t *testing.T) {
 	}
 	if ks.got[0] != "ssh-rsa MINE" {
 		t.Fatalf("explicit keys should win: %v", ks.got)
+	}
+}
+
+func TestNetworks(t *testing.T) {
+	ctx := context.Background()
+	svc, hv, _, _ := newSvc()
+
+	// No LAN bridge configured: only NAT, and asking for LAN is a clear 400.
+	if got := svc.Networks(); len(got) != 1 || got[0] != NetNAT {
+		t.Fatalf("networks without lan: %v", got)
+	}
+	if _, err := svc.Create(ctx, CreateRequest{Name: "a1", Template: "debian-13", Network: "lan"}); !errors.Is(err, ErrInvalid) ||
+		!strings.Contains(err.Error(), "lan-setup") {
+		t.Fatalf("lan without bridge: %v", err)
+	}
+	if _, err := svc.Create(ctx, CreateRequest{Name: "a1", Template: "debian-13", Network: "wifi"}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("bad network: %v", err)
+	}
+
+	// Configured but the bridge is gone from the host: still not offered.
+	svc.LANBridge = "br0"
+	up := false
+	svc.BridgeUp = func(n string) bool { return n == "br0" && up }
+	if svc.LANAvailable() {
+		t.Fatal("lan offered while br0 is down")
+	}
+	up = true
+	if got := svc.Networks(); len(got) != 2 || got[1] != NetLAN {
+		t.Fatalf("networks with lan: %v", got)
+	}
+
+	nat, err := svc.Create(ctx, CreateRequest{Name: "nat1", Template: "debian-13"})
+	if err != nil || nat.Network != NetNAT {
+		t.Fatalf("default network: %v %+v", err, nat)
+	}
+	lan, err := svc.Create(ctx, CreateRequest{Name: "lan1", Template: "debian-13", Network: "lan"})
+	if err != nil || lan.Network != NetLAN {
+		t.Fatalf("lan create: %v %+v", err, lan)
+	}
+	spec, _ := virt.ParseDomainXML(hv.doms["p8s-lan1"])
+	if spec.Bridge != "br0" {
+		t.Fatalf("lan VM attached to %q, want br0", spec.Bridge)
+	}
+	spec, _ = virt.ParseDomainXML(hv.doms["p8s-nat1"])
+	if spec.Bridge != "vmbr0" {
+		t.Fatalf("nat VM attached to %q, want vmbr0", spec.Bridge)
 	}
 }

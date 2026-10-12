@@ -1,6 +1,6 @@
 # p8sd REST API — v1
 
-Base URL: `http://<host>:8006/api/v1` (HTTPS when `tls_cert`/`tls_key` are set).
+Base URL: `https://<host>:8006/api/v1` (self-signed certificate unless `tls_cert`/`tls_key` are set).
 All bodies are JSON. Unknown fields in request bodies are rejected.
 
 ## Authentication
@@ -42,6 +42,7 @@ scoped tokens arrive with tenants in Phase 2.
   "memory_mib": 2048,
   "disk_gb": 20,
   "mac": "52:54:00:3a:91:c4",
+  "network": "nat",
   "ip": "192.168.122.57",
   "autostart": true,
   "uuid": "6f1e4c1a-6c0b-4f1e-9a51-0f6f3a7f9b20",
@@ -53,11 +54,18 @@ scoped tokens arrive with tenants in Phase 2.
 `ip` is the guest's first IPv4 address (from libvirt DHCP leases, the guest agent,
 or the ARP table); it is empty while the guest boots and when it is stopped.
 `autostart` means the VM starts automatically when the host boots.
+`network` is `nat` (private network behind the host, 192.168.122.x) or `lan`
+(bridged onto the home network; the router hands out the IP).
 
 ## Endpoints
 
 ### `GET /health` (no auth)
 `200 {"status":"ok","version":"0.1.0-dev"}`
+
+### `GET /host`
+`200 {"hostname":"p8s-node","cpus":8,"load1":0.2,"mem_total_mib":15872,"mem_free_mib":12000,
+"pool_size_gb":200,"pool_free_gb":180,"uptime_sec":3600,"networks":["nat","lan"]}` —
+host capacity for the dashboard. `networks` lists what new VMs can join.
 
 ### `GET /templates`
 `200 {"templates":[{"name":"debian-13","min_disk_gb":3,"os_variant":"debian13"}]}`
@@ -76,6 +84,7 @@ or the ARP table); it is empty while the guest boots and when it is stopped.
   "disk_gb": 20,
   "ssh_keys": ["ssh-ed25519 AAAA... you@laptop"],
   "user_data": "#cloud-config\n...",
+  "network": "nat",
   "start": true,
   "autostart": true
 }
@@ -90,6 +99,7 @@ or the ARP table); it is empty while the guest boots and when it is stopped.
 | disk_gb     | no       | template min         | template `min_disk_gb` … `max_disk_gb`        |
 | ssh_keys    | no       | []                   | OpenSSH public keys                           |
 | user_data   | no       | generated            | must start with `#cloud-config`; replaces the generated config entirely |
+| network     | no       | nat                  | `nat` or `lan`; `lan` needs `sudo p8 lan-setup` once (see `GET /host` → `networks`) |
 | start       | no       | true                 | define only when false                        |
 | autostart   | no       | true                 | start the VM when the host boots              |
 

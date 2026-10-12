@@ -22,6 +22,7 @@ Each phase ships something usable on its own.
 - [x] One-command `install.sh` and `p8` CLI helper
 - [x] **Bare metal** — alpha ISO installed on the ASUS FX505GT; `p8 create web1 2 2048 20` + `p8 ssh web1` working (2026-10-12)
 - [ ] Full `p8 test` run on bare metal
+- [x] VMs on the home network: `sudo p8 lan-setup` (br0 with auto-rollback), `--lan` / dashboard choice ([networking.md](networking.md))
 - [ ] `p8sctl` CLI client in Go (replaces the `p8` shell helper)
 
 ## Phase 2 — Tenants and networking (months 2–4)
