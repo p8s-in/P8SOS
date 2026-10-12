@@ -173,6 +173,12 @@ func ParseVNCDisplay(out string) (string, error) {
 	return fmt.Sprintf("127.0.0.1:%d", 5900+n), nil
 }
 
+// DomStats returns `virsh domstats --raw` for all running domains (one call).
+func (v *Virsh) DomStats(ctx context.Context) (string, error) {
+	out, err := v.virsh(ctx, "domstats", "--raw", "--cpu-total", "--balloon", "--vcpu", "--block", "--interface", "--list-running")
+	return string(out), err
+}
+
 func (v *Virsh) SetUserPassword(ctx context.Context, name, user, password string) error {
 	_, err := v.virsh(ctx, "set-user-password", name, user, password)
 	return err

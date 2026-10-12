@@ -154,6 +154,14 @@ if [[ -n $ip && $keys != '[]' ]]; then
   fi
 fi
 
+step "5a. usage charts"
+for ((i = 0; i < 45; i += 5)); do  # samples every 10 s; the first rate needs two
+  api GET "/vms/$NAME/metrics"; n=$(jq '.points | length' <<<"$BODY" 2>/dev/null); [[ ${n:-0} -ge 1 ]] && break; sleep 5
+done
+[[ ${n:-0} -ge 1 ]] && ok "usage samples collected ($n, last CPU $(jq -r '.points[-1].cpu' <<<"$BODY")%)" || bad "no usage samples yet: $BODY"
+api GET /host/metrics
+[[ $(jq '.points | length' <<<"$BODY") -ge 1 ]] && ok "host usage samples collected" || bad "no host samples: $BODY"
+
 step "5b. browser console"
 api POST "/vms/$NAME/console"; expect "console ticket" 201
 path=$(jq -r '.path // empty' <<<"$BODY")

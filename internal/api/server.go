@@ -20,6 +20,7 @@ import (
 
 	"p8sos/internal/config"
 	"p8sos/internal/console"
+	"p8sos/internal/metrics"
 	"p8sos/internal/vm"
 )
 
@@ -58,6 +59,11 @@ type Server struct {
 	Host      func(ctx context.Context) any // host capacity for the dashboard; nil = 404
 	UI        http.Handler                  // web dashboard served at /; nil = none
 	Tickets   *console.Tickets              // console passes; nil = created on first use
+	// Metrics serves the usage charts; nil = no charts.
+	Metrics interface {
+		VM(name string) []metrics.Point
+		Host() []metrics.HostPoint
+	}
 	// BackupKeep/BackupTime are the host defaults shown with backup schedules.
 	BackupKeep int
 	BackupTime string
@@ -105,6 +111,8 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("POST /api/v1/backups/{name}/{id}/restore", s.restoreBackup)
 	auth.HandleFunc("GET /api/v1/vms/{name}/backup-schedule", s.getSchedule)
 	auth.HandleFunc("PUT /api/v1/vms/{name}/backup-schedule", s.putSchedule)
+	auth.HandleFunc("GET /api/v1/vms/{name}/metrics", s.vmMetrics)
+	auth.HandleFunc("GET /api/v1/host/metrics", s.hostMetrics)
 	auth.HandleFunc("GET /api/v1/jobs", s.listJobs)
 	auth.HandleFunc("GET /api/v1/jobs/{id}", s.getJob)
 	mux.Handle("/api/v1/", s.requireToken(auth))
@@ -427,6 +435,27 @@ func (s *Server) putSchedule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, scheduleView{Daily: body.Daily, Keep: body.Keep, At: s.BackupTime})
+}
+
+func (s *Server) vmMetrics(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if _, err := s.VMs.Get(r.Context(), name); err != nil {
+		s.fail(w, err)
+		return
+	}
+	pts := []metrics.Point{}
+	if s.Metrics != nil {
+		pts = s.Metrics.VM(name)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"interval": 10, "points": pts})
+}
+
+func (s *Server) hostMetrics(w http.ResponseWriter, r *http.Request) {
+	pts := []metrics.HostPoint{}
+	if s.Metrics != nil {
+		pts = s.Metrics.Host()
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"interval": 10, "points": pts})
 }
 
 func (s *Server) listJobs(w http.ResponseWriter, r *http.Request) {

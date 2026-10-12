@@ -267,9 +267,9 @@ case $cmd in
     path=/backups; [[ -n ${1:-} ]] && path="/vms/$1/backups"
     body=$(call GET "$path") || exit 1
     [[ $(jq '.backups | length' <<<"$body") == 0 ]] && { echo "No backups yet. Make one: p8 backup ${1:-NAME}"; exit 0; }
-    printf '%-18s %-16s %-22s %-9s %s\n' VM ID CREATED SIZE CLEAN
+    printf '%-18s %-16s %-24s %-9s %s\n' VM ID CREATED SIZE CLEAN
     jq -r '.backups[] | [.vm, .id, (.created_at | sub("T"; " ") | sub("Z"; " UTC")), .bytes, (if .consistent then "yes" else "crash" end)] | @tsv' <<<"$body" |
-      while IFS=$'\t' read -r v i c b k; do printf '%-18s %-16s %-22s %-9s %s\n' "$v" "$i" "$c" "$(human "$b")" "$k"; done ;;
+      while IFS=$'\t' read -r v i c b k; do printf '%-18s %-16s %-24s %-9s %s\n' "$v" "$i" "$c" "$(human "$b")" "$k"; done ;;
 
   restore)
     need "${1:-}"; [[ -n ${2:-} ]] || { red "which backup?  p8 backups $1"; exit 1; }

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"p8sos/internal/config"
+	"p8sos/internal/metrics"
 	"p8sos/internal/vm"
 )
 
@@ -125,12 +126,19 @@ func (f *fakeVMs) SetSchedule(n string, s vm.Schedule) error {
 func (f *fakeVMs) Job(id string) (vm.Job, bool) { return vm.Job{ID: id, State: "done"}, id == "j1" }
 func (f *fakeVMs) ListJobs() []vm.Job           { return []vm.Job{{ID: "j1"}} }
 
+type fakeMetrics struct{}
+
+func (fakeMetrics) VM(string) []metrics.Point { return []metrics.Point{{T: 1, CPU: 12.5}} }
+func (fakeMetrics) Host() []metrics.HostPoint {
+	return []metrics.HostPoint{{T: 1, CPU: 3, MemUsedMiB: 100, MemTotalMiB: 8000}}
+}
+
 const secret = "p8s_testtoken"
 
 func newTestServer() (*httptest.Server, *fakeVMs) {
 	sum := sha256.Sum256([]byte(secret))
 	f := &fakeVMs{}
-	s := &Server{VMs: f, Version: "test", BackupKeep: 7, BackupTime: "02:30",
+	s := &Server{VMs: f, Version: "test", BackupKeep: 7, BackupTime: "02:30", Metrics: fakeMetrics{},
 		Tokens:    []config.Token{{Name: "t", SHA256: hex.EncodeToString(sum[:])}},
 		Templates: []config.Template{{Name: "debian-13", MinDiskGB: 4}, {Name: "ubuntu-24.04", MinDiskGB: 4, Label: "Ubuntu 24.04 LTS", DefaultUser: "ubuntu"}}}
 	return httptest.NewServer(s.Handler()), f
@@ -217,6 +225,9 @@ func TestAPI(t *testing.T) {
 		{"GET", "/api/v1/jobs", secret, "", 200, `"id":"j1"`},
 		{"GET", "/api/v1/jobs/j1", secret, "", 200, `"state":"done"`},
 		{"GET", "/api/v1/jobs/zz", secret, "", 404, "not_found"},
+		{"GET", "/api/v1/vms/web1/metrics", secret, "", 200, `"points":[{"t":1,"cpu":12.5`},
+		{"GET", "/api/v1/vms/nope/metrics", secret, "", 404, "not_found"},
+		{"GET", "/api/v1/host/metrics", secret, "", 200, `"mem_total_mib":8000`},
 	}
 	for _, c := range cases {
 		code, body := do(t, srv, c.method, c.path, c.tok, c.body)

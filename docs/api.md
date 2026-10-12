@@ -155,6 +155,12 @@ deletes the newer ones — without `destroy_newer` that is a `409` listing them.
 
 `DELETE /vms/{name}/snapshots/{snap}` → `204`.
 
+### Usage metrics
+`GET /vms/{name}/metrics` → `{"interval":10,"points":[{"t":…,"cpu":25.5,"mem_mib":736,"disk_read_bps":…,
+"disk_write_bps":…,"net_rx_bps":…,"net_tx_bps":…}]}` — one point per 10 s for the last hour, oldest first.
+`cpu` is % of the VM's own vCPUs; `mem_mib` is host RAM the VM uses. `GET /host/metrics` → `cpu` (% of all
+host CPUs), `mem_used_mib`, `mem_total_mib`. Kept in memory only (empty again after a p8sd restart).
+
 ### Backups (full copies in files) and jobs
 Backups are `zfs send` streams of the VM disk, compressed (zstd) into files under `backup_dir`
 (default `/var/lib/p8s/backups/<vm>/`), with a `.json` describing the VM. They outlive the VM.

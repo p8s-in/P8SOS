@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -29,6 +30,7 @@ import (
 	"p8sos/internal/execx"
 	"p8sos/internal/hostinfo"
 	"p8sos/internal/jobs"
+	"p8sos/internal/metrics"
 	"p8sos/internal/storage"
 	"p8sos/internal/tlsutil"
 	"p8sos/internal/virt"
@@ -93,6 +95,25 @@ func serve(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go svc.RunSchedule(ctx, cfg.BackupTime, nil)
+	virsh := &virt.Virsh{Run: run, URI: cfg.LibvirtURI}
+	mc := &metrics.Collector{
+		Stats: func(ctx context.Context) (map[string]metrics.Raw, error) {
+			out, err := virsh.DomStats(ctx)
+			if err != nil {
+				return nil, err
+			}
+			res := map[string]metrics.Raw{}
+			for dom, r := range metrics.ParseDomStats(out) {
+				if name, ok := strings.CutPrefix(dom, vm.Prefix); ok {
+					res[name] = r
+				}
+			}
+			return res, nil
+		},
+		HostCPU: metrics.ProcStat,
+		HostMem: metrics.ProcMem,
+	}
+	go mc.Run(ctx)
 	for _, t := range cfg.Templates {
 		if !disks.SnapshotExists(ctx, t.Snapshot) {
 			log.Warn("template snapshot missing; creates from it will fail", "template", t.Name, "snapshot", t.Snapshot)
@@ -103,7 +124,7 @@ func serve(args []string) error {
 		Addr: cfg.Listen,
 		Handler: (&api.Server{
 			VMs: svc, Templates: cfg.Templates, Tokens: cfg.Tokens, Version: version, Log: log,
-			BackupKeep: cfg.BackupKeep, BackupTime: cfg.BackupTime,
+			BackupKeep: cfg.BackupKeep, BackupTime: cfg.BackupTime, Metrics: mc,
 			Host: func(ctx context.Context) any {
 				in := hostinfo.Collect(ctx, run, cfg.VMDataset)
 				in.Networks = svc.Networks()
