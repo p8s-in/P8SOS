@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"p8sos/internal/creds"
 	"sync"
 	"time"
 
@@ -126,6 +127,10 @@ type Server struct {
 	HostShell func() (*ct.Terminal, error)
 	// SSHPorts lists guest -> SSH port on this server; nil = off.
 	SSHPorts func() map[string]int
+	// Creds keeps the login details shown to owners (nil = none kept);
+	// AutoPasswords makes a root password for VMs/containers created without one.
+	Creds         *creds.Store
+	AutoPasswords bool
 	// RDPPorts: Windows VM -> Remote Desktop port on this server; nil = off.
 	RDPPorts func() map[string]int
 
@@ -177,6 +182,7 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("GET /api/v1/host", s.hostInfo)
 	auth.HandleFunc("POST /api/v1/vms/{name}/console", s.consoleTicket)
 	auth.HandleFunc("POST /api/v1/vms/{name}/password", s.setPassword)
+	auth.HandleFunc("GET /api/v1/vms/{name}/login", s.vmLogin)
 	auth.HandleFunc("GET /api/v1/backups", s.listBackups)
 	auth.HandleFunc("GET /api/v1/vms/{name}/backups", s.listBackups)
 	auth.HandleFunc("POST /api/v1/vms/{name}/backups", s.startBackup)
@@ -258,6 +264,7 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("POST /api/v1/containers/{name}/{action}", s.ctPower)
 	auth.HandleFunc("POST /api/v1/containers/{name}/console", s.ctConsole)
 	auth.HandleFunc("POST /api/v1/containers/{name}/password", s.ctPassword)
+	auth.HandleFunc("GET /api/v1/containers/{name}/login", s.ctLogin)
 	auth.HandleFunc("POST /api/v1/containers/{name}/setup-ssh", s.ctSetupSSH)
 	auth.HandleFunc("PUT /api/v1/containers/{name}/owner", s.ctOwner)
 	auth.HandleFunc("GET /api/v1/containers/{name}/firewall", s.ctFirewall)
@@ -425,14 +432,29 @@ func (s *Server) createVM(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	if req.ISO == "" { // installer VMs set their passwords in the installer
+		s.autoPassword(r, &req.RootPassword)
+	}
 	v, err := s.VMs.Create(r.Context(), req)
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
 	s.afterCreate(r, v, plan)
+	var login *loginView
+	if req.RootPassword != "" && !who(r).Cluster {
+		l := creds.Login{User: "root", Password: req.RootPassword, SSH: req.SSHPasswordAuth == nil || *req.SSHPasswordAuth}
+		if err := s.Creds.Set("vm", v.Name, l); err != nil && s.Log != nil {
+			s.Log.Error("store vm login", "vm", v.Name, "err", err)
+		}
+		lv := viewOf(l, true)
+		login = &lv
+	}
 	w.Header().Set("Location", "/api/v1/vms/"+v.Name)
-	writeJSON(w, http.StatusCreated, v)
+	writeJSON(w, http.StatusCreated, struct {
+		vm.VM
+		Login *loginView `json:"login,omitempty"`
+	}{v, login})
 }
 
 func (s *Server) getVM(w http.ResponseWriter, r *http.Request) {
@@ -496,6 +518,7 @@ func (s *Server) deleteVM(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
+	_ = s.Creds.Delete("vm", r.PathValue("name"))
 	if s.Billing != nil { // stop charging
 		if err := s.Billing.Unsubscribe(r.PathValue("name")); err != nil && s.Log != nil {
 			s.Log.Error("stop billing of deleted vm", "vm", r.PathValue("name"), "err", err)
@@ -952,15 +975,27 @@ func (s *Server) setPassword(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		User     string `json:"user"`
 		Password string `json:"password"`
+		Generate bool   `json:"generate"` // make a random one and return it
 	}
 	if !decode(w, r, &body) {
 		return
+	}
+	if body.User == "" {
+		body.User = "root"
+	}
+	if body.Generate {
+		body.Password = creds.Generate(PasswordLength)
 	}
 	if err := s.VMs.SetPassword(r.Context(), r.PathValue("name"), body.User, body.Password); err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	s.rememberPassword("vm", r.PathValue("name"), body.User, body.Password)
+	if !body.Generate {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"user": body.User, "password": body.Password})
 }
 
 // --- middleware ---

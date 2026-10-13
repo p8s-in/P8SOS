@@ -38,9 +38,12 @@ type Config struct {
 	LicenseServer string `json:"license_server"`
 	// SSHPorts gives every VM and container on the private (NAT) network an SSH
 	// port on this server, from SSHPortBase up (default on, from 2201).
-	SSHPorts    *bool `json:"ssh_ports"`
-	HostShell   *bool `json:"host_shell"`
-	SSHPortBase int   `json:"ssh_port_base"`
+	SSHPorts  *bool `json:"ssh_ports"`
+	HostShell *bool `json:"host_shell"`
+	// AutoRootPasswords: VMs and containers created without a root password
+	// get a random one, shown to their owner (default yes, like a VPS panel).
+	AutoRootPasswords *bool `json:"auto_root_passwords"`
+	SSHPortBase       int   `json:"ssh_port_base"`
 }
 
 // SSHPortsOn reports whether NAT guests get SSH ports (default yes).
@@ -49,6 +52,11 @@ func (c *Config) SSHPortsOn() bool { return c.SSHPorts == nil || *c.SSHPorts }
 // HostShellOn reports whether admins get the server's root shell in the
 // dashboard (Server → Shell, like Proxmox); "host_shell": false turns it off.
 func (c *Config) HostShellOn() bool { return c.HostShell == nil || *c.HostShell }
+
+// AutoRootPasswordsOn: make root passwords for new guests (default yes).
+func (c *Config) AutoRootPasswordsOn() bool {
+	return c.AutoRootPasswords == nil || *c.AutoRootPasswords
+}
 
 // GuardOn reports whether VM isolation rules are wanted (default yes).
 func (c *Config) GuardOn() bool { return c.VMGuard == nil || *c.VMGuard }

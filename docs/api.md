@@ -314,6 +314,15 @@ and only from a page served by this host (Origin check). No bearer token on the 
 `POST /vms/{name}/password` `{"user":"debian","password":"…"}` → `204`. Sets a guest account's
 password through the guest agent so you can log in on the console (cloud images ship with
 passwords locked). 8–128 chars. `409` if the VM isn't running or the agent isn't up yet.
+`{"user":"root","generate":true}` makes a random 16-character password instead and answers
+`200 {"user","password"}`. Containers: same at `POST /containers/{name}/password`.
+
+**Login details.** A template VM or container created without `root_password` gets a random one
+(16 characters, no look-alike letters; config `"auto_root_passwords": false` turns this off). The
+create answer has `"login": {"known":true,"user":"root","password":"…","ssh_password":true,"set_at":"…"}`.
+Read it again later (owner or admin): `GET /vms/{name}/login`, `GET /containers/{name}/login`
+(`known:false` when P8S didn't make or set one, e.g. ISO installs). Setting root's password through
+P8S updates it; deleting the guest forgets it. Stored in `<data_dir>/credentials.json` (0600).
 
 ### Subscription (admins)
 

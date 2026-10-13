@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"p8sos/internal/creds"
 	"p8sos/internal/netx"
 	"path/filepath"
 	"strings"
@@ -314,6 +315,9 @@ func serve(args []string) error {
 		Updates:  upd,
 		CTs:      cts,
 		Offsite:  off,
+		// root passwords made for new VMs/containers, shown to their owners
+		Creds:         &creds.Store{File: filepath.Join(cfg.DataDir, "credentials.json")},
+		AutoPasswords: cfg.AutoRootPasswordsOn(),
 		Node: &tasks.Node{
 			Tasks: &tasks.Manager{Dir: filepath.Join(cfg.DataDir, "tasks"), Scripts: scriptsDir(), Run: run},
 			Run:   run, Pool: strings.SplitN(cfg.VMDataset, "/", 2)[0], DataDir: cfg.DataDir,

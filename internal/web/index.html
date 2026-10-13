@@ -245,7 +245,7 @@ dialog.as-page #mClose,dialog.as-page #cmClose{display:none}
     <input id="cPw2" type="password" minlength="8" maxlength="128" placeholder="repeat" autocomplete="new-password" aria-label="Repeat root password">
   </div>
   <label style="display:flex;gap:8px;align-items:center;font-weight:400;margin-top:8px"><input id="cPwSSH" type="checkbox" style="width:auto" checked> Allow SSH login as root with this password</label>
-  <div class="hint">Leave empty to log in with SSH keys only (safest). You can set or change passwords later under Manage.</div>
+  <div class="hint">Leave empty and P8S makes a strong one for you. It's shown after the VM is created and any time under Manage → Login (and via the API).</div>
   <label for="cKeys">SSH public key <span class="muted">(optional)</span></label>
   <textarea id="cKeys" placeholder="ssh-ed25519 AAAA… — leave empty to use the host's default key"></textarea>
   <div class="hint" id="cKeysHint"></div>
@@ -267,11 +267,20 @@ dialog.as-page #mClose,dialog.as-page #cmClose{display:none}
   </div>
 </form></dialog>
 
+<dialog id="dlgLogin"><div class="dlg-body">
+  <h2>Login details <span class="sub" id="lgName"></span></h2>
+  <div id="lgBox"></div>
+  <div class="hint">Keep these safe. You can see them again any time under Manage → Login, or with GET /api/v1/…/login.</div>
+  <div class="dlg-actions"><button class="btn primary" id="lgClose">Done</button></div>
+</div></dialog>
+
 <dialog id="dlgManage" class="wide"><div class="dlg-body">
   <h2 id="mTitle"></h2>
   <div class="sub" id="mSub"></div>
 
   <div data-tab="summary">
+  <h3>Login</h3>
+  <div id="mLogin" class="sub">…</div>
   <h3>Usage <span class="sub" style="font-weight:400">last hour</span></h3>
   <div class="charts" id="mCharts"></div>
   </div>
@@ -1047,9 +1056,10 @@ $("#fCreate").onsubmit = async e => {
       $("#dlgCreate").close(); toast(`${name} created and booting ${iso} — install it in the console`);
       window.open(`/console?vm=${encodeURIComponent(name)}`, `p8s-console-${name}`);
     } else {
-      await call("POST", "/vms", {...common, template: tpl, ssh_keys: keys,
+      const made = await call("POST", "/vms", {...common, template: tpl, ssh_keys: keys,
         ...(pw ? {root_password: pw, ssh_password_auth: $("#cPwSSH").checked} : {})});
       $("#dlgCreate").close(); toast(`${name} created — it gets an IP in ~30-60 s`);
+      if (made?.login) showLogin(name, made.login, "vm");
     }
     refresh();
   } catch (err) { toast(err.message, true); }
@@ -1071,6 +1081,55 @@ $("#fDelete").onsubmit = async e => {
   busy.delete(name); refresh();
 };
 
+/* ---------- login details (root password made by P8S) ---------- */
+// kind "vm" or "ct"; box gets user, password (hidden until shown), copy, SSH line, New password.
+function loginHTML(l, name, kind){
+  if (!l?.known && !l?.password) return `<span class="sub">${esc(l?.note || "No password stored by P8S.")}</span>
+    <div class="inline" style="margin-top:6px"><button class="btn" data-lgnew>Make a root password</button></div>`;
+  const port = (typeof sshPorts !== "undefined" && sshPorts[name]) || 0;
+  const ssh = l.ssh_password ? (port ? `ssh -p ${port} root@${location.hostname}` : "ssh root@<its IP>") : "";
+  return `<table class="snaps"><tbody>
+    <tr><td style="width:110px">User</td><td><span class="mono copy" data-copy="${esc(l.user)}">${esc(l.user)}</span></td></tr>
+    <tr><td>Password</td><td><span class="mono" data-pw="${esc(l.password)}">••••••••••••</span>
+      <button class="btn" data-lgshow style="padding:2px 8px">Show</button>
+      <button class="btn" data-copy="${esc(l.password)}" style="padding:2px 8px">Copy</button></td></tr>
+    ${ssh ? `<tr><td>SSH</td><td><span class="mono copy" data-copy="${esc(ssh)}">${esc(ssh)}</span></td></tr>` : `<tr><td>SSH</td><td class="sub">password login over SSH is off (keys only); use it in the console</td></tr>`}
+    </tbody></table>
+    <div class="inline" style="margin-top:6px"><button class="btn" data-lgnew>New password</button>
+      <span class="sub">${l.set_at ? "set " + esc(fmtTime(l.set_at)) + " · " : ""}changed inside the ${kind === "ct" ? "container" : "VM"} since? P8S doesn't see that — make a new one here.</span></div>`;
+}
+function wireLogin(box, name, kind, reload){
+  for (const b of box.querySelectorAll("[data-lgshow]")) b.onclick = () => {
+    const s = b.previousElementSibling, shown = s.textContent === s.dataset.pw;
+    s.textContent = shown ? "••••••••••••" : s.dataset.pw; b.textContent = shown ? "Show" : "Hide";
+  };
+  for (const b of box.querySelectorAll("button[data-copy]")) b.onclick = () => { navigator.clipboard?.writeText(b.dataset.copy).then(() => toast("Copied"), () => {}); };
+  for (const b of box.querySelectorAll("[data-lgnew]")) b.onclick = async () => {
+    if (!confirm(`Make a new random root password for ${name}? The old one stops working. The ${kind === "ct" ? "container" : "VM"} must be running.`)) return;
+    b.disabled = true;
+    try {
+      const r = await call("POST", `/${kind === "ct" ? "containers" : "vms"}/${encodeURIComponent(name)}/password`, {user: "root", generate: true});
+      toast("New root password set"); await reload(); showLogin(name, {known: true, user: r.user, password: r.password, ssh_password: true}, kind);
+    } catch (e) { toast(e.message, true); b.disabled = false; }
+  };
+}
+async function loadLogin(box, name, kind){
+  if (!box) return;
+  let l;
+  try { l = await call("GET", `/${kind === "ct" ? "containers" : "vms"}/${encodeURIComponent(name)}/login`); }
+  catch (e) { box.innerHTML = `<span class="sub">${esc(e.message)}</span>`; return; }
+  box.innerHTML = loginHTML(l, name, kind);
+  wireLogin(box, name, kind, () => loadLogin(box, name, kind));
+}
+function showLogin(name, l, kind){
+  $("#lgName").textContent = "· " + name;
+  $("#lgBox").innerHTML = loginHTML({...l, known: true}, name, kind);
+  wireLogin($("#lgBox"), name, kind, async () => {});
+  const s = $("#lgBox").querySelector("[data-pw]"); if (s) { s.textContent = s.dataset.pw; const b = s.nextElementSibling; if (b) b.textContent = "Hide"; }
+  $("#dlgLogin").showModal();
+}
+$("#lgClose").onclick = () => $("#dlgLogin").close();
+
 /* ---------- manage: resize + snapshots ---------- */
 let mName = "", snaps = [], mVM = null;
 const fmtBytes = b => b >= 1 << 30 ? (b / (1 << 30)).toFixed(1) + " GB" : b >= 1 << 20 ? (b / (1 << 20)).toFixed(0) + " MB" : "< 1 MB";
@@ -1078,6 +1137,7 @@ const fmtTime = t => { const d = new Date(t); return isNaN(d) ? t : d.toLocaleSt
 
 async function openManage(name){
   mName = name; mVM = null; snaps = [];
+  loadLogin($("#mLogin"), name, "vm");
   const v = vms.find(x => x.name === name);
   $("#mCpu").value = v.vcpus; $("#mMem").value = v.memory_mib; $("#mDisk").value = v.disk_gb; $("#mDisk").min = v.disk_gb;
   $("#mSnapName").value = ""; $("#mPw").value = "";

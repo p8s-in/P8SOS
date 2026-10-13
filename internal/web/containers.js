@@ -24,7 +24,7 @@ document.body.insertAdjacentHTML("beforeend", `
     <div><label for="ctDisk">Disk (GB)</label><input id="ctDisk" type="number" min="1" value="8"></div>
   </div>
   <label for="ctNet">Network</label><select id="ctNet"><option value="nat">Private (NAT) — reaches the internet</option></select>
-  <label for="ctPw">Root password</label><input id="ctPw" type="password" minlength="8" autocomplete="new-password" placeholder="at least 8 characters (or use an SSH key)">
+  <label for="ctPw">Root password</label><input id="ctPw" type="password" minlength="8" autocomplete="new-password" placeholder="leave empty: P8S makes one and shows it">
   <label for="ctKeys">SSH public keys (one per line)</label><textarea id="ctKeys" placeholder="ssh-ed25519 AAAA…"></textarea>
   <div id="ctOwnerBox" hidden><label for="ctOwner">Owner</label><select id="ctOwner"></select></div>
   <label style="display:flex;gap:8px;align-items:center;font-weight:400"><input type="checkbox" id="ctStart" checked style="width:auto"> Start after creating</label>
@@ -34,6 +34,7 @@ document.body.insertAdjacentHTML("beforeend", `
 <dialog id="dlgCTM" class="wide"><div class="dlg-body">
   <h2 id="cmTitle"></h2><div class="sub" id="cmSub"></div>
   <div class="inline" id="cmPower" style="flex-wrap:wrap"></div>
+  <div data-tab="summary"><h3>Login</h3><div id="cmLogin" class="sub">…</div></div>
   <div data-tab="resources">
   <h3>Resources</h3>
   <div class="row">
@@ -247,12 +248,12 @@ $("#fCT").addEventListener("submit", async e => {
     ssh_keys: $("#ctKeys").value.split("\n").map(s => s.trim()).filter(Boolean), start: $("#ctStart").checked};
   if (!$("#ctOwnerBox").hidden && $("#ctOwner").value) body.owner = $("#ctOwner").value;
   if (ctPlan) { body.plan = ctPlan.id; delete body.vcpus; delete body.memory_mib; delete body.disk_gb; if (ctPlan.public_ip) { delete body.ip_pool; delete body.network; } }
-  if (!body.root_password && !body.ssh_keys.length && !confirm("No password and no SSH key: you can still use the browser console. Create anyway?")) return;
   $("#ctGo").disabled = true;
   try {
     const r = await call("POST", "/containers", body);
     $("#dlgCT").close();
     toast(r.warning ? r.warning : `${body.name} created${body.start ? " and starting" : ""}`, !!r.warning);
+    if (r.login) showLogin(body.name, r.login, "ct");
     await loadCTs(); renderCTs();
   } catch (err) { toast(err.message, true); }
   finally { $("#ctGo").disabled = false; }
@@ -262,6 +263,7 @@ $("#fCT").addEventListener("submit", async e => {
 async function openCTManage(name){
   ctCur = name;
   $("#cmSSHOut").hidden = true;
+  if (typeof loadLogin === "function") loadLogin($("#cmLogin"), name, "ct");
   if (!ctTpls.length) { try { ctTpls = (await call("GET", "/ct-templates")).templates; } catch {} }
   renderCTManage();
   showPage($("#dlgCTM"));

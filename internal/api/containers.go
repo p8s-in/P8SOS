@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"p8sos/internal/cluster"
+	"p8sos/internal/creds"
 	"strings"
 	"sync"
 	"time"
@@ -134,10 +135,20 @@ func (s *Server) createCT(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	s.autoPassword(r, &req.RootPassword)
 	c, err := s.CTs.Create(r.Context(), req)
 	if err != nil && c.Name == "" {
 		s.fail(w, r, err)
 		return
+	}
+	var login *loginView
+	if req.RootPassword != "" {
+		l := creds.Login{User: "root", Password: req.RootPassword, SSH: true}
+		if err := s.Creds.Set("ct", c.Name, l); err != nil && s.Log != nil {
+			s.Log.Error("store container login", "ct", c.Name, "err", err)
+		}
+		lv := viewOf(l, true)
+		login = &lv
 	}
 	if c.PublicIP != "" {
 		s.reapplyFirewall(r.Context())
@@ -149,10 +160,13 @@ func (s *Server) createCT(w http.ResponseWriter, r *http.Request) {
 	s.afterCreate(r, vm.VM{Name: c.Name, Owner: c.Owner, IP: ip, User: "root"}, plan)
 	w.Header().Set("Location", "/api/v1/containers/"+c.Name)
 	if err != nil { // made, but didn't start
-		writeJSON(w, http.StatusCreated, map[string]any{"container": c, "warning": err.Error()})
+		writeJSON(w, http.StatusCreated, map[string]any{"container": c, "warning": err.Error(), "login": login})
 		return
 	}
-	writeJSON(w, http.StatusCreated, c)
+	writeJSON(w, http.StatusCreated, struct {
+		ct.Container
+		Login *loginView `json:"login,omitempty"`
+	}{c, login})
 }
 
 func (s *Server) getCT(w http.ResponseWriter, r *http.Request) {
@@ -209,6 +223,7 @@ func (s *Server) deleteCT(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
+	_ = s.Creds.Delete("ct", r.PathValue("name"))
 	if g, ok := s.VMs.(guestFirewalls); ok {
 		_ = g.DropGuestFirewall(r.Context(), "ct:"+r.PathValue("name"))
 	}
@@ -368,6 +383,7 @@ func (s *Server) ctPassword(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		User     string `json:"user"`
 		Password string `json:"password"`
+		Generate bool   `json:"generate"` // make a random one and return it
 	}
 	if !decode(w, r, &body) {
 		return
@@ -375,11 +391,19 @@ func (s *Server) ctPassword(w http.ResponseWriter, r *http.Request) {
 	if body.User == "" {
 		body.User = "root"
 	}
+	if body.Generate {
+		body.Password = creds.Generate(PasswordLength)
+	}
 	if err := s.CTs.SetPassword(r.Context(), c.Name, body.User, body.Password); err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	s.rememberPassword("ct", c.Name, body.User, body.Password)
+	if !body.Generate {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"user": body.User, "password": body.Password})
 }
 
 func (s *Server) ctOwner(w http.ResponseWriter, r *http.Request) {
