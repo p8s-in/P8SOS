@@ -316,9 +316,13 @@ dialog.as-page #mClose,dialog.as-page #cmClose{display:none}
   <div id="mOwnerBox" hidden><h3>Owner</h3>
     <div class="inline"><select id="mOwner"></select><button class="btn" id="mOwnerGo">Give</button></div>
     <div class="hint">The owner sees and manages this VM. Admins always can.</div></div>
+  <div id="mCPUBox" hidden><h3>CPU type</h3>
+    <div class="inline"><select id="mCPU"><option value="host">This server's CPU as it is (fastest)</option>
+      <option value="compatible">Compatible with every server of the cluster</option></select><button class="btn" id="mCPUGo">Set</button></div>
+    <div class="hint" id="mCPUHint"></div></div>
   <div id="mMoveBox" hidden><h3>Move to another server</h3>
     <div class="inline"><select id="mMoveTo"></select><button class="btn" id="mMoveGo">Move</button></div>
-    <label style="display:flex;gap:8px;align-items:center;font-weight:400"><input id="mMoveStart" type="checkbox" style="width:auto" checked> Start it there when the move is done</label>
+    <label id="mMoveStartL" style="display:flex;gap:8px;align-items:center;font-weight:400"><input id="mMoveStart" type="checkbox" style="width:auto" checked> Start it there when the move is done</label>
     <div class="hint" id="mMoveHint"></div></div>
   </div>
 
@@ -1248,6 +1252,10 @@ async function openManage(name){
   $("#mCharts").innerHTML = "";
   $("#mSites").innerHTML = ""; $("#mSiteName").value = ""; $("#mSitePort").value = 80; $("#mSiteTLS").checked = false;
   $("#mMoveBox").hidden = true; loadMove();
+  $("#mCPUBox").hidden = !isAdmin();
+  $("#mCPU").value = v.cpu && v.cpu !== "host" ? "compatible" : "host";
+  $("#mCPUHint").textContent = (v.cpu && v.cpu !== "host" ? `Now: ${v.cpu} (a model every server has). ` : "Now: this server's own CPU. ") +
+    "Live moves between servers with different CPUs need \"compatible\". A change takes effect after the VM is shut down and started.";
   if (typeof loadHA === "function") { $("#mHABox").hidden = true; loadHA(); }
   await Promise.all([loadSnaps(), loadBackups(), loadVMCharts(), loadFirewall(), loadSites()]);
 }
@@ -1264,16 +1272,30 @@ async function loadMove(){
   const keep = $("#mMoveTo").value;
   $("#mMoveTo").innerHTML = info.targets.map(t => `<option value="${esc(t.id)}" ${t.online ? "" : "disabled"}>${esc(t.name)}${t.online ? "" : " (offline)"}</option>`).join("");
   if (keep && info.targets.some(t => t.id === keep && t.online)) $("#mMoveTo").value = keep;
-  $("#mMoveGo").disabled = !!info.why;
-  $("#mMoveHint").innerHTML = info.why ? esc("Can't move it now: " + info.why) :
-    "The VM is copied to the other server (disk, settings, login, firewall, backup schedule), then deleted here. Snapshots and old backups stay on this server. It keeps its name; its IP address can change.";
+  // running: move live if it can; otherwise the normal (shut down) move
+  const live = info.running && !info.live_why;
+  $("#mMoveBox").dataset.live = live ? "1" : "";
+  $("#mMoveGo").textContent = live ? "Move while running" : "Move";
+  $("#mMoveStartL").hidden = live;
+  $("#mMoveGo").disabled = live ? false : !!info.why;
+  $("#mMoveHint").innerHTML = live
+    ? "It keeps running: memory and disks are copied to the other server while it works, then it switches over (a pause well under a second). Snapshots and old backups stay on this server."
+    : info.why ? esc("Can't move it now: " + info.why) + (info.running && info.live_why ? esc(" (moving while running: " + info.live_why + ")") : "")
+    : "The VM is copied to the other server (disk, settings, login, firewall, backup schedule), then deleted here. Snapshots and old backups stay on this server. It keeps its name; its IP address can change.";
 }
+$("#mCPUGo").onclick = async () => {
+  try {
+    const v = await call("PUT", `/vms/${encodeURIComponent(mName)}/cpu`, {type: $("#mCPU").value});
+    toast(`CPU type set — shut ${mName} down and start it for it to take effect`);
+  } catch (err) { toast(err.message, true); }
+};
 $("#mMoveGo").onclick = async () => {
   const b = $("#mMoveGo"), to = $("#mMoveTo").selectedOptions[0];
   if (!to) return;
   if (!armed(b, `Move to ${to.textContent}?`)) return;
   b.disabled = true;
-  try { trackJob(await call("POST", `/vms/${encodeURIComponent(mName)}/move`, {to: to.value, start: $("#mMoveStart").checked}), loadMove); }
+  const live = !!$("#mMoveBox").dataset.live;
+  try { trackJob(await call("POST", `/vms/${encodeURIComponent(mName)}/move`, {to: to.value, start: $("#mMoveStart").checked, live}), loadMove); }
   catch (err) { toast(err.message, true); }
   b.disabled = false;
 };
@@ -1649,9 +1671,9 @@ function backupRow(b, opts){
   const restore = opts.restore === "hide" ? "" :
     `<button class="btn" data-b="restore" ${opts.restore === "off" ? 'disabled title="Stop the VM first"' : ""}>${opts.restoreLabel || "Restore"}</button>`;
   return `<tr data-vm="${esc(b.vm)}" data-id="${esc(b.id)}">
-    <td><b>${esc(fmtTime(b.created_at))}</b><div class="sub">${opts.showVM ? esc(b.vm) + " · " : ""}${fmtBytes((b.bytes || 0) + (b.extra_disks || []).reduce((n, d) => n + (d.bytes || 0), 0))}${(b.extra_disks || []).length ? ` · ${1 + b.extra_disks.length} disks` : ""} · ${b.consistent ? "clean" : "crash-consistent"} · ${b.vcpus} CPU, ${gb(b.memory_mib)}</div>
+    <td><b>${esc(fmtTime(b.created_at))}</b><div class="sub">${opts.showVM ? esc(b.vm) + " · " : ""}${fmtBytes((b.bytes || 0) + (b.extra_disks || []).reduce((n, d) => n + (d.bytes || 0), 0))}${(b.extra_disks || []).length ? ` · ${1 + b.extra_disks.length} disks` : ""} · ${b.base ? "changes since " + esc(fmtTime(b.base.replace(/^(\d{4})(\d\d)(\d\d)-(\d\d)(\d\d)(\d\d)$/, "$1-$2-$3T$4:$5:$6Z"))) : "full"} · ${b.consistent ? "clean" : "crash-consistent"} · ${b.vcpus} CPU, ${gb(b.memory_mib)}${b.verify_error ? ` · <span style="color:var(--bad)">restore test failed</span>` : b.verified_at ? ` · <span style="color:var(--ok)">✔ restore tested</span>` : ""}</div>
       <div class="inline" data-copyrow hidden><input data-copyname placeholder="name of the new VM" autocomplete="off"><button class="btn primary" data-b="copygo">Create copy</button></div></td>
-    <td>${restore}<button class="btn" data-b="copy" title="Make a new VM from this backup">Copy</button><button class="btn danger" data-b="del">Delete</button></td></tr>`;
+    <td>${restore}<button class="btn" data-b="copy" title="Make a new VM from this backup">Copy</button><button class="btn" data-b="verify" title="Restore it into a scratch disk and check every block (the VM isn't touched)">Test</button><button class="btn danger" data-b="del">Delete</button></td></tr>`;
 }
 function renderBackups(){
   const v = vms.find(x => x.name === mName); if (!v) return;
@@ -1696,6 +1718,9 @@ async function backupAction(e, reload){
       btn.disabled = true;
       trackJob(await call("POST", path + "/restore", {name}), reload);
       row.querySelector("[data-copyrow]").hidden = true;
+    } else if (a === "verify") {
+      btn.disabled = true;
+      trackJob(await call("POST", path + "/verify"), reload);
     } else if (a === "restore") {
       if (!armed(btn, "Replace the disk — sure?")) return;
       btn.disabled = true;

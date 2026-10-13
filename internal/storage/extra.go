@@ -143,3 +143,27 @@ func (z *ZFS) destroy(ctx context.Context, ds string) error {
 func (z *ZFS) WaitExtra(ctx context.Context, vm string, i int) (string, error) {
 	return z.waitPath(ctx, z.ExtraPath(vm, i))
 }
+
+// DiskBytes is the exact size of the VM's disk i (0 = root), for a live move:
+// the copy on the other server must be just as big.
+func (z *ZFS) DiskBytes(ctx context.Context, vm string, i int) (int64, error) {
+	out, err := z.Run.Run(ctx, "zfs", "get", "-H", "-p", "-o", "value", "volsize", z.DiskDataset(vm, i))
+	if err != nil {
+		return 0, err
+	}
+	return strconv.ParseInt(strings.TrimSpace(string(out)), 10, 64)
+}
+
+// CreateSized makes an empty disk i (0 = root) of exactly bytes and returns its device.
+func (z *ZFS) CreateSized(ctx context.Context, vm string, i int, bytes int64) (string, error) {
+	ds := z.DiskDataset(vm, i)
+	if _, err := z.Run.Run(ctx, "zfs", "create", "-p", "-s", "-V", strconv.FormatInt(bytes, 10), "-o", "volmode=dev", ds); err != nil {
+		return "", fmt.Errorf("create disk %d: %w", i, err)
+	}
+	dev, err := z.waitPath(ctx, "/dev/zvol/"+ds)
+	if err != nil {
+		_ = z.destroy(context.WithoutCancel(ctx), ds)
+		return "", err
+	}
+	return dev, nil
+}

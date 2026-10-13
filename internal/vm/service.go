@@ -133,6 +133,9 @@ type VM struct {
 	// Storage holds the VM's disks: empty = this server's own pool, else a
 	// network storage (iSCSI).
 	Storage string `json:"storage,omitempty"`
+	// CPU the VM runs with: "host" (this server's CPU as it is) or a model name
+	// (e.g. the cluster's common CPU, for live moves between different CPUs).
+	CPU string `json:"cpu"`
 }
 
 type CreateRequest struct {
@@ -487,6 +490,10 @@ func (s *Service) get(ctx context.Context, dom string) (VM, error) {
 	}
 	v.OSType = spec.OSType
 	v.Storage = s.storageOf(dom)
+	v.CPU = "host"
+	if spec.CPUModel != "" {
+		v.CPU = spec.CPUModel
+	}
 	for _, e := range spec.Extra {
 		v.Disks = append(v.Disks, Disk{Index: e.Index, SizeGB: e.SizeGB, Device: virt.ExtraTarget(spec, e.Index)})
 	}

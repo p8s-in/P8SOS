@@ -618,32 +618,50 @@ func (m *Manager) remote(ctx context.Context, b Backend, prefix string) ([]Remot
 	return out, nil
 }
 
-// prune keeps the newest t.Keep backups per guest at the target.
+// prune keeps the newest t.Keep backups per guest at the target, plus the
+// older ones those build on (read from their descriptions).
 func (m *Manager) prune(ctx context.Context, t Target, b Backend, prefix string) (int, error) {
 	l, err := m.remote(ctx, b, prefix)
 	if err != nil {
 		return 0, err
 	}
-	seen := map[string]int{}
-	n := 0
-	for _, r := range l { // newest first
+	groups := map[string][]Remote{}
+	for _, r := range l {
 		k := r.Kind + "/" + r.Guest
-		seen[k]++
-		if seen[k] <= t.Keep {
+		groups[k] = append(groups[k], r)
+	}
+	n := 0
+	for _, g := range groups {
+		if len(g) <= t.Keep {
 			continue
 		}
-		if err := b.Delete(ctx, r.meta); err != nil {
-			return n, err
-		}
-		if err := b.Delete(ctx, r.data); err != nil {
-			return n, err
-		}
-		for _, k := range r.extra {
-			if err := b.Delete(ctx, k); err != nil {
-				return n, err
+		bases := map[string]string{}
+		for _, r := range g {
+			var meta bytes.Buffer
+			var bm backup.Meta
+			bases[r.ID] = ""
+			if err := b.Get(ctx, r.meta, &meta); err == nil && json.Unmarshal(meta.Bytes(), &bm) == nil {
+				bases[r.ID] = bm.Base
 			}
 		}
-		n++
+		keep := keptSet(bases, t.Keep)
+		for _, r := range g {
+			if keep[r.ID] {
+				continue
+			}
+			if err := b.Delete(ctx, r.meta); err != nil {
+				return n, err
+			}
+			if err := b.Delete(ctx, r.data); err != nil {
+				return n, err
+			}
+			for _, k := range r.extra {
+				if err := b.Delete(ctx, k); err != nil {
+					return n, err
+				}
+			}
+			n++
+		}
 	}
 	return n, nil
 }
@@ -717,13 +735,34 @@ func (m *Manager) syncTarget(ctx context.Context, t Target, only *item, p jobs.P
 
 // newestKept: is bm among the newest keep local backups of its guest?
 func (m *Manager) newestKept(local map[string]backup.Meta, kind string, bm backup.Meta, keep int) bool {
-	newer := 0
+	bases := map[string]string{}
 	for k, o := range local {
-		if strings.HasPrefix(k, kind+"/") && o.VM == bm.VM && o.ID > bm.ID {
-			newer++
+		if strings.HasPrefix(k, kind+"/") && o.VM == bm.VM {
+			bases[o.ID] = o.Base
 		}
 	}
-	return newer < keep
+	return keptSet(bases, keep)[bm.ID]
+}
+
+// keptSet is the backups to keep (bases: id -> the id it builds on): the
+// newest keep, plus the older ones they build on (incremental backups need
+// their chain).
+func keptSet(bases map[string]string, keep int) map[string]bool {
+	ids := make([]string, 0, len(bases))
+	for id := range bases {
+		ids = append(ids, id)
+	}
+	sort.Sort(sort.Reverse(sort.StringSlice(ids)))
+	need := map[string]bool{}
+	for _, id := range ids[:min(keep, len(ids))] {
+		for cur := id; cur != "" && !need[cur]; cur = bases[cur] {
+			if _, ok := bases[cur]; !ok {
+				break
+			}
+			need[cur] = true
+		}
+	}
+	return need
 }
 
 func (m *Manager) allowed() bool { return m.Allowed == nil || m.Allowed() }
@@ -846,66 +885,99 @@ func (m *Manager) StartFetch(name, kind, guest, id string) (jobs.Job, error) {
 		if err != nil {
 			return "", err
 		}
-		var r *Remote
-		for i := range l {
-			if l[i].Kind == kind && l[i].Guest == guest && l[i].ID == id {
-				r = &l[i]
+		// an incremental backup comes back with the backups it builds on
+		n, brought := 0, []string{}
+		for cur := id; cur != ""; n++ {
+			if n > 1000 {
+				return "", errors.New("backup chain too long")
 			}
-		}
-		if r == nil {
-			return "", fmt.Errorf("%w: %s %s %s", ErrNotFound, kind, guest, id)
-		}
-		if r.Encrypted && t.Passphrase == "" {
-			return "", errors.New("this copy is encrypted: set the target's passphrase first")
-		}
-		var meta bytes.Buffer
-		if err := b.Get(ctx, r.meta, &meta); err != nil {
-			return "", err
-		}
-		var bm backup.Meta
-		if err := json.Unmarshal(meta.Bytes(), &bm); err != nil || bm.VM != guest || bm.ID != id {
-			return "", errors.New("the copy's description doesn't match")
-		}
-		data, metaPath := m.store(kind).Files(bm)
-		if _, err := os.Stat(metaPath); err == nil {
-			return "", fmt.Errorf("backup %s of %s is already on this server", id, guest)
-		}
-		if err := os.MkdirAll(filepath.Dir(data), 0o700); err != nil {
-			return "", err
-		}
-		p("downloading")
-		st := m.store(kind)
-		var done []string
-		undo := func() {
-			for _, f := range done {
-				os.Remove(f)
+			bm, already, err := m.fetchOne(ctx, b, prefix, t, l, kind, guest, cur, p)
+			if err != nil {
+				if cur != id {
+					return "", fmt.Errorf("backup %s it builds on: %w", cur, err)
+				}
+				return "", err
 			}
-		}
-		for _, e := range bm.Extra {
-			file := st.ExtraFile(bm, e.Index)
-			key := join(r.prefix(prefix), filepath.Base(file))
-			if r.Encrypted {
-				key += encExt
+			if already && cur == id {
+				return "", fmt.Errorf("backup %s of %s is already on this server", id, guest)
 			}
-			if err := m.get(ctx, b, key, r.Encrypted, t.Passphrase, file); err != nil {
-				undo()
-				return "", fmt.Errorf("disk %d: %w", e.Index, err)
+			if !already {
+				brought = append(brought, cur)
 			}
-			done = append(done, file)
+			if already && cur != id {
+				break // the rest of the chain is here already
+			}
+			cur = bm.Base
 		}
-		if err := m.get(ctx, b, r.data, r.Encrypted, t.Passphrase, data); err != nil {
-			undo()
-			return "", err
-		}
-		done = append(done, data)
-		if err := os.WriteFile(metaPath, meta.Bytes(), 0o600); err != nil {
-			undo()
-			return "", err
+		extra := ""
+		if len(brought) > 1 {
+			extra = fmt.Sprintf(" (with the %d backups it builds on)", len(brought)-1)
 		}
 		what := "VM"
 		if kind == "ct" {
 			what = "container"
 		}
-		return fmt.Sprintf("backup %s of %s %s is back on this server — restore it from Backups", id, what, guest), nil
+		return fmt.Sprintf("backup %s of %s %s is back on this server%s — restore it from Backups", id, what, guest, extra), nil
 	})
+}
+
+// fetchOne brings one backup back (already = it is on this server).
+func (m *Manager) fetchOne(ctx context.Context, b Backend, prefix string, t Target, l []Remote, kind, guest, id string, p jobs.Progress) (backup.Meta, bool, error) {
+	var r *Remote
+	for i := range l {
+		if l[i].Kind == kind && l[i].Guest == guest && l[i].ID == id {
+			r = &l[i]
+		}
+	}
+	if r == nil {
+		return backup.Meta{}, false, fmt.Errorf("%w: %s %s %s", ErrNotFound, kind, guest, id)
+	}
+	if r.Encrypted && t.Passphrase == "" {
+		return backup.Meta{}, false, errors.New("this copy is encrypted: set the target's passphrase first")
+	}
+	var meta bytes.Buffer
+	if err := b.Get(ctx, r.meta, &meta); err != nil {
+		return backup.Meta{}, false, err
+	}
+	var bm backup.Meta
+	if err := json.Unmarshal(meta.Bytes(), &bm); err != nil || bm.VM != guest || bm.ID != id {
+		return backup.Meta{}, false, errors.New("the copy's description doesn't match")
+	}
+	data, metaPath := m.store(kind).Files(bm)
+	if _, err := os.Stat(metaPath); err == nil {
+		return bm, true, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(data), 0o700); err != nil {
+		return backup.Meta{}, false, err
+	}
+	p("downloading " + id)
+	st := m.store(kind)
+	var done []string
+	undo := func() {
+		for _, f := range done {
+			os.Remove(f)
+		}
+	}
+	for _, e := range bm.Extra {
+		file := st.ExtraFile(bm, e.Index)
+		key := join(r.prefix(prefix), filepath.Base(file))
+		if r.Encrypted {
+			key += encExt
+		}
+		if err := m.get(ctx, b, key, r.Encrypted, t.Passphrase, file); err != nil {
+			undo()
+			return backup.Meta{}, false, fmt.Errorf("disk %d: %w", e.Index, err)
+		}
+		done = append(done, file)
+	}
+	if err := m.get(ctx, b, r.data, r.Encrypted, t.Passphrase, data); err != nil {
+		undo()
+		return backup.Meta{}, false, err
+	}
+	done = append(done, data)
+	if err := os.WriteFile(metaPath, meta.Bytes(), 0o600); err != nil {
+		undo()
+		return backup.Meta{}, false, err
+	}
+	return bm, false, nil
 }

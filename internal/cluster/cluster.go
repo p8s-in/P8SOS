@@ -117,7 +117,10 @@ type Manager struct {
 	// LocalCapacity describes this server (for placement and the dashboard).
 	LocalCapacity func(ctx context.Context) Capacity
 	TestURL       string // tests: this server's API URL (no tunnel)
-	DiscoverPort  int    // UDP port for finding servers; 0 = 51821
+	// OnTunnel runs after the tunnel is set up (this server's tunnel address)
+	// or taken down (""): libvirt listens there for live moves.
+	OnTunnel     func(ctx context.Context, ip string)
+	DiscoverPort int // UDP port for finding servers; 0 = 51821
 
 	mu     sync.Mutex
 	st     State

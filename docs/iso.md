@@ -120,7 +120,13 @@ TPM, which come later.
 
 ## Backups
 
-A backup is a full copy of a VM's disk in a file — unlike a snapshot it survives deleting the VM.
+A backup is a copy of a VM's disks in files — unlike a snapshot it survives deleting the VM.
+The first backup is full; the next ones store **only what changed** since the previous one
+(ZFS keeps the newest backup's snapshot on the disks for that), and every 7th is full again.
+Restoring a "changes" backup restores the chain it builds on automatically; old backups the
+kept ones need are never deleted by "keep the last N". Scheduled backups run a **restore test**
+once a week (the backup is restored into a scratch disk and every block is checked; the VM is
+not touched) — press **Test** on any backup, or `p8 verify web1 ID`, to run one now.
 ```
 p8 backup web1                       # now (the VM can keep running)
 p8 autobackup web1 on 7              # every day at 02:30, keep the last 7

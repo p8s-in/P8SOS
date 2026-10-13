@@ -63,8 +63,10 @@ func TestBackupAndRestore(t *testing.T) {
 	if hv.frozen != 1 || hv.thawed != 1 {
 		t.Fatalf("freeze %d thaw %d", hv.frozen, hv.thawed)
 	}
-	if l, _ := svc.Snapshots(ctx, "web1"); len(l) != 0 || len(disks.snaps["p8s-web1"]) != 0 {
-		t.Fatalf("backup snapshot left: %+v %+v", l, disks.snaps)
+	// the newest backup's snapshot stays (the next backup sends only changes), hidden from the user
+	if l, _ := svc.Snapshots(ctx, "web1"); len(l) != 0 || len(disks.snaps["p8s-web1"]) != 1 ||
+		!strings.HasPrefix(disks.snaps["p8s-web1"][0].Name, backupSnapPrefix) {
+		t.Fatalf("backup snapshot: %+v %+v", l, disks.snaps)
 	}
 	list, _ := svc.ListBackups("web1")
 	if len(list) != 1 || !list[0].Consistent || list[0].VCPUs != 2 || list[0].MemoryMiB != 2048 || list[0].Template != "debian-13" {
@@ -199,5 +201,55 @@ func TestBackupScheduleOtherGuests(t *testing.T) {
 	}
 	if got := svc.RunScheduledBackups(ctx); len(got) != 1 || len(called) != 1 || called[0] != "ct:web2/3" {
 		t.Fatalf("started %v called %v", got, called)
+	}
+}
+
+type snapDisksFake struct{ *fakeDisks }
+
+func (d snapDisksFake) HasSnapshot(_ context.Context, vm, name string) bool {
+	for _, s := range d.snaps[vm] {
+		if s.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func TestIncrementalBackups(t *testing.T) {
+	ctx := context.Background()
+	svc, _, disks, _ := newSvc()
+	svc.Disks = snapDisksFake{disks}
+	withBackups(t, svc)
+	if _, err := svc.Create(ctx, CreateRequest{Name: "web1", Template: "debian-13", DiskGB: 10}); err != nil {
+		t.Fatal(err)
+	}
+	var msgs []string
+	for i := 0; i < FullEvery+1; i++ {
+		j, err := svc.startBackup(ctx, "web1", 30)
+		if err != nil {
+			t.Fatal(err)
+		}
+		done := waitJob(t, svc, j)
+		if done.State != jobs.Done {
+			t.Fatalf("backup %d: %+v", i, done)
+		}
+		msgs = append(msgs, done.Message)
+	}
+	if !strings.Contains(msgs[0], "(full") || !strings.Contains(msgs[1], "changes since") || !strings.Contains(msgs[FullEvery], "(full") {
+		t.Fatalf("kinds:\n%s", strings.Join(msgs, "\n"))
+	}
+	if !strings.Contains(msgs[0], "restore test passed") || strings.Contains(msgs[1], "restore test") {
+		t.Fatalf("weekly restore test:\n%s", strings.Join(msgs, "\n"))
+	}
+	if n := len(disks.snaps["p8s-web1"]); n != 1 {
+		t.Fatalf("only the newest backup's snapshot should stay, have %d", n)
+	}
+	l, _ := svc.ListBackups("web1")
+	if err := svc.DeleteBackup("web1", l[len(l)-1].ID); !errors.Is(err, ErrConflict) {
+		t.Fatalf("delete a base: %v", err)
+	}
+	j, _ := svc.StartVerify(ctx, "web1", l[0].ID)
+	if done := waitJob(t, svc, j); done.State != jobs.Done || !strings.Contains(done.Message, "restore test passed") {
+		t.Fatalf("verify job %+v", done)
 	}
 }

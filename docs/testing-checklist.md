@@ -173,6 +173,25 @@ hardware**. Work through it on the new machine; tick each line and note problems
 - [ ] Dashboard: P8S tab icon, logo on the sign-in page (blue in light mode, white in dark), icon in the top bar; "Add to home screen" on a phone uses the P8S icon
 - [ ] `sudo touch /etc/p8s/no-splash && sudo bash update.sh` + reboot → plain boot messages again
 
+## 17. Live moves (needs two servers in a cluster)
+
+- [ ] After update on both: `ss -ltn | grep 16509` shows libvirt on the 10.250.0.x address only; `nft list table inet p8s_migrate` exists
+- [ ] Linux VM running a `ping 8.8.8.8` and an SSH session: Move while running → job shows % → done; ping lost at most 1-2 replies, SSH still open (home-network VM)
+- [ ] Same with a VM with an extra disk; data on vdb is there after the move
+- [ ] Different CPUs (laptop + another PC): move refused with "the CPUs differ"; `p8 cpu NAME compatible`, shut down + start, then the live move works
+- [ ] Pull the network cable mid-move: job fails, VM still runs on the old server, `zfs list` on the new one has no leftover p8s-NAME-disk*
+- [ ] Worker → worker live move (through the master)
+
+## 18. Incremental backups and restore tests
+
+- [ ] `p8 test` 6c: "second backup stores only the changes", "restore test passed", one kept backup snapshot
+- [ ] Back up a VM twice: the second file is much smaller (`p8 backups`: KIND changes)
+- [ ] Restore the newest ("changes") backup as a copy: it boots with the latest files
+- [ ] Delete the middle backup of a chain: refused with "delete the newer backups first"
+- [ ] Daily schedule, keep 3, for 10 days: never fewer than the chain needs; a full one every 7th
+- [ ] Damage a backup file (`truncate -s 1M …zfs.zst`) → Test fails with a clear message, and the alert/job shows it
+- [ ] Off-site: a "changes" backup brought back from the NAS brings its chain with it
+
 ## Add new features here as they are built
 
 (Every new feature adds its own lines above before it counts as done.)

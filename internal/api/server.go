@@ -141,6 +141,9 @@ type Server struct {
 	// this server's side of a move (vm.Service). nil = off.
 	Migrate    Migrator
 	LocalMoves cluster.LocalMover
+	// LocalLive / LocalCPU: this server's side of live moves and CPU types (vm.Service).
+	LocalLive cluster.LocalLive
+	LocalCPU  cluster.LocalCPU
 	// HA is high availability (cluster.HA); LocalHA this server's copies (vm.Service).
 	HA      *cluster.HA
 	LocalHA cluster.LocalHA
@@ -225,6 +228,7 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("POST /api/v1/vms/{name}/backups", s.startBackup)
 	auth.HandleFunc("DELETE /api/v1/backups/{name}/{id}", s.deleteBackup)
 	auth.HandleFunc("POST /api/v1/backups/{name}/{id}/restore", s.restoreBackup)
+	auth.HandleFunc("POST /api/v1/backups/{name}/{id}/verify", s.verifyBackup)
 	auth.HandleFunc("GET /api/v1/vms/{name}/backup-schedule", s.getSchedule)
 	auth.HandleFunc("PUT /api/v1/vms/{name}/backup-schedule", s.putSchedule)
 	auth.HandleFunc("GET /api/v1/vms/{name}/metrics", s.vmMetrics)
@@ -234,6 +238,15 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("GET /api/v1/vms/{name}/move", s.moveInfo)
 	auth.HandleFunc("POST /api/v1/vms/{name}/move", s.startMove)
 	auth.HandleFunc("GET /api/v1/vms/{name}/move-check", s.moveCheck)
+	auth.HandleFunc("GET /api/v1/vms/{name}/live-check", s.liveCheck)
+	auth.HandleFunc("PUT /api/v1/vms/{name}/cpu", s.putCPU)
+	auth.HandleFunc("GET /api/v1/cluster/cpu", s.clusterCPU)
+	auth.HandleFunc("GET /api/v1/cluster/live-header/{name}", s.liveHeader)
+	auth.HandleFunc("POST /api/v1/cluster/live-prepare", s.livePrepare)
+	auth.HandleFunc("POST /api/v1/cluster/live-send/{name}", s.liveSend)
+	auth.HandleFunc("POST /api/v1/cluster/live-finish/{name}", s.liveFinish)
+	auth.HandleFunc("POST /api/v1/cluster/live-abort/{name}", s.liveAbort)
+	auth.HandleFunc("POST /api/v1/cluster/live-cleanup/{name}", s.liveCleanup)
 	auth.HandleFunc("GET /api/v1/cluster/vm-export/{name}", s.vmExport)
 	auth.HandleFunc("POST /api/v1/cluster/vm-import", s.vmImport)
 	auth.HandleFunc("PUT /api/v1/vms/{name}/autostart", s.setAutostart)

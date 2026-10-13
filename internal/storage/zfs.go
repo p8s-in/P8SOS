@@ -192,6 +192,7 @@ func ParseSnapshots(out string) []Snapshot {
 // taken after it (ZFS can only roll back to the latest one).
 func (z *ZFS) Rollback(ctx context.Context, vm, name string, destroyNewer bool) error {
 	z.dropRepSnaps(ctx, vm) // ours are newer; the next copy for HA is then a full one
+	z.dropBackupSnaps(ctx, vm)
 	args := []string{"rollback"}
 	if destroyNewer {
 		args = append(args, "-r")
@@ -225,4 +226,30 @@ func (z *ZFS) DestroySnapshot(ctx context.Context, vm, name string) error {
 		}
 	}
 	return nil
+}
+
+// HasSnapshot says whether every disk of the VM has snapshot name.
+func (z *ZFS) HasSnapshot(ctx context.Context, vm, name string) bool {
+	for _, ds := range z.all(ctx, vm) {
+		if _, err := z.Run.Run(ctx, "zfs", "list", "-H", "-o", "name", "-t", "snapshot", ds+"@"+name); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+// dropBackupSnaps removes the kept backup snapshots (p8s-backup-*) of the
+// VM's disks; the next backup is then a full one.
+func (z *ZFS) dropBackupSnaps(ctx context.Context, vm string) {
+	for _, ds := range z.all(ctx, vm) {
+		out, err := z.Run.Run(ctx, "zfs", "list", "-H", "-o", "name", "-t", "snapshot", "-d", "1", ds)
+		if err != nil {
+			continue
+		}
+		for _, n := range strings.Fields(string(out)) {
+			if _, sn, ok := strings.Cut(n, "@"); ok && strings.HasPrefix(sn, "p8s-backup-") {
+				_, _ = z.Run.Run(ctx, "zfs", "destroy", n)
+			}
+		}
+	}
 }

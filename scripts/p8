@@ -41,6 +41,9 @@ p8 — manage P8S OS virtual machines
   p8 disk-add NAME GB              give a VM another (empty) disk
   p8 disk-grow NAME N GB           grow extra disk N (stops the VM, starts it again)
   p8 disk-rm NAME N                remove extra disk N and everything on it
+  p8 verify NAME BACKUP_ID         restore test of a backup (scratch disk; the VM isn't touched)
+  p8 move NAME SERVER [--live]     move a VM to another cluster server (--live: while it runs)
+  p8 cpu NAME host|compatible      CPU type (compatible: can move live between different CPUs)
   p8 snap NAME [SNAPNAME]          take a snapshot of the VM's disk (instant)
   p8 snaps NAME                    list snapshots
   p8 rollback NAME SNAPNAME        undo everything since that snapshot (asks first)
@@ -374,6 +377,29 @@ case $cmd in
     call POST "/vms/$1/password" "$(jq -nc --arg u "$u" --arg p "$pw" '{user:$u, password:$p}')" >/dev/null || exit 1
     green "✔ password for $u on $1 changed" ;;
 
+  move)
+    [[ -n ${1:-} && -n ${2:-} ]] || { red "usage: p8 move NAME SERVER [--live]   (SERVER: name or id from p8 cluster)"; exit 1; }
+    info=$(call GET "/vms/$1/move") || exit 1
+    to=$(jq -r --arg s "$2" '.targets[] | select(.id == $s or .name == $s) | .id' <<<"$info" | head -1)
+    [[ -n $to ]] || { red "no server '$2' to move to (have: $(jq -r '[.targets[].name] | join(", ")' <<<"$info"))"; exit 1; }
+    live=false
+    if [[ ${3:-} == --live ]]; then
+      why=$(jq -r '.live_why // empty' <<<"$info")
+      [[ -z $why ]] || { red "$1 can't move while running: $why"; exit 1; }
+      live=true
+    elif [[ $(jq -r .running <<<"$info") == true && -z $(jq -r '.live_why // empty' <<<"$info") ]]; then
+      echo "note: $1 is running; add --live to move it without shutting it down"
+    fi
+    j=$(call POST "/vms/$1/move" "$(jq -nc --arg t "$to" --argjson l "$live" '{to:$t, start:true, live:$l}')") || exit 1
+    echo "Moving $1 (job $(jq -r .id <<<"$j")). You can press Ctrl+C; it continues in the background."
+    follow_job "$(jq -r .id <<<"$j")" ;;
+
+  cpu)
+    [[ -n ${1:-} && ${2:-} =~ ^(host|compatible)$ ]] || { red "usage: p8 cpu NAME host|compatible"; exit 1; }
+    body=$(call PUT "/vms/$1/cpu" "{\"type\":\"$2\"}") || exit 1
+    green "✔ CPU type of $1 set to $2: takes effect after it is shut down and started"
+    [[ $2 == compatible ]] && echo "  (the newest CPU model every server of the cluster has, so it can move live between them)" ;;
+
   backup)
     need "${1:-}"
     j=$(call POST "/vms/$1/backups") || exit 1
@@ -384,9 +410,17 @@ case $cmd in
     path=/backups; [[ -n ${1:-} ]] && path="/vms/$1/backups"
     body=$(call GET "$path") || exit 1
     [[ $(jq '.backups | length' <<<"$body") == 0 ]] && { echo "No backups yet. Make one: p8 backup ${1:-NAME}"; exit 0; }
-    printf '%-18s %-16s %-24s %-9s %s\n' VM ID CREATED SIZE CLEAN
-    jq -r '.backups[] | [.vm, .id, (.created_at | sub("T"; " ") | sub("Z"; " UTC")), .bytes, (if .consistent then "yes" else "crash" end)] | @tsv' <<<"$body" |
-      while IFS=$'\t' read -r v i c b k; do printf '%-18s %-16s %-24s %-9s %s\n' "$v" "$i" "$c" "$(human "$b")" "$k"; done ;;
+    printf '%-18s %-16s %-24s %-9s %-6s %-12s %s\n' VM ID CREATED SIZE CLEAN KIND TESTED
+    jq -r '.backups[] | [.vm, .id, (.created_at | sub("T"; " ") | sub("Z"; " UTC")), ((.bytes // 0) + ([.extra_disks[]?.bytes] | add // 0)),
+        (if .consistent then "yes" else "crash" end), (if .base then "changes" else "full" end),
+        (if .verify_error then "FAILED" elif .verified_at then (.verified_at | .[0:10]) else "-" end)] | @tsv' <<<"$body" |
+      while IFS=$'\t' read -r v i c b k kind tst; do printf '%-18s %-16s %-24s %-9s %-6s %-12s %s\n' "$v" "$i" "$c" "$(human "$b")" "$k" "$kind" "$tst"; done ;;
+
+  verify)
+    [[ -n ${1:-} && -n ${2:-} ]] || { red "usage: p8 verify NAME BACKUP_ID   (restore test; the VM isn't touched)"; exit 1; }
+    j=$(call POST "/backups/$1/$2/verify") || exit 1
+    echo "Restore test of backup $2 of $1 (job $(jq -r .id <<<"$j"))."
+    follow_job "$(jq -r .id <<<"$j")" ;;
 
   restore)
     need "${1:-}"; [[ -n ${2:-} ]] || { red "which backup?  p8 backups $1"; exit 1; }

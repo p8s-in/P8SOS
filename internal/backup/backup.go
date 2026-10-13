@@ -49,7 +49,19 @@ type Meta struct {
 	Firmware string `json:"firmware,omitempty"`
 	// Extra are the VM's data disks, each in a file of its own next to the root disk's.
 	Extra []ExtraDisk `json:"extra_disks,omitempty"`
+	// Base is the backup this one builds on (only the changes since it are
+	// stored); "" = a full backup. Restoring needs the whole chain.
+	Base string `json:"base,omitempty"`
+	// BaseSnap is the snapshot of Base still on the disks (set by the caller
+	// for an incremental backup; not stored).
+	BaseSnap string `json:"-"`
+	// VerifiedAt: when a restore test of this backup last succeeded; VerifyError: why the last one failed.
+	VerifiedAt  string `json:"verified_at,omitempty"`
+	VerifyError string `json:"verify_error,omitempty"`
 }
+
+// ErrInUse means other backups build on this one.
+var ErrInUse = errors.New("other backups build on it")
 
 // ExtraDisk is a data disk in a backup.
 type ExtraDisk struct {
@@ -165,7 +177,7 @@ func (s *Store) extraDisk(dom string, i int) string {
 }
 
 // send writes ds@snap compressed into file path (via .partial) and returns its size.
-func (s *Store) send(ctx context.Context, ds, snap, comp, path string) (int64, error) {
+func (s *Store) send(ctx context.Context, ds, snap, base, comp, path string) (int64, error) {
 	tmp := path + ".partial"
 	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
@@ -176,7 +188,11 @@ func (s *Store) send(ctx context.Context, ds, snap, comp, path string) (int64, e
 	if comp == "zstd" {
 		compArgs = []string{"-q", "-c", "-T0", "-3"}
 	}
-	if err := pipe(s.cmd(ctx, "zfs", "send", ds+"@"+snap), s.cmd(ctx, comp, compArgs...), nil, f); err != nil {
+	args := []string{"send", ds + "@" + snap}
+	if base != "" { // only what changed since the last backup
+		args = []string{"send", "-i", "@" + base, ds + "@" + snap}
+	}
+	if err := pipe(s.cmd(ctx, "zfs", args...), s.cmd(ctx, comp, compArgs...), nil, f); err != nil {
 		return fail(fmt.Errorf("backup stream: %w", err))
 	}
 	if err := f.Sync(); err != nil {
@@ -204,7 +220,17 @@ func (s *Store) Save(ctx context.Context, dom, snap string, m Meta) (Meta, error
 	if !reVM.MatchString(m.VM) || !reID.MatchString(m.ID) {
 		return Meta{}, fmt.Errorf("bad backup name %q/%q", m.VM, m.ID)
 	}
+	if (m.Base == "") != (m.BaseSnap == "") {
+		return Meta{}, fmt.Errorf("incremental backup needs both its base and the base snapshot")
+	}
 	m.Compression = s.compressor()
+	if m.Base != "" { // the chain must use one compression
+		if b, err := s.Get(m.VM, m.Base); err != nil {
+			return Meta{}, fmt.Errorf("base backup %s: %w", m.Base, err)
+		} else {
+			m.Compression = b.Compression
+		}
+	}
 	data, metaPath := s.paths(m.VM, m.ID, m.Compression)
 	if err := os.MkdirAll(filepath.Dir(data), 0o700); err != nil {
 		return Meta{}, err
@@ -218,14 +244,14 @@ func (s *Store) Save(ctx context.Context, dom, snap string, m Meta) (Meta, error
 	}
 	for i, e := range m.Extra {
 		path := s.ExtraFile(m, e.Index)
-		n, err := s.send(ctx, s.extraDisk(dom, e.Index), snap, m.Compression, path)
+		n, err := s.send(ctx, s.extraDisk(dom, e.Index), snap, s.baseSnap(m), m.Compression, path)
 		if err != nil {
 			return fail(fmt.Errorf("disk %d: %w", e.Index, err))
 		}
 		done = append(done, path)
 		m.Extra[i].Bytes = n
 	}
-	n, err := s.send(ctx, s.disk(dom), snap, m.Compression, data)
+	n, err := s.send(ctx, s.disk(dom), snap, s.baseSnap(m), m.Compression, data)
 	if err != nil {
 		return fail(err)
 	}
@@ -243,6 +269,13 @@ func (s *Store) Save(ctx context.Context, dom, snap string, m Meta) (Meta, error
 		return fail(err)
 	}
 	return m, nil
+}
+
+func (s *Store) baseSnap(m Meta) string {
+	if m.Base == "" {
+		return ""
+	}
+	return m.BaseSnap
 }
 
 // TotalBytes is the size of all of a backup's disk files.
@@ -360,6 +393,12 @@ func (s *Store) Delete(vm, id string) error {
 	if err != nil {
 		return err
 	}
+	all, _ := s.List(vm)
+	for _, o := range all {
+		if o.Base == id {
+			return fmt.Errorf("%w: backup %s of %s holds only the changes since %s; delete the newer backups first", ErrInUse, o.ID, vm, id)
+		}
+	}
 	data, meta := s.paths(m.VM, m.ID, m.Compression)
 	if err := os.Remove(data); err != nil {
 		return err
@@ -371,16 +410,30 @@ func (s *Store) Delete(vm, id string) error {
 	return nil
 }
 
-// Prune keeps the newest `keep` backups of a VM and deletes the rest.
+// Prune keeps the newest `keep` backups of a VM and deletes the rest, except
+// older backups the kept ones build on (their chain back to a full backup).
 func (s *Store) Prune(vm string, keep int) (removed int, err error) {
 	if keep < 1 {
 		return 0, nil
 	}
-	all, err := s.List(vm)
+	all, err := s.List(vm) // newest first
 	if err != nil {
 		return 0, err
 	}
-	for _, m := range all[min(keep, len(all)):] {
+	byID := map[string]Meta{}
+	for _, m := range all {
+		byID[m.ID] = m
+	}
+	need := map[string]bool{}
+	for _, m := range all[:min(keep, len(all))] {
+		for cur, ok := m, true; ok && !need[cur.ID]; cur, ok = byID[cur.Base] {
+			need[cur.ID] = true
+		}
+	}
+	for _, m := range all { // newest first: a chain loses its newest end first
+		if need[m.ID] {
+			continue
+		}
 		if err := s.Delete(m.VM, m.ID); err != nil {
 			return removed, err
 		}
@@ -389,17 +442,76 @@ func (s *Store) Prune(vm string, keep int) (removed int, err error) {
 	return removed, nil
 }
 
+// Chain is the backups needed to restore m: its full backup first, m last.
+func (s *Store) Chain(m Meta) ([]Meta, error) {
+	chain := []Meta{m}
+	if m.Base == "" {
+		return chain, nil
+	}
+	all, err := s.List(m.VM)
+	if err != nil {
+		return nil, err
+	}
+	byID := map[string]Meta{}
+	for _, b := range all {
+		byID[b.ID] = b
+	}
+	for cur := m; cur.Base != ""; {
+		b, ok := byID[cur.Base]
+		if !ok {
+			return nil, fmt.Errorf("%w: backup %s builds on %s, which is missing (bring it back from an off-site copy)", ErrNotFound, cur.ID, cur.Base)
+		}
+		if len(chain) > 1000 {
+			return nil, fmt.Errorf("backup chain of %s is broken (loop)", m.ID)
+		}
+		chain = append([]Meta{b}, chain...)
+		cur = b
+	}
+	return chain, nil
+}
+
+// diskFile is the file of disk i (0 = root) in a backup.
+func (s *Store) diskFile(m Meta, i int) string {
+	if i == 0 {
+		data, _ := s.paths(m.VM, m.ID, m.Compression)
+		return data
+	}
+	return s.ExtraFile(m, i)
+}
+
+// receiveChain receives disk i of a chain into dataset tmp (new), then
+// drops the backup snapshots it brought along.
+func (s *Store) receiveChain(ctx context.Context, chain []Meta, i int, tmp string, opts []string) error {
+	_, _ = s.Run.Run(ctx, "zfs", "destroy", "-r", tmp) // leftover from an interrupted restore
+	for k, b := range chain {
+		if err := s.receive(ctx, b, s.diskFile(b, i), tmp, k == 0, opts); err != nil {
+			return fmt.Errorf("backup %s, disk %d: %w", b.ID, i, err)
+		}
+	}
+	for _, b := range chain { // the restored disk doesn't need them
+		_, _ = s.Run.Run(ctx, "zfs", "destroy", tmp+"@p8s-backup-"+b.ID)
+	}
+	return nil
+}
+
 // Restore writes a backup to the disks of domain dom. With replace the
 // existing disks (and their snapshots) are swapped out; otherwise dom must have
 // no disks yet. Data disks the VM has now but the backup hasn't are left as
-// they are. All disks are received next to the old ones first, so a failed
-// restore leaves the existing disks untouched.
+// they are. An incremental backup is restored with the backups it builds on.
+// All disks are received next to the old ones first, so a failed restore
+// leaves the existing disks untouched.
 func (s *Store) Restore(ctx context.Context, m Meta, dom string, replace bool) error {
-	type part struct{ file, target string }
-	data, _ := s.paths(m.VM, m.ID, m.Compression)
-	parts := []part{{data, s.disk(dom)}}
+	chain, err := s.Chain(m)
+	if err != nil {
+		return err
+	}
+	type part struct {
+		index  int
+		target string
+	}
+	parts := []part{{0, s.disk(dom)}}
 	for _, e := range m.Extra {
-		parts = append(parts, part{s.ExtraFile(m, e.Index), s.extraDisk(dom, e.Index)})
+		parts = append(parts, part{e.Index, s.extraDisk(dom, e.Index)})
 	}
 	bg := context.WithoutCancel(ctx)
 	var received []string
@@ -410,8 +522,8 @@ func (s *Store) Restore(ctx context.Context, m Meta, dom string, replace bool) e
 	}
 	for _, p := range parts {
 		tmp := p.target + "-restore"
-		_, _ = s.Run.Run(ctx, "zfs", "destroy", "-r", tmp) // leftover from an interrupted restore
-		if err := s.receive(ctx, m, p.file, tmp); err != nil {
+		if err := s.receiveChain(ctx, chain, p.index, tmp, nil); err != nil {
+			_, _ = s.Run.Run(bg, "zfs", "destroy", "-r", tmp)
 			cleanup()
 			return err
 		}
@@ -436,7 +548,51 @@ func (s *Store) Restore(ctx context.Context, m Meta, dom string, replace bool) e
 	return nil
 }
 
-func (s *Store) receive(ctx context.Context, m Meta, file, tmp string) error {
+// Verify is a restore test: the backup (with the backups it builds on) is
+// restored into a scratch dataset and thrown away. ZFS checks every block's
+// checksum on the way, so a damaged or incomplete file fails. The result is
+// written into the backup's description.
+func (s *Store) Verify(ctx context.Context, m Meta) (Meta, error) {
+	chain, err := s.Chain(m)
+	if err == nil {
+		scratch := "p8s-verify-" + m.VM
+		idx := []int{0}
+		for _, e := range m.Extra {
+			idx = append(idx, e.Index)
+		}
+		for _, i := range idx {
+			tmp := s.disk(scratch)
+			if i > 0 {
+				tmp = s.extraDisk(scratch, i)
+			}
+			err = s.receiveChain(ctx, chain, i, tmp, []string{"volmode=none"})
+			_, _ = s.Run.Run(context.WithoutCancel(ctx), "zfs", "destroy", "-r", tmp)
+			if err != nil {
+				break
+			}
+		}
+	}
+	if err != nil {
+		m.VerifyError = err.Error()
+	} else {
+		m.VerifiedAt, m.VerifyError = time.Now().UTC().Format(time.RFC3339), ""
+	}
+	if werr := s.writeMeta(m); werr != nil && err == nil {
+		err = werr
+	}
+	return m, err
+}
+
+func (s *Store) writeMeta(m Meta) error {
+	_, metaPath := s.paths(m.VM, m.ID, m.Compression)
+	b, _ := json.MarshalIndent(m, "", "  ")
+	if err := os.WriteFile(metaPath+".partial", b, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(metaPath+".partial", metaPath)
+}
+
+func (s *Store) receive(ctx context.Context, m Meta, file, tmp string, first bool, opts []string) error {
 	f, err := os.Open(file)
 	if err != nil {
 		return err
@@ -446,20 +602,26 @@ func (s *Store) receive(ctx context.Context, m Meta, file, tmp string) error {
 	if m.Compression == "zstd" {
 		dec = s.cmd(ctx, "zstd", "-q", "-d", "-c")
 	}
-	// volmode=dev like the template, so the host doesn't scan the guest's partitions.
-	opts := s.RecvOpts
-	if opts == nil {
-		opts = []string{"volmode=dev"}
-	}
 	args := []string{"receive", "-u"}
-	for _, o := range opts {
-		args = append(args, "-o", o)
+	if first {
+		// volmode=dev like the template, so the host doesn't scan the guest's partitions.
+		if opts == nil {
+			opts = s.RecvOpts
+		}
+		if opts == nil {
+			opts = []string{"volmode=dev"}
+		}
+		for _, o := range opts {
+			args = append(args, "-o", o)
+		}
+	} else {
+		args = append(args, "-F") // an incremental onto the previous one
 	}
 	if err := pipe(dec, s.cmd(ctx, "zfs", append(args, tmp)...), f, io.Discard); err != nil {
-		_, _ = s.Run.Run(context.WithoutCancel(ctx), "zfs", "destroy", "-r", tmp)
+		if first {
+			_, _ = s.Run.Run(context.WithoutCancel(ctx), "zfs", "destroy", "-r", tmp)
+		}
 		return fmt.Errorf("restore stream: %w", err)
 	}
-	// The stream carries the backup snapshot; the restored disk doesn't need it.
-	_, _ = s.Run.Run(ctx, "zfs", "destroy", "-r", tmp+"@p8s-backup-"+m.ID)
 	return nil
 }

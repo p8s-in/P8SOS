@@ -179,6 +179,7 @@ install -m 0755 "$REPO/scripts/setup-bond.sh" /usr/local/share/p8s/setup-bond.sh
 install -m 0755 "$REPO/scripts/ipv6.sh" /usr/local/share/p8s/ipv6.sh
 install -m 0644 "$REPO/deploy/p8s-vlans.service" /etc/systemd/system/p8s-vlans.service
 install -m 0755 "$REPO/scripts/storages-up.sh" /usr/local/share/p8s/storages-up.sh
+install -m 0755 "$REPO/scripts/libvirt-migrate.sh" /usr/local/share/p8s/libvirt-migrate.sh
 install -m 0644 "$REPO/deploy/p8s-storages.service" /etc/systemd/system/p8s-storages.service
 # guest internet: repair at boot and after every firewall reload (which can wipe libvirt's NAT rules)
 install -m 0644 "$REPO/deploy/p8s-net.service" /etc/systemd/system/p8s-net.service

@@ -3,6 +3,7 @@ package backup
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -119,5 +120,109 @@ func TestSaveListRestorePrune(t *testing.T) {
 				t.Fatal("path tricks must not work")
 			}
 		})
+	}
+}
+
+// chainZFS logs every zfs send/receive command line to $OUT/log.
+func chainZFS(t *testing.T) (string, func(ctx context.Context, name string, args ...string) *exec.Cmd) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "zfs")
+	os.WriteFile(script, []byte(`#!/bin/sh
+echo "$*" >> "$OUT/log"
+case "$1" in
+  send) printf 'STREAM %s\n' "$*" ;;
+  receive) cat > /dev/null; case "$*" in *broken*) echo "cannot receive: invalid stream (checksum mismatch)" >&2; exit 1;; esac ;;
+esac
+`), 0o755)
+	return dir, func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		if name == "zfs" {
+			name = script
+		}
+		c := exec.CommandContext(ctx, name, args...)
+		c.Env = append(os.Environ(), "OUT="+dir)
+		return c
+	}
+}
+
+func TestIncrementalChain(t *testing.T) {
+	if _, err := exec.LookPath("gzip"); err != nil {
+		t.Skip("gzip not installed")
+	}
+	out, cmd := chainZFS(t)
+	r := &testfake.Runner{}
+	s := &Store{Dir: t.TempDir(), Dataset: "tank/vms", Run: r, Cmd: cmd, Compressor: "gzip"}
+	ctx := context.Background()
+	save := func(id, base string) Meta {
+		t.Helper()
+		m := Meta{ID: id, VM: "db1", Base: base}
+		if base != "" {
+			m.BaseSnap = "p8s-backup-" + base
+		}
+		got, err := s.Save(ctx, "p8s-db1", "p8s-backup-"+id, m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	save("20261001-020000", "")
+	save("20261002-020000", "20261001-020000")
+	m3 := save("20261003-020000", "20261002-020000")
+	log, _ := os.ReadFile(filepath.Join(out, "log"))
+	if !strings.Contains(string(log), "send -i @p8s-backup-20261002-020000 tank/vms/p8s-db1-disk0@p8s-backup-20261003-020000") {
+		t.Fatalf("incremental send missing:\n%s", log)
+	}
+	if _, err := s.Save(ctx, "p8s-db1", "p8s-backup-x", Meta{ID: "20261004-020000", VM: "db1", Base: "20261003-020000"}); err == nil {
+		t.Fatal("base without its snapshot accepted")
+	}
+	chain, err := s.Chain(m3)
+	if err != nil || len(chain) != 3 || chain[0].ID != "20261001-020000" {
+		t.Fatalf("chain %v %v", chain, err)
+	}
+	// restore receives the full one, then each change set on top
+	os.Remove(filepath.Join(out, "log"))
+	if err := s.Restore(ctx, m3, "p8s-db1", true); err != nil {
+		t.Fatal(err)
+	}
+	log, _ = os.ReadFile(filepath.Join(out, "log"))
+	lines := strings.Split(strings.TrimSpace(string(log)), "\n")
+	if len(lines) != 3 || !strings.Contains(lines[0], "receive -u -o volmode=dev tank/vms/p8s-db1-disk0-restore") ||
+		!strings.Contains(lines[2], "receive -u -F tank/vms/p8s-db1-disk0-restore") {
+		t.Fatalf("receives:\n%s", log)
+	}
+	calls := strings.Join(r.Calls, "\n")
+	if !strings.Contains(calls, "zfs destroy tank/vms/p8s-db1-disk0-restore@p8s-backup-20261001-020000") ||
+		!strings.Contains(calls, "zfs rename tank/vms/p8s-db1-disk0-restore tank/vms/p8s-db1-disk0") {
+		t.Fatalf("calls %s", calls)
+	}
+	// the middle one can't go while the newest builds on it
+	if err := s.Delete("db1", "20261002-020000"); !errors.Is(err, ErrInUse) {
+		t.Fatalf("delete base: %v", err)
+	}
+	// prune to 1: the chain it needs stays
+	if n, err := s.Prune("db1", 1); err != nil || n != 0 {
+		t.Fatalf("prune %d %v", n, err)
+	}
+	// a new full backup: prune to 1 removes the whole old chain
+	save("20261008-020000", "")
+	if n, err := s.Prune("db1", 1); err != nil || n != 3 {
+		t.Fatalf("prune after full %d %v", n, err)
+	}
+	// restore test
+	m, _ := s.Get("db1", "20261008-020000")
+	if v, err := s.Verify(ctx, m); err != nil || v.VerifiedAt == "" {
+		t.Fatalf("verify %v %+v", err, v)
+	}
+	if m, _ := s.Get("db1", "20261008-020000"); m.VerifiedAt == "" {
+		t.Fatal("verify result not saved")
+	}
+	if !strings.Contains(strings.Join(r.Calls, "\n"), "zfs destroy -r tank/vms/p8s-verify-db1-disk0") {
+		t.Fatal("scratch disk not removed")
+	}
+	// a missing base is reported clearly
+	os.Remove(filepath.Join(s.Dir, "db1", "db1-20261008-020000.json"))
+	save("20261009-020000", "")
+	broken := Meta{ID: "20261010-020000", VM: "db1", Base: "20261099-020000", Compression: "gzip"}
+	if _, err := s.Chain(broken); !errors.Is(err, ErrNotFound) || !strings.Contains(err.Error(), "missing") {
+		t.Fatalf("missing base: %v", err)
 	}
 }

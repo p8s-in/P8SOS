@@ -66,6 +66,8 @@ Each phase ships something usable on its own.
 - [x] Editions: Home / Standard / Enterprise / Datacenter (one ISO, the licence key decides)
 - [x] Proxmox-style dashboard: top bar, sidebar tree (server → VMs and containers), grouped menus, ⋯ action menus
 - [x] Server page in the dashboard: storage + grow, add OS templates, home-network setup, Debian updates, reboot, task log with live output
+- [x] Incremental backups (only changes since the last, full every 7th, chain-aware keep/delete/off-site) and restore tests (weekly automatic + on demand)
+- [x] Live moves: running VMs move between cluster servers without stopping (memory + disks over the tunnel); CPU type "compatible" = the cluster's common CPU ([cluster.md](cluster.md))
 - [x] P8S logo everywhere: installer boot menu, server boot menu (GRUB theme) and boot splash (Plymouth), console/SSH login, dashboard icons ([assets/brand](../assets/brand/README.md))
 - [x] Network storage: NAS shares (NFS) for backup copies and ISOs; SAN disks (iSCSI) with a ZFS pool for VM disks, connected at boot ([network-storage.md](network-storage.md))
 - [x] Extra disks per VM (up to 8): add (live on virtio/SCSI), grow, remove; snapshots, backups, off-site copies and restores cover all disks (`p8 disk-add`)

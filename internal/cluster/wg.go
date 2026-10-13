@@ -42,7 +42,11 @@ func (st State) wgConfig() string {
 		fmt.Fprintf(&b, "ListenPort = %d\n", WGPort)
 	}
 	for _, n := range st.Nodes {
-		fmt.Fprintf(&b, "\n[Peer]\n# %s %s\nPublicKey = %s\nAllowedIPs = %s/32\n", n.ID, strings.ReplaceAll(n.Name, "\n", " "), n.WGPub, n.WGIP)
+		allowed := n.WGIP + "/32"
+		if st.Role == "worker" { // the master passes traffic between workers (live moves)
+			allowed = Subnet + ".0/24"
+		}
+		fmt.Fprintf(&b, "\n[Peer]\n# %s %s\nPublicKey = %s\nAllowedIPs = %s\n", n.ID, strings.ReplaceAll(n.Name, "\n", " "), n.WGPub, allowed)
 		if st.Role == "worker" { // dial out to the master; keep NAT mappings open
 			fmt.Fprintf(&b, "Endpoint = %s\nPersistentKeepalive = 25\n", st.Endpoint)
 		}
@@ -86,12 +90,22 @@ func (m *Manager) applyWG(ctx context.Context) error {
 			return err
 		}
 	}
+	if st.Role == "master" { // workers reach each other through the master
+		_, _ = m.Run.Run(ctx, "sysctl", "-qw", "net.ipv4.conf."+Iface+".forwarding=1")
+		_, _ = m.Run.Run(ctx, "sysctl", "-qw", "net.ipv4.ip_forward=1")
+	}
+	if m.OnTunnel != nil {
+		m.OnTunnel(ctx, st.Self.WGIP)
+	}
 	return nil
 }
 
 func (m *Manager) downWG(ctx context.Context) error {
 	if m.Run == nil {
 		return nil
+	}
+	if m.OnTunnel != nil {
+		m.OnTunnel(ctx, "")
 	}
 	if _, err := m.Run.Run(ctx, "ip", "link", "show", Iface); err == nil {
 		_, err := m.Run.Run(ctx, "ip", "link", "del", Iface)

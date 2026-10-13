@@ -32,8 +32,10 @@ type MoveTarget struct {
 
 // MoveInfo says whether and where a VM can be moved.
 type MoveInfo struct {
-	From    string       `json:"from"` // node id
-	Why     string       `json:"why,omitempty"`
+	From    string       `json:"from"`               // node id
+	Why     string       `json:"why,omitempty"`      // why it can't move shut down ("" = it can)
+	LiveWhy string       `json:"live_why,omitempty"` // why it can't move while running ("" = it can)
+	Running bool         `json:"running"`
 	Targets []MoveTarget `json:"targets"`
 }
 
@@ -70,6 +72,12 @@ func (c *VMs) MoveInfo(ctx context.Context, name string) (MoveInfo, error) {
 		}
 		info.Why = why
 	}
+	if v, err := c.Get(ctx, name); err == nil && v.State == "running" {
+		info.Running = true
+		info.LiveWhy = c.liveWhy(ctx, name, info.From)
+	} else {
+		info.LiveWhy = "it isn't running"
+	}
 	if info.From != c.M.SelfID() {
 		info.Targets = append(info.Targets, MoveTarget{ID: c.M.SelfID(), Name: c.M.SelfName(), Online: true})
 	}
@@ -81,8 +89,9 @@ func (c *VMs) MoveInfo(ctx context.Context, name string) (MoveInfo, error) {
 	return info, nil
 }
 
-// StartMove copies a shut-down VM to another server and deletes the original.
-func (c *VMs) StartMove(ctx context.Context, name, to string, start bool) (vm.Job, error) {
+// StartMove copies a shut-down VM to another server and deletes the original;
+// with live, a running VM moves and keeps running.
+func (c *VMs) StartMove(ctx context.Context, name, to string, start, live bool) (vm.Job, error) {
 	if c.Jobs == nil {
 		return vm.Job{}, fmt.Errorf("%w: moving isn't set up", vm.ErrConflict)
 	}
@@ -90,7 +99,7 @@ func (c *VMs) StartMove(ctx context.Context, name, to string, start bool) (vm.Jo
 	if err != nil {
 		return vm.Job{}, err
 	}
-	if info.Why != "" {
+	if !live && info.Why != "" {
 		return vm.Job{}, fmt.Errorf("%w: %s can't be moved: %s", vm.ErrConflict, name, info.Why)
 	}
 	var target *MoveTarget
@@ -104,6 +113,9 @@ func (c *VMs) StartMove(ctx context.Context, name, to string, start bool) (vm.Jo
 	}
 	if !target.Online {
 		return vm.Job{}, fmt.Errorf("%w: server %s is offline", vm.ErrConflict, target.Name)
+	}
+	if live {
+		return c.startLive(ctx, name, info, to)
 	}
 	self := c.M.SelfID()
 	j, err := c.Jobs.Start("move", name, func(ctx context.Context, p jobs.Progress) (string, error) {

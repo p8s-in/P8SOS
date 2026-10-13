@@ -485,12 +485,27 @@ func serve(args []string) error {
 			}
 			return c
 		}}
+	// live moves: libvirt listens on the tunnel address (or stops when it is gone)
+	clu.OnTunnel = func(ctx context.Context, ip string) {
+		args := []string{filepath.Join(scriptsDir(), "libvirt-migrate.sh"), "off"}
+		if ip != "" {
+			args = []string{args[0], "on", ip}
+		}
+		go func() {
+			c, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+			defer cancel()
+			if out, err := run.Run(c, "bash", args...); err != nil {
+				log.Warn("live-move setup", "err", err, "out", strings.TrimSpace(string(out)))
+			}
+		}()
+	}
 	if err := clu.Apply(ctx); err != nil {
 		log.Error("cluster tunnel", "err", err)
 	}
 	cvms := &cluster.VMs{Local: svc, M: clu, Jobs: svc.Jobs}
 	apiSrv.VMs, apiSrv.Cluster, apiSrv.ClusterVMs = cvms, clu, cvms
 	apiSrv.Migrate, apiSrv.LocalMoves = cvms, svc // moving VMs between servers
+	apiSrv.LocalLive, apiSrv.LocalCPU = svc, svc  // live moves, CPU types
 	apiSrv.Dial, apiSrv.RemoteMetrics = cvms.Dial, cvms.RemoteMetrics
 	go clu.Loop(ctx, 15*time.Second)
 	ha := &cluster.HA{C: cvms, Local: svc, Dir: filepath.Join(cfg.DataDir, "cluster"), Log: log,

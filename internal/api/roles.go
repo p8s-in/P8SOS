@@ -54,6 +54,7 @@ var (
 		"PUT /remote/vpn", "POST /remote/vpn/devices", "DELETE /remote/vpn/devices/[^/]+", "POST /remote/forward",
 		// server-to-server calls of the cluster (the master's token is an admin)
 		"* /cluster/(vm-export|replica|replica-send)/.+", "* /cluster/(vm-import|replica-recv|ha-sync)",
+		"* /cluster/live-[a-z]+(/.+)?", "GET /cluster/cpu",
 	)
 	// auditors may change only their own account (password, 2FA, profile)
 	auditorAllow = rules("POST /logout", "POST /me/password", "PUT /me/profile", "POST /me/2fa/[a-z]+")
@@ -61,7 +62,7 @@ var (
 	auditorDenyRead = rules(
 		"GET /vms/[^/]+/login", "GET /containers/[^/]+/login", "GET /vms/[^/]+/screenshot",
 		"GET /cloud/outbox", "GET /cluster/shell", "GET /cluster/vnc/[^/]+", "GET /cluster/vm-export/[^/]+",
-		"GET /cluster/replica-send/[^/]+", "GET /me/tokens",
+		"GET /cluster/replica-send/[^/]+", "GET /me/tokens", "GET /cluster/live-header/[^/]+",
 	)
 )
 

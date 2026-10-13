@@ -93,6 +93,7 @@ func (s *Service) runBackup(ctx context.Context, name string, keep int, p jobs.P
 		unlock()
 		return "", err
 	}
+	base, baseSnap, prevSnap := s.backupBase(ctx, dom, name, sp)
 	consistent := v.State == virt.Stopped
 	if v.State == virt.Running {
 		consistent = s.HV.FSFreeze(ctx, dom) == nil // thawed right after the snapshot below
@@ -105,21 +106,43 @@ func (s *Service) runBackup(ctx context.Context, name string, keep int, p jobs.P
 	if err != nil {
 		return "", err
 	}
-	defer func() { s.logErr("remove backup snapshot", sd.DestroySnapshot(context.WithoutCancel(ctx), dom, snap)) }()
+	// The newest backup's snapshot stays on the disks: the next backup sends
+	// only what changed since it.
+	keepSnap := false
+	defer func() {
+		if !keepSnap {
+			s.logErr("remove backup snapshot", sd.DestroySnapshot(context.WithoutCancel(ctx), dom, snap))
+		}
+	}()
 
-	p("copying the disk")
+	if base != "" {
+		p("copying what changed since backup " + base)
+	} else {
+		p("copying the disk")
+	}
 	m, err := s.Backups.Save(ctx, dom, snap, Backup{
 		ID: id, VM: name, Template: v.Template, User: v.User, Network: v.Network, VLAN: v.VLAN, OSType: v.OSType,
 		VCPUs: v.VCPUs, MemoryMiB: v.MemoryMiB, DiskGB: v.DiskGB, Consistent: consistent, Owner: v.Owner,
 		Pool: poolOf(v), PublicIP: publicIPOf(v),
 		DiskBus: sp.DiskBus, NICModel: sp.NICModel, Firmware: sp.Firmware, Extra: backupExtras(sp),
+		Base: base, BaseSnap: baseSnap,
 	})
 	if err != nil {
 		return "", err
 	}
-	msg := fmt.Sprintf("backup %s of %s saved (%s)", m.ID, name, humanBytes(m.TotalBytes()))
+	keepSnap = true
+	if prevSnap != "" { // only the newest backup's snapshot is kept
+		if sc, ok := s.Disks.(snapChecker); ok && sc.HasSnapshot(ctx, dom, prevSnap) {
+			s.logErr("remove previous backup snapshot", sd.DestroySnapshot(context.WithoutCancel(ctx), dom, prevSnap))
+		}
+	}
+	kind := "full"
+	if m.Base != "" {
+		kind = "changes since " + m.Base
+	}
+	msg := fmt.Sprintf("backup %s of %s saved (%s, %s)", m.ID, name, kind, humanBytes(m.TotalBytes()))
 	if len(m.Extra) > 0 {
-		msg = fmt.Sprintf("backup %s of %s saved: %d disks, %s", m.ID, name, 1+len(m.Extra), humanBytes(m.TotalBytes()))
+		msg = fmt.Sprintf("backup %s of %s saved: %d disks (%s, %s)", m.ID, name, 1+len(m.Extra), kind, humanBytes(m.TotalBytes()))
 	}
 	if keep > 0 {
 		if n, err := s.Backups.Prune(name, keep); err != nil {
@@ -127,11 +150,99 @@ func (s *Service) runBackup(ctx context.Context, name string, keep int, p jobs.P
 		} else if n > 0 {
 			msg += fmt.Sprintf(", %d old one(s) removed", n)
 		}
+		// restore test once a week (scheduled backups)
+		if s.lastVerified(name).Before(time.Now().Add(-7 * 24 * time.Hour)) {
+			p("restore test")
+			if _, err := s.Backups.Verify(ctx, m); err != nil {
+				if s.AfterBackup != nil {
+					s.AfterBackup("vm", name, m.ID)
+				}
+				// a failed job raises an alert (Health & alerts)
+				return "", fmt.Errorf("%s, but its restore test FAILED: %v", msg, err)
+			} else {
+				msg += "; restore test passed"
+			}
+		}
 	}
 	if s.AfterBackup != nil {
 		s.AfterBackup("vm", name, m.ID)
 	}
 	return msg, nil
+}
+
+// FullEvery: after this many backups that store only changes, the next one is full.
+const FullEvery = 7
+
+type snapChecker interface {
+	HasSnapshot(ctx context.Context, vm, name string) bool
+}
+
+// backupBase picks the backup the next one can build on ("" = make a full
+// one): the newest backup, if its snapshot is still on every disk, it has the
+// same disks and its chain isn't too long yet.
+func (s *Service) backupBase(ctx context.Context, dom, name string, sp virt.Spec) (base, baseSnap, prevSnap string) {
+	sc, ok := s.Disks.(snapChecker)
+	if !ok {
+		return "", "", ""
+	}
+	l, err := s.Backups.List(name)
+	if err != nil || len(l) == 0 {
+		return "", "", ""
+	}
+	prev := l[0]
+	prevSnap = backupSnapPrefix + prev.ID
+	chain, err := s.Backups.Chain(prev)
+	if err != nil || len(chain) >= FullEvery || !sameDisks(prev.Extra, sp.Extra) || !sc.HasSnapshot(ctx, dom, prevSnap) {
+		return "", "", prevSnap
+	}
+	return prev.ID, prevSnap, prevSnap
+}
+
+func sameDisks(b []backup.ExtraDisk, e []virt.ExtraDisk) bool {
+	if len(b) != len(e) {
+		return false
+	}
+	for i := range b {
+		if b[i].Index != e[i].Index {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Service) lastVerified(name string) time.Time {
+	var t time.Time
+	l, _ := s.Backups.List(name)
+	for _, m := range l {
+		if v, err := time.Parse(time.RFC3339, m.VerifiedAt); err == nil && v.After(t) {
+			t = v
+		}
+	}
+	return t
+}
+
+// StartVerify runs a restore test of a backup in the background.
+func (s *Service) StartVerify(ctx context.Context, name, id string) (Job, error) {
+	if err := s.backupsReady(); err != nil {
+		return Job{}, err
+	}
+	m, err := s.Backups.Get(name, id)
+	if errors.Is(err, backup.ErrNotFound) {
+		return Job{}, fmt.Errorf("%w: backup %s of %q", ErrNotFound, id, name)
+	} else if err != nil {
+		return Job{}, err
+	}
+	j, err := s.Jobs.Start("verify", name, func(ctx context.Context, p jobs.Progress) (string, error) {
+		p("restoring into a scratch disk and checking every block")
+		if _, err := s.Backups.Verify(ctx, m); err != nil {
+			return "", fmt.Errorf("restore test of backup %s failed: %w", id, err)
+		}
+		return fmt.Sprintf("backup %s of %s restores fine (restore test passed)", id, name), nil
+	})
+	if errors.Is(err, jobs.ErrBusy) {
+		return Job{}, fmt.Errorf("%w: %v", ErrConflict, err)
+	}
+	return j, err
 }
 
 func backupExtras(sp virt.Spec) []backup.ExtraDisk {
@@ -193,6 +304,8 @@ func (s *Service) DeleteBackup(name, id string) error {
 	}
 	if err := s.Backups.Delete(name, id); errors.Is(err, backup.ErrNotFound) {
 		return fmt.Errorf("%w: backup %s of %q", ErrNotFound, id, name)
+	} else if errors.Is(err, backup.ErrInUse) {
+		return fmt.Errorf("%w: %v", ErrConflict, err)
 	} else if err != nil {
 		return err
 	}

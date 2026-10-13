@@ -99,6 +99,31 @@ API: `GET /api/v1/vms/{name}/move` (where it can go, or why not),
 UEFI variables and the TPM state move with the VM (Windows 11 keeps its boot
 entries and BitLocker keys).
 
+## Moving a running VM (live move)
+
+A running VM can move without being shut down: Manage → Options → Move to
+another server → **Move while running**, or `p8 move web1 server2 --live`.
+QEMU copies its memory and disks to the other server while it keeps working,
+then switches over; the pause at the end is well under a second, so SSH
+sessions and connections normally survive. Its private IP can still change
+(each server has its own NAT network) — VMs on the home network keep their IP.
+
+- **Time:** the whole size of every disk crosses the tunnel (empty space too)
+  plus the memory; 20 GB of disks over 1 Gbit/s ≈ 3-4 minutes.
+- **Same CPU, or "compatible":** a VM normally gets the server's own CPU
+  (fastest). It can move live only to a server with exactly the same CPU. For
+  servers with different CPUs, set **CPU type → Compatible with every server**
+  (`p8 cpu web1 compatible`), shut it down and start it once: it then runs on
+  the newest CPU model all servers share and can move live anywhere. A server
+  added later with an older CPU: set it again.
+- **Not yet live:** UEFI VMs (Windows 11), VMs on network storage, VMs with a
+  public IP or a CD in the drive — move those shut down.
+- **How:** libvirt on each server listens on its tunnel address only
+  (`scripts/libvirt-migrate.sh`, port 16509 and 49152-49215, firewalled to the
+  tunnel); `virsh migrate --live --copy-storage-all` runs on the old server.
+  Worker → worker moves pass through the master. If anything fails, the VM keeps
+  running where it was and the half copy is removed.
+
 ## High availability
 
 Protected VMs are copied to a second server every few minutes and started there
@@ -133,7 +158,7 @@ Files: `/var/lib/p8s/cluster/state.json` (roles, keys, tokens; root only),
 
 ## Not yet
 
-- Moving a running VM (live migration) and moving containers
+- Moving containers; live moves of UEFI VMs and VMs on network storage
 - Containers in high availability (VMs: see [ha.md](ha.md)); shared storage (Ceph/NFS)
 - Containers on workers (containers run on the master), ISO installs and public IPs on workers
 - One shared ISO library and template list

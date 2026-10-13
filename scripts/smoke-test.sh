@@ -307,11 +307,25 @@ if wait_job "$jid" "$BACKUP_TIMEOUT" && [[ $(jq -r .state <<<"$JOB") == done ]];
 else
   bad "backup job: $JOB"
 fi
+# second backup: only the changes since the first
+sleep 1
+api POST "/vms/$NAME/backups"; expect "second backup" 202
+if wait_job "$(jq -r .id <<<"$BODY")" "$BACKUP_TIMEOUT" && [[ $(jq -r .message <<<"$JOB") == *"changes since"* ]]; then
+  ok "second backup stores only the changes: $(jq -r .message <<<"$JOB")"
+else
+  bad "second backup should be incremental: $JOB"
+fi
 api GET "/vms/$NAME/backups"
 bid=$(jq -r '.backups[0].id // empty' <<<"$BODY")
+if [[ -n $bid ]]; then
+  api POST "/backups/$NAME/$bid/verify"; expect "start restore test" 202
+  wait_job "$(jq -r .id <<<"$BODY")" "$BACKUP_TIMEOUT" && [[ $(jq -r .state <<<"$JOB") == done ]] && ok "restore test passed" || bad "restore test: $JOB"
+  api GET "/vms/$NAME/backups"
+  [[ -n $(jq -r '.backups[0].verified_at // empty' <<<"$BODY") ]] && ok "backup marked as restore-tested" || bad "verified_at not set"
+fi
 [[ -n $bid ]] && ok "backup $bid listed" || bad "no backup listed: $BODY"
 left=$(sudo zfs list -H -t snapshot -o name -r "$DATASET/$DOM-disk0" 2>/dev/null | grep -c p8s-backup- || true)
-[[ $left == 0 ]] && ok "zfs: no backup snapshot left behind" || bad "zfs: $left backup snapshot(s) left"
+[[ $left == 1 ]] && ok "zfs: only the newest backup's snapshot is kept (for the next incremental)" || bad "zfs: $left backup snapshots, want 1"
 if [[ -n $bid ]]; then
   COPY=${NAME}r
   api POST "/backups/$NAME/$bid/restore" '{"name":"'"$COPY"'"}'; expect "restore as new VM" 202

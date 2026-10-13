@@ -15,7 +15,7 @@ import (
 // Migrator is the cluster's move side (cluster.VMs).
 type Migrator interface {
 	MoveInfo(ctx context.Context, name string) (cluster.MoveInfo, error)
-	StartMove(ctx context.Context, name, to string, start bool) (vm.Job, error)
+	StartMove(ctx context.Context, name, to string, start, live bool) (vm.Job, error)
 }
 
 func (s *Server) moveInfo(w http.ResponseWriter, r *http.Request) {
@@ -45,11 +45,18 @@ func (s *Server) startMove(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		To    string `json:"to"`
 		Start bool   `json:"start"`
+		Live  bool   `json:"live"` // move while it runs
 	}
 	if !decode(w, r, &body) {
 		return
 	}
-	j, err := s.Migrate.StartMove(r.Context(), r.PathValue("name"), body.To, body.Start)
+	if s.HA != nil {
+		if _, protected := s.HA.Config(r.Context(), r.PathValue("name")); protected {
+			writeErr(w, http.StatusConflict, "conflict", "high availability is on for this VM: turn it off, move the VM, then turn it on again")
+			return
+		}
+	}
+	j, err := s.Migrate.StartMove(r.Context(), r.PathValue("name"), body.To, body.Start, body.Live)
 	if err != nil {
 		s.fail(w, r, err)
 		return

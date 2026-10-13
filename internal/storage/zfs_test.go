@@ -103,7 +103,8 @@ func TestSnapshots(t *testing.T) {
 	var got []string
 	for _, c := range r.Calls[2:] {
 		if !strings.HasPrefix(c, "zfs list -H -t snapshot -o name ") && // replica snapshots looked up before a rollback
-			!strings.HasPrefix(c, "zfs list -H -o name -t volume") { // data disks
+			!strings.HasPrefix(c, "zfs list -H -o name -t volume") && // data disks
+			!strings.HasPrefix(c, "zfs list -H -o name -t snapshot -d 1") { // kept backup snapshots
 			got = append(got, c)
 		}
 	}

@@ -433,3 +433,39 @@ func TestDataDiskFiles(t *testing.T) {
 		t.Fatal("disk 2 file left")
 	}
 }
+
+func TestIncrementalChainOffsite(t *testing.T) {
+	ctx := context.Background()
+	m, dir := newMgr(t)
+	usb := filepath.Join(dir, "usb")
+	os.MkdirAll(usb, 0o700)
+	m.Save(Target{Name: "usb", Type: "dir", Path: usb, Keep: 1, Enabled: true})
+	s := &backup.Store{Dir: m.BackupDir}
+	for i, id := range []string{"20261001-020000", "20261002-020000", "20261003-020000"} {
+		bm := backup.Meta{ID: id, VM: "db1", Compression: "zstd", CreatedAt: id}
+		if i > 0 {
+			bm.Base = []string{"20261001-020000", "20261002-020000"}[i-1]
+		}
+		data, meta := s.Files(bm)
+		os.MkdirAll(filepath.Dir(data), 0o700)
+		os.WriteFile(data, []byte("stream "+id), 0o600)
+		j, _ := json.Marshal(bm)
+		os.WriteFile(meta, j, 0o600)
+	}
+	m.StartSync("usb")
+	m.Jobs.Wait()
+	m.StartSync("usb") // and prune once more: keep 1 still needs its chain
+	m.Jobs.Wait()
+	if l, _ := m.RemoteBackups(ctx, "usb"); len(l) != 3 {
+		t.Fatalf("remote should keep the whole chain: %+v", l)
+	}
+	os.RemoveAll(filepath.Join(m.BackupDir, "db1"))
+	j, _ := m.StartFetch("usb", "vm", "db1", "20261003-020000")
+	m.Jobs.Wait()
+	if j, _ = m.Jobs.Get(j.ID); j.State != jobs.Done || !strings.Contains(j.Message, "2 backups it builds on") {
+		t.Fatalf("fetch %+v", j)
+	}
+	if l, _ := s.List("db1"); len(l) != 3 {
+		t.Fatalf("chain not back: %+v", l)
+	}
+}

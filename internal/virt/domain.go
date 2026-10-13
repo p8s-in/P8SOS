@@ -53,6 +53,12 @@ type Spec struct {
 	Firmware string
 	// Extra are data disks after the root disk (at most MaxExtraDisks).
 	Extra []ExtraDisk
+	// CPUModel "" gives the VM this server's CPU as it is (fastest; live moves
+	// only between servers with the same CPU). A named model (e.g. the cluster's
+	// common CPU, see CPUBaseline) with CPUFeatures ("+name" required, "-name"
+	// off) lets it move live between different CPUs.
+	CPUModel    string
+	CPUFeatures []string
 }
 
 // ExtraDisk is a data disk. Index 1-8 stays the same for the disk's life, so
@@ -129,7 +135,11 @@ type domainXML struct {
 	} `xml:"features"`
 	Clock *clockXML `xml:"clock"`
 	CPU   struct {
-		Mode     string `xml:"mode,attr"`
+		Mode     string    `xml:"mode,attr"`
+		Match    string    `xml:"match,attr,omitempty"`
+		Check    string    `xml:"check,attr,omitempty"`
+		Model    *cpuModel `xml:"model"`
+		Features []cpuFeat `xml:"feature"`
 		Topology *struct {
 			Sockets int `xml:"sockets,attr"`
 			Dies    int `xml:"dies,attr"`
@@ -141,6 +151,16 @@ type domainXML struct {
 	OnReboot   string     `xml:"on_reboot"`
 	OnCrash    string     `xml:"on_crash"`
 	Devices    devicesXML `xml:"devices"`
+}
+
+type cpuModel struct {
+	Fallback string `xml:"fallback,attr,omitempty"`
+	Name     string `xml:",chardata"`
+}
+
+type cpuFeat struct {
+	Policy string `xml:"policy,attr"`
+	Name   string `xml:"name,attr"`
 }
 
 type onOff struct {
@@ -395,6 +415,17 @@ func DomainXML(s Spec) ([]byte, error) {
 		}
 	}
 	d.CPU.Mode = "host-passthrough"
+	if s.CPUModel != "" {
+		d.CPU.Mode, d.CPU.Match, d.CPU.Check = "custom", "exact", "partial"
+		d.CPU.Model = &cpuModel{Fallback: "forbid", Name: s.CPUModel}
+		for _, f := range s.CPUFeatures {
+			pol := "require"
+			if strings.HasPrefix(f, "-") {
+				pol = "disable"
+			}
+			d.CPU.Features = append(d.CPU.Features, cpuFeat{Policy: pol, Name: strings.TrimLeft(f, "+-")})
+		}
+	}
 	d.CPU.Topology = &struct {
 		Sockets int `xml:"sockets,attr"`
 		Dies    int `xml:"dies,attr"`
@@ -598,6 +629,17 @@ func ParseDomainXML(b []byte) (Spec, error) {
 	}
 	if d.Devices.Video != nil {
 		s.Video = d.Devices.Video.Model.Type
+	}
+	if d.CPU.Mode == "custom" && d.CPU.Model != nil {
+		s.CPUModel = strings.TrimSpace(d.CPU.Model.Name)
+		for _, f := range d.CPU.Features {
+			switch f.Policy {
+			case "require", "force":
+				s.CPUFeatures = append(s.CPUFeatures, "+"+f.Name)
+			case "disable", "forbid":
+				s.CPUFeatures = append(s.CPUFeatures, "-"+f.Name)
+			}
+		}
 	}
 	for _, disk := range d.Devices.Disks {
 		switch disk.Device {
