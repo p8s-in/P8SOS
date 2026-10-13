@@ -19,6 +19,7 @@ import (
 	"p8sos/internal/audit"
 	"p8sos/internal/billing"
 	"p8sos/internal/cloud"
+	"p8sos/internal/cluster"
 	"p8sos/internal/config"
 	"p8sos/internal/console"
 	"p8sos/internal/ct"
@@ -113,6 +114,12 @@ type Server struct {
 	Node *tasks.Node
 	// CTs are the containers (LXC); nil = not available.
 	CTs *ct.Service
+	// RemoteMetrics serves charts of VMs on other cluster servers (ok=false: local).
+	RemoteMetrics func(name string) (any, bool)
+	// Cluster joins servers (master/worker); nil = standalone only.
+	Cluster *cluster.Manager
+	// ClusterVMs is s.VMs when it spans the cluster (placement for the dashboard).
+	ClusterVMs *cluster.VMs
 	// Offsite copies backups to other places; nil = not available.
 	Offsite *offsite.Manager
 	// SSHPorts lists guest -> SSH port on this server; nil = off.
@@ -146,6 +153,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/password/forgot", s.forgotPassword)
 	mux.HandleFunc("POST /api/v1/password/reset", s.resetPassword)
 	mux.HandleFunc("POST /api/v1/billing/razorpay/webhook", s.razorpayWebhook)
+	mux.HandleFunc("POST /api/v1/cluster/register", s.clusterRegister) // the join code is the pass
 
 	auth := http.NewServeMux()
 	auth.HandleFunc("GET /api/v1/templates", s.listTemplates)
@@ -251,6 +259,14 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("GET /api/v1/containers/{name}/backups", s.ctBackups)
 	auth.HandleFunc("POST /api/v1/containers/{name}/backups", s.ctBackup)
 	auth.HandleFunc("GET /api/v1/ct-backups", s.ctBackups)
+	auth.HandleFunc("GET /api/v1/cluster", s.getCluster)
+	auth.HandleFunc("POST /api/v1/cluster/join-code", s.clusterJoinCode)
+	auth.HandleFunc("POST /api/v1/cluster/join", s.clusterJoin)
+	auth.HandleFunc("POST /api/v1/cluster/leave", s.clusterLeave)
+	auth.HandleFunc("DELETE /api/v1/cluster/nodes/{id}", s.clusterRemove)
+	auth.HandleFunc("GET /api/v1/cluster/capacity", s.clusterCapacity)
+	auth.HandleFunc("GET /api/v1/cluster/candidates", s.clusterCandidates)
+	auth.HandleFunc("GET /api/v1/cluster/vnc/{name}", s.clusterVNC)
 	auth.HandleFunc("GET /api/v1/offsite", s.getOffsite)
 	auth.HandleFunc("PUT /api/v1/offsite/targets/{name}", s.putOffsite)
 	auth.HandleFunc("DELETE /api/v1/offsite/targets/{name}", s.deleteOffsite)
@@ -369,7 +385,7 @@ func (s *Server) createVM(w http.ResponseWriter, r *http.Request) {
 		if !s.canAfford(w, r, p.Name, plan) {
 			return
 		}
-	} else if req.Owner != "" {
+	} else if req.Owner != "" && !p.Cluster { // the master checked its own accounts
 		if s.Users == nil {
 			writeErr(w, http.StatusBadRequest, "invalid", "user accounts are not enabled on this host")
 			return
@@ -378,6 +394,9 @@ func (s *Server) createVM(w http.ResponseWriter, r *http.Request) {
 			s.fail(w, r, err)
 			return
 		}
+	}
+	if req.Node != "" && !p.Admin {
+		req.Node = "" // customers get the best server
 	}
 	if req.Owner != "" {
 		req.NoDefaultKeys = true
@@ -775,6 +794,12 @@ func (s *Server) vmMetrics(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	if _, ok := s.vmFor(w, r); !ok {
 		return
+	}
+	if s.RemoteMetrics != nil { // a VM on another cluster server
+		if out, ok := s.RemoteMetrics(name); ok {
+			writeJSON(w, http.StatusOK, out)
+			return
+		}
 	}
 	pts := []metrics.Point{}
 	if s.Metrics != nil {

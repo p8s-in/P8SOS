@@ -38,9 +38,10 @@ type Meta struct {
 	VCPUs       int    `json:"vcpus"`
 	MemoryMiB   int    `json:"memory_mib"`
 	DiskGB      int    `json:"disk_gb"`
-	Bytes       int64  `json:"bytes"`       // size of the backup file
-	Compression string `json:"compression"` // zstd or gzip
-	Consistent  bool   `json:"consistent"`  // guest filesystems were frozen (or the VM was off)
+	Bytes       int64  `json:"bytes"`          // size of the backup file
+	Compression string `json:"compression"`    // zstd or gzip
+	Consistent  bool   `json:"consistent"`     // guest filesystems were frozen (or the VM was off)
+	Node        string `json:"node,omitempty"` // cluster server that keeps it (filled in by the master)
 }
 
 var (

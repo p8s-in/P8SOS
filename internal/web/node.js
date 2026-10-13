@@ -43,7 +43,7 @@ const ndState = {running: "⏳ running", ok: "✔ done", failed: "✘ failed"};
 function nodeShell(){
   if (!isAdmin() || !$("#bNode")) return;
   $("#bNode").hidden = false;
-  $("#bNode").onclick = openNode;
+  $("#bNode").onclick = () => openNode();
 }
 
 async function openNode(){

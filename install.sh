@@ -72,6 +72,10 @@ fi
 if ! command -v swtpm >/dev/null || [[ ! -e /usr/share/OVMF/OVMF_CODE_4M.ms.fd && ! -e /usr/share/OVMF/OVMF_CODE_4M.secboot.fd ]]; then
   apt-get install -y -qq swtpm swtpm-tools ovmf >/dev/null 2>&1 && ok "TPM and UEFI firmware installed (Windows 11 VMs)" || echo "  note: swtpm not installed; Windows 11 VMs won't be available"
 fi
+# Clusters: servers talk over a WireGuard tunnel (kernel module is built in; this is the wg tool).
+if ! command -v wg >/dev/null; then
+  apt-get install -y -qq wireguard-tools >/dev/null 2>&1 && ok "WireGuard tools installed (clusters)" || echo "  note: wireguard-tools not installed; clusters won't be available"
+fi
 # Containers (LXC, unprivileged): ids 100000-165535 belong to containers' root.
 if ! command -v lxc-start >/dev/null || ! command -v newuidmap >/dev/null; then
   apt-get install -y -qq lxc uidmap >/dev/null 2>&1 && ok "LXC installed (containers)" || echo "  note: LXC not installed; containers won't be available"

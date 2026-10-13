@@ -33,7 +33,7 @@ apt-get update
 apt-get install -y linux-headers-amd64 zfs-dkms zfsutils-linux \
   qemu-system-x86 qemu-utils libvirt-daemon-system libvirt-clients \
   libvirt-daemon-config-network dnsmasq-base \
-  cloud-image-utils ovmf bridge-utils curl jq make git zstd openssh-client nftables lxc uidmap swtpm swtpm-tools
+  cloud-image-utils ovmf bridge-utils curl jq make git zstd openssh-client wireguard-tools nftables lxc uidmap swtpm swtpm-tools
 modprobe zfs
 udevadm control --reload-rules && udevadm trigger --subsystem-match=block --action=add   # load ZFS's /dev/zvol rules now
 systemctl enable --now libvirtd

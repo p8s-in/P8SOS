@@ -32,6 +32,7 @@ import (
 	"p8sos/internal/billing"
 	"p8sos/internal/cloud"
 	"p8sos/internal/cloudinit"
+	"p8sos/internal/cluster"
 	"p8sos/internal/config"
 	"p8sos/internal/ct"
 	"p8sos/internal/execx"
@@ -375,6 +376,35 @@ func serve(args []string) error {
 			}
 		}
 	}()
+	// Cluster: this server as master (with workers) or as a worker of another.
+	_, apiPort, _ := net.SplitHostPort(cfg.Listen)
+	clu := &cluster.Manager{Dir: filepath.Join(cfg.DataDir, "cluster"), APIPort: apiPort, Run: run, Log: log,
+		LocalCapacity: func(ctx context.Context) cluster.Capacity {
+			in := hostinfo.Collect(ctx, run, cfg.VMDataset)
+			c := cluster.Capacity{CPUs: in.CPUs, MemTotalMiB: in.MemTotalMiB, PoolFreeGB: in.PoolFreeGB, Networks: svc.Networks(), Version: version}
+			if l, err := svc.List(ctx); err == nil {
+				for _, v := range l {
+					c.MemUsedMiB += v.MemoryMiB
+					c.VMs++
+				}
+			}
+			if cts != nil {
+				if l, err := cts.List(ctx); err == nil {
+					for _, x := range l {
+						c.MemUsedMiB += x.MemoryMiB
+					}
+				}
+			}
+			return c
+		}}
+	if err := clu.Apply(ctx); err != nil {
+		log.Error("cluster tunnel", "err", err)
+	}
+	cvms := &cluster.VMs{Local: svc, M: clu}
+	apiSrv.VMs, apiSrv.Cluster, apiSrv.ClusterVMs = cvms, clu, cvms
+	apiSrv.Dial, apiSrv.RemoteMetrics = cvms.Dial, cvms.RemoteMetrics
+	go clu.Loop(ctx, 15*time.Second)
+
 	srv := &http.Server{
 		Addr:              cfg.Listen,
 		Handler:           apiSrv.Handler(),
@@ -387,6 +417,7 @@ func serve(args []string) error {
 			return fmt.Errorf("self-signed TLS: %w", err)
 		}
 	}
+	clu.CertFile = cfg.TLSCert // pinned by the other cluster servers
 	errc := make(chan error, 1)
 	go func() {
 		log.Info("p8sd listening", "addr", cfg.Listen, "version", version, "tls", cfg.TLSCert != "")

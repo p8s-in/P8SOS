@@ -799,7 +799,7 @@ function renderShell(){
   $("#bMe").onclick = openAccount;
   $("#bBackups").onclick = () => openAllBackups();
   $("#bIsos").onclick = openIsos;
-  $("#bNew").onclick = openCreate;
+  $("#bNew").onclick = () => openCreate();
   startPolling();
 }
 
@@ -880,7 +880,7 @@ function renderVMs(){
     const ip = v.ip ? `<span class="mono copy" data-copy="ssh ${esc(v.user || "debian")}@${esc(v.ip)}" title="Click to copy the SSH command">${esc(v.ip)}</span>` : `<span class="muted">${v.state !== "running" ? "—" : v.iso ? "installing? open Console" : "booting…"}</span>`;
     return `<tr data-n="${esc(v.name)}">
       <td data-k="State"><span class="state ${esc(v.state)}"><span class="dot"></span>${b ? "working…" : esc(v.state)}</span></td>
-      <td data-k="Name"><b>${esc(v.name)}</b><div class="sub">${esc(templates.find(t => t.name === v.template)?.label || v.template.replace(/^iso:/, "from "))}${v.os_type === "windows11" ? " · Windows (UEFI, TPM)" : v.os_type === "windows" ? " · Windows" : ""}${v.network === "lan" ? " · home network" : ""}${v.public ? " · public IP" : ""}${v.iso ? " · CD in drive" : ""}${isAdmin() && v.owner ? ` · <b>${esc(v.owner)}</b>` : ""}</div></td>
+      <td data-k="Name"><b>${esc(v.name)}</b><div class="sub">${esc(templates.find(t => t.name === v.template)?.label || v.template.replace(/^iso:/, "from "))}${v.os_type === "windows11" ? " · Windows (UEFI, TPM)" : v.os_type === "windows" ? " · Windows" : ""}${v.network === "lan" ? " · home network" : ""}${v.public ? " · public IP" : ""}${v.iso ? " · CD in drive" : ""}${v.node_id && v.node_id !== "n1" ? " · on " + esc(v.node) : ""}${isAdmin() && v.owner ? ` · <b>${esc(v.owner)}</b>` : ""}</div></td>
       <td data-k="IP">${ip}${sshLine(v.name, v.user)}</td>
       <td data-k="CPU">${v.vcpus}</td><td data-k="RAM">${gb(v.memory_mib)}</td><td data-k="Disk">${v.disk_gb} GB</td>
       <td data-k="Autostart">${v.autostart ? "yes" : "no"}</td>
@@ -1016,7 +1016,8 @@ $("#fCreate").onsubmit = async e => {
     const net = $("#cNet").value, pool = net.startsWith("pool:") ? net.slice(5) : "", plan = cloudPlan();
     const common = {name, ...(plan ? {plan: plan.id} : {vcpus: +$("#cCpu").value, memory_mib: +$("#cMem").value, disk_gb: +$("#cDisk").value}),
       ...(plan?.public_ip ? {} : pool ? {ip_pool: pool} : {network: net}),
-      ...(!$("#cOwnerBox").hidden && $("#cOwner").value ? {owner: $("#cOwner").value} : {})};
+      ...(!$("#cOwnerBox").hidden && $("#cOwner").value ? {owner: $("#cOwner").value} : {}),
+      ...($("#cNodeBox") && !$("#cNodeBox").hidden && $("#cNode").value ? {node: $("#cNode").value} : {})};
     if (iso) {
       const win = $("#cOS").value !== "linux";
       await call("POST", "/vms", {...common, iso, os_type: $("#cOS").value, ...(win && $("#cDrv").value ? {drivers_iso: $("#cDrv").value} : {})});
@@ -1794,5 +1795,6 @@ document.addEventListener("DOMContentLoaded", render); // after cloud.js has loa
 <script src="/containers.js"></script>
 <script src="/offsite.js"></script>
 <script src="/pages.js"></script>
+<script src="/cluster.js"></script>
 </body>
 </html>

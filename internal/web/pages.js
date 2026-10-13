@@ -93,6 +93,7 @@ function pageInfo(dlg){
       kv("System", esc(os) + (tpl ? " · " + esc(tpl) : "")) +
       kv("Size", `${v.vcpus} CPU · ${gb(v.memory_mib)} RAM · ${v.disk_gb} GB disk`) +
       kv("Network", v.public ? "public IP" : v.network === "lan" ? "home network" : "private (NAT)") +
+      kv("Server", v.node ? esc(v.node) + (v.node_id ? ` <span class="sub">${esc(v.node_id)}</span>` : "") : "") +
       kv("Owner", isAdmin() ? esc(v.owner || "admins only") : "") +
       kv("Created", v.created_at ? when(v.created_at) : "") +
       kv("Start with the server", v.autostart ? "yes" : "no");

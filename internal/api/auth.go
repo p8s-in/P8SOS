@@ -29,6 +29,7 @@ type principal struct {
 	Session  string // the sign-in token (empty for API tokens)
 	User     bool   // a P8S user account (can have a password / 2FA)
 	ViaToken bool   // a personal API token (scripts): no account changes
+	Cluster  bool   // the cluster master acting on this server (users live on the master)
 }
 
 type ctxKey struct{}
@@ -61,6 +62,9 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 				if name, valid := s.tokenName(tok); valid {
 					p = principal{Name: "api-token:" + name, Admin: true}
 				}
+			}
+			if p.Name == "" && s.Cluster != nil && s.Cluster.Accepts(tok) {
+				p = principal{Name: "cluster-master", Admin: true, Cluster: true}
 			}
 		}
 		if p.Name == "" {
@@ -635,7 +639,7 @@ func (s *Server) setOwner(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &body) {
 		return
 	}
-	if body.Owner != "" {
+	if body.Owner != "" && !who(r).Cluster { // the master checked its own accounts
 		if s.Users == nil {
 			writeErr(w, http.StatusBadRequest, "invalid", "user accounts are not enabled on this host")
 			return

@@ -361,6 +361,20 @@ VMs show `"os_type"` and `"drivers_iso"`. See [windows.md](windows.md).
 | POST | `/api/v1/ct-backups/{name}/{id}/restore` | `{"name"}` restore as a new container (202 + job); counts against the quota |
 | GET | `/api/v1/ct-templates` | installed container templates |
 
+### Cluster (admins)
+
+| Method | Path | |
+|---|---|---|
+| GET | `/api/v1/cluster` | role (`""`, `master`, `worker`), tunnel endpoint, servers with status and capacity |
+| POST | `/api/v1/cluster/join-code` | `{"master_url","endpoint"}` → `{"code","command"}` (makes this server the master) |
+| POST | `/api/v1/cluster/register` | (no login; the join code is the pass) a joining server registers |
+| POST | `/api/v1/cluster/join` | `{"url","code"}` this server joins a master |
+| POST | `/api/v1/cluster/leave` | worker: stand alone again |
+| DELETE | `/api/v1/cluster/nodes/{id}` | master: drop a server (`?force=1` while it has VMs) |
+| GET | `/api/v1/cluster/candidates` | `?memory_mib&disk_gb&network&iso&ip_pool` where a VM could go, best first |
+
+`POST /api/v1/vms` takes `"node"` (server id or name; admins) and VMs carry `node` / `node_id`.
+
 ### Off-site backups (admins)
 
 | Method | Path | |

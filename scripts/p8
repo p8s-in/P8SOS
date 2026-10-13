@@ -92,6 +92,12 @@ p8 — manage P8S OS virtual machines
   p8 storage                       pool size and what each VM disk uses
   p8 storage grow                  use the system disk's free space for VMs (file pool)
   p8 lan-setup                     let VMs join your home network (Ethernet only, once)
+  p8 cluster                       servers in this cluster (master + workers) and their room
+  p8 cluster add [TUNNEL_ADDR]     on the master: one-time command to add a server
+                                   (TUNNEL_ADDR = public IP/name workers dial, if not this one)
+  p8 join MASTER_URL CODE          on a new server: join the master's cluster
+  p8 cluster remove ID [--force]   on the master: drop a server (n2, n3 …)
+  p8 cluster leave                 on a worker: stand alone again
   p8 status                        is p8sd healthy?
   p8 logs                          follow p8sd logs
   p8 test                          run the full automatic test
@@ -777,6 +783,38 @@ TXT
       echo "== install log (tail)"; sudo tail -40 /var/log/p8s-install.log 2>/dev/null
     } > p8s-report.txt 2>&1
     green "✔ saved $(pwd)/p8s-report.txt — send this file (no secrets in it)" ;;
+
+  cluster)
+    case ${1:-} in
+      ""|list)
+        body=$(call GET /cluster) || exit 1
+        role=$(jq -r '.role' <<<"$body")
+        [[ -z $role ]] && { echo "Not in a cluster. On the master: p8 cluster add"; exit 0; }
+        echo "This server is the cluster $role."
+        jq -r '.nodes[] | [.id, .name, .role, .wg_ip, (if .status.online then "online" else "OFFLINE" end),
+          "\((.status.capacity.mem_total_mib // 0) / 1024 | floor) GB RAM, \((.status.capacity.mem_used_mib // 0) / 1024 | floor) GB used, \(.status.capacity.vms // 0) VMs"] | @tsv' <<<"$body" |
+          { command -v column >/dev/null && column -t -s $'\t' || cat; } ;;
+      add)
+        ip=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i=1;i<NF;i++) if ($i=="src") print $(i+1)}')
+        port=${URL#https://*:}; port=${port%%/*}
+        body=$(call POST /cluster/join-code "$(jq -nc --arg u "https://$ip:$port" --arg e "${2:-}" '{master_url:$u, endpoint:$e}')") || exit 1
+        green "✔ Run this on the new server (valid for one hour, works once):"
+        echo; echo "  $(jq -r .command <<<"$body")"; echo
+        echo "It must reach https://$ip:$port and UDP port 51820 here (forward them on your router if it joins over the internet)." ;;
+      remove|rm)
+        [[ -n ${2:-} ]] || { red "which server? p8 cluster remove n2"; exit 1; }
+        q=""; [[ ${3:-} == --force ]] && q="?force=1"
+        call DELETE "/cluster/nodes/$2$q" >/dev/null && green "✔ removed $2" ;;
+      leave)
+        call POST /cluster/leave >/dev/null && green "✔ this server stands alone again (remove it on the master too)" ;;
+      *) red "p8 cluster [list|add|remove ID|leave]"; exit 1 ;;
+    esac ;;
+
+  join)
+    [[ -n ${1:-} && -n ${2:-} ]] || { red "usage: p8 join https://MASTER:8006 CODE  (the master shows this line under Server → Cluster)"; exit 1; }
+    body=$(call POST /cluster/join "$(jq -nc --arg u "$1" --arg c "$2" '{url:$u, code:$c}')") || exit 1
+    green "✔ joined: this server is $(jq -r .id <<<"$body") ($(jq -r .wg_ip <<<"$body")) of $(jq -r .master <<<"$body")'s cluster"
+    echo "VMs can now be put here from the master's dashboard." ;;
 
   help|-h|--help) usage ;;
   *) red "unknown command '$cmd'"; usage; exit 1 ;;

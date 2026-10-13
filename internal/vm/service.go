@@ -93,6 +93,8 @@ type Limits struct{ MaxVCPUs, MaxMemoryMiB, MaxDiskGB int }
 
 type VM struct {
 	Name      string     `json:"name"`
+	Node      string     `json:"node,omitempty"`    // server it runs on (clusters)
+	NodeID    string     `json:"node_id,omitempty"` // n1 = master
 	State     virt.State `json:"state"`
 	Template  string     `json:"template"`
 	User      string     `json:"user"`                  // login user with the SSH keys (debian, ubuntu, rocky, ...)
@@ -115,6 +117,7 @@ type VM struct {
 
 type CreateRequest struct {
 	Name      string   `json:"name"`
+	Node      string   `json:"node,omitempty"` // cluster server to put it on (id or name); "" = the best one
 	Template  string   `json:"template"`
 	VCPUs     int      `json:"vcpus"`
 	MemoryMiB int      `json:"memory_mib"`
