@@ -48,8 +48,11 @@ type Spec struct {
 // the change at their next power-on.
 //
 //	1 VGA display; 2 I/O thread + multi-queue virtio disk and network;
-//	3 memory balloon with free page reporting + guest memory statistics
-const DefVersion = 3
+//	3 memory balloon with free page reporting + guest memory statistics;
+//	4 all vCPUs as cores of one socket (Windows 10/11 Home use 1 socket and Pro
+//	  2: with libvirt's default of one socket per vCPU a 4-vCPU Windows VM
+//	  only ran on 1-2 of them) and native AIO for the Windows SATA disk
+const DefVersion = 4
 
 // VideoModel is the display adapter every P8S VM gets.
 const VideoModel = "vga"
@@ -98,7 +101,13 @@ type domainXML struct {
 	} `xml:"features"`
 	Clock *clockXML `xml:"clock"`
 	CPU   struct {
-		Mode string `xml:"mode,attr"`
+		Mode     string `xml:"mode,attr"`
+		Topology *struct {
+			Sockets int `xml:"sockets,attr"`
+			Dies    int `xml:"dies,attr"`
+			Cores   int `xml:"cores,attr"`
+			Threads int `xml:"threads,attr"`
+		} `xml:"topology"`
 	} `xml:"cpu"`
 	OnPoweroff string     `xml:"on_poweroff"`
 	OnReboot   string     `xml:"on_reboot"`
@@ -329,6 +338,12 @@ func DomainXML(s Spec) ([]byte, error) {
 		}
 	}
 	d.CPU.Mode = "host-passthrough"
+	d.CPU.Topology = &struct {
+		Sockets int `xml:"sockets,attr"`
+		Dies    int `xml:"dies,attr"`
+		Cores   int `xml:"cores,attr"`
+		Threads int `xml:"threads,attr"`
+	}{1, 1, max(s.VCPUs, 1), 1}
 	d.OnPoweroff, d.OnReboot, d.OnCrash = "destroy", "restart", "restart"
 
 	root := diskXML{Type: "block", Device: "disk"}
@@ -339,6 +354,7 @@ func DomainXML(s Spec) ([]byte, error) {
 	queues := min(max(s.VCPUs, 1), 8)
 	if win { // the Windows installer has no virtio driver
 		root.Target.Dev, root.Target.Bus = "sdc", "sata"
+		root.Driver.IO = "native" // with cache=none: no extra copy through the host
 	} else {
 		// its own I/O thread (disk work off the vCPU threads) and native AIO
 		d.IOThreads = 1

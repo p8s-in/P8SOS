@@ -74,3 +74,49 @@ func TestForward(t *testing.T) {
 		t.Fatalf("after restart %v", p)
 	}
 }
+
+func TestForwardRDP(t *testing.T) {
+	srv, _ := net.Listen("tcp", "127.0.0.1:0")
+	defer srv.Close()
+	go func() {
+		for {
+			c, err := srv.Accept()
+			if err != nil {
+				return
+			}
+			go func() { fmt.Fprint(c, "rdp\n"); c.Close() }()
+		}
+	}()
+	l, _ := net.Listen("tcp", "127.0.0.1:0")
+	base := l.Addr().(*net.TCPAddr).Port
+	l.Close()
+	guests := []Guest{{Name: "win1", IP: "10.0.0.9", NAT: true}, {Name: "off", NAT: true}}
+	m := &Manager{File: filepath.Join(t.TempDir(), "rdp.json"), Base: base, Listen: "127.0.0.1", Target: 3389,
+		Guests: func(context.Context) ([]Guest, error) { return guests, nil },
+		Dial: func(ctx context.Context, addr string) (net.Conn, error) {
+			if addr != "10.0.0.9:3389" {
+				return nil, fmt.Errorf("unexpected %s", addr)
+			}
+			return net.Dial("tcp", srv.Addr().String())
+		}}
+	if err := m.Sync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	read := func(port int) string {
+		c, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		s, _ := bufio.NewReader(c).ReadString('\n')
+		return s
+	}
+	if s := read(m.Ports()["win1"]); s != "rdp\n" {
+		t.Fatalf("relay got %q", s)
+	}
+	// no text banner for non-SSH protocols when the guest is down
+	if s := read(m.Ports()["off"]); s != "" {
+		t.Fatalf("stopped guest got %q", s)
+	}
+}

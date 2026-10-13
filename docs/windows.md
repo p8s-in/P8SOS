@@ -46,3 +46,17 @@ To finish setup without internet: console → **Keys… → Shift+F10**, then ty
 `start ms-cxh:localonly` (newer Windows 11) or `OOBE\BYPASSNRO` (older builds; the VM restarts and
 offers "I don't have internet"). Microsoft removes these shortcuts from time to time, so they may
 not work on the newest builds.
+
+## Making Windows smooth
+
+- **CPUs**: P8S gives every VM its vCPUs as cores of **one socket** (since definition version 4).
+  Windows 10/11 Home only use one socket and Pro two, so older VMs with 4 vCPUs ran on 1-2 of
+  them. Existing VMs pick this up after **Shutdown → Start** (not a restart inside Windows).
+- **Size**: Windows 11 wants at least 4 vCPUs and 6-8 GB RAM to feel quick; 2 vCPUs / 4 GB works
+  but is slow, especially while Windows Update and Defender run after setup.
+- **Drivers**: open the virtio-win CD in Explorer and run `virtio-win-guest-tools.exe` (balloon,
+  guest agent, display and network drivers).
+- **Use Remote Desktop for daily work**: the browser console is for installing and rescue. Windows
+  VMs on the private network get an RDP port on the server (shown under the VM: `RDP host:3391`).
+  Turn on Remote Desktop in Windows (Settings → System → Remote Desktop; Pro or higher) and connect
+  with "Remote Desktop Connection" to that address. VMs on the home network: connect to their own IP.

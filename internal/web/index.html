@@ -520,9 +520,11 @@ const store = {
   clear(){ mem = ""; try { sessionStorage.removeItem("p8s.token"); localStorage.removeItem("p8s.token"); } catch {} },
 };
 let mem = "", token = store.get(), vms = [], host = null, templates = [], busy = new Set(), timer = null, version = "";
-let me = null, userList = [], brandName = "P8S OS", sshPorts = {};
+let me = null, userList = [], brandName = "P8S OS", sshPorts = {}, rdpPorts = {};
 // "SSH from any computer" line for a guest on the private network (server port -> guest:22)
 function sshLine(name, user){
+  const r = rdpPorts[name];
+  if (r) return `<div class="sub"><span class="mono copy" data-copy="${esc(location.hostname + ":" + r)}" title="Remote Desktop (smoother than the console): in Windows open 'Remote Desktop Connection' and connect to ${esc(location.hostname)}:${r}. Turn on Remote Desktop inside the VM first (Settings → System → Remote Desktop; needs Windows Pro).">RDP ${esc(location.hostname)}:${r}</span></div>`;
   const p = sshPorts[name];
   if (!p) return "";
   const cmd = `ssh -p ${p} ${user || "root"}@${location.hostname}`;
@@ -1778,7 +1780,7 @@ async function refresh(withHost, background){
     // independent lookups run side by side
     const [v, sp] = await Promise.all([call("GET", "/vms"), call("GET", "/ssh-ports").catch(() => ({})),
       typeof loadCTs === "function" ? loadCTs() : null]);
-    vms = v.vms; sshPorts = sp.ports || {};
+    vms = v.vms; sshPorts = sp.ports || {}; rdpPorts = sp.rdp || {};
     if (withHost || tick % 4 === 0 || !me) me = await call("GET", "/me");
     if (isAdmin() && (withHost || tick % 4 === 0)) { host = await call("GET", "/host").catch(() => null); await loadHostMetrics(); }
     if (withHost && !templates.length) templates = (await call("GET", "/templates").catch(() => ({templates: []}))).templates;

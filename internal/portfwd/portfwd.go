@@ -36,6 +36,7 @@ type Manager struct {
 	Guests func(ctx context.Context) ([]Guest, error) // VMs + containers
 	Log    *slog.Logger
 	Dial   func(ctx context.Context, addr string) (net.Conn, error) // nil = TCP (tests replace it)
+	Target int                                                      // port on the guest; 0 = 22 (SSH), 3389 = Remote Desktop
 
 	mu        sync.Mutex
 	ports     map[string]int // guest -> port
@@ -172,8 +173,17 @@ func (m *Manager) relay(name string, c net.Conn) {
 	m.mu.Lock()
 	ip := m.ips[name]
 	m.mu.Unlock()
+	target := m.Target
+	if target == 0 {
+		target = 22
+	}
+	say := func(s string) { // SSH clients show text; other protocols would choke on it
+		if target == 22 {
+			_, _ = io.WriteString(c, s)
+		}
+	}
 	if ip == "" {
-		_, _ = io.WriteString(c, "P8S OS: "+name+" is not running or has no address yet\r\n")
+		say("P8S OS: " + name + " is not running or has no address yet\r\n")
 		return
 	}
 	dial := m.Dial
@@ -182,10 +192,10 @@ func (m *Manager) relay(name string, c net.Conn) {
 		dial = func(ctx context.Context, addr string) (net.Conn, error) { return d.DialContext(ctx, "tcp", addr) }
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	t, err := dial(ctx, net.JoinHostPort(ip, "22"))
+	t, err := dial(ctx, net.JoinHostPort(ip, fmt.Sprint(target)))
 	cancel()
 	if err != nil {
-		_, _ = io.WriteString(c, "P8S OS: can't reach SSH on "+name+" ("+err.Error()+")\r\n")
+		say("P8S OS: can't reach SSH on " + name + " (" + err.Error() + ")\r\n")
 		return
 	}
 	defer t.Close()

@@ -364,6 +364,24 @@ func serve(args []string) error {
 			}}
 		apiSrv.SSHPorts = pf.Ports
 		go pf.Run(ctx)
+		// Remote Desktop for Windows VMs on the private network: server:3391.. -> VM:3389
+		// (much smoother than the browser console for daily use)
+		rdp := &portfwd.Manager{File: filepath.Join(cfg.DataDir, "rdp-ports.json"), Base: 3391, Target: 3389, Log: log,
+			Guests: func(ctx context.Context) ([]portfwd.Guest, error) {
+				vms, err := svc.List(ctx)
+				if err != nil {
+					return nil, err
+				}
+				var gs []portfwd.Guest
+				for _, v := range vms {
+					if v.OSType == "windows" || v.OSType == "windows11" {
+						gs = append(gs, portfwd.Guest{Name: v.Name, IP: v.IP, NAT: v.Network == "nat"})
+					}
+				}
+				return gs, nil
+			}}
+		apiSrv.RDPPorts = rdp.Ports
+		go rdp.Run(ctx)
 	}
 	go func() { // P8S Cloud billing: hourly charges, low/negative balance, suspension
 		for {

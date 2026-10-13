@@ -126,6 +126,8 @@ type Server struct {
 	HostShell func() (*ct.Terminal, error)
 	// SSHPorts lists guest -> SSH port on this server; nil = off.
 	SSHPorts func() map[string]int
+	// RDPPorts: Windows VM -> Remote Desktop port on this server; nil = off.
+	RDPPorts func() map[string]int
 
 	once      sync.Once
 	lmOnce    sync.Once
@@ -1126,5 +1128,13 @@ func (s *Server) sshPorts(w http.ResponseWriter, r *http.Request) {
 			out[n] = port
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ports": out, "enabled": true})
+	rdp := map[string]int{}
+	if s.RDPPorts != nil {
+		for n, port := range s.RDPPorts() {
+			if p.Admin || mine[n] {
+				rdp[n] = port
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ports": out, "rdp": rdp, "enabled": true})
 }

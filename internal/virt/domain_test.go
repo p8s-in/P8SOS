@@ -175,10 +175,14 @@ func TestFastIO(t *testing.T) {
 	}
 	s.OSType = "windows"
 	x, _ = DomainXML(s)
-	for _, bad := range []string{"iothread", `io="native"`, "queues="} {
+	for _, bad := range []string{"iothread", "queues="} {
 		if strings.Contains(string(x), bad) {
 			t.Fatalf("windows got %s:\n%s", bad, x)
 		}
+	}
+	// one socket with 4 cores (Windows Home/Pro only use 1-2 sockets)
+	if !strings.Contains(string(x), `<topology sockets="1" dies="1" cores="4" threads="1"></topology>`) || !strings.Contains(string(x), `io="native"`) {
+		t.Fatalf("windows cpu/disk:\n%s", x)
 	}
 }
 
