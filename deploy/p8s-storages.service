@@ -1,0 +1,14 @@
+[Unit]
+Description=P8S OS: connect network storage (NFS, iSCSI)
+Wants=network-online.target
+After=network-online.target iscsid.service open-iscsi.service zfs-import.target p8s-zfs-keys.service
+Before=libvirtd.service virtqemud.service p8sd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+TimeoutStartSec=300
+ExecStart=/usr/local/share/p8s/storages-up.sh
+
+[Install]
+WantedBy=multi-user.target

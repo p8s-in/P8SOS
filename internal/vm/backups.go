@@ -151,7 +151,7 @@ func (s *Service) restoredExtras(ctx context.Context, dom string, m Backup) ([]v
 	var l []virt.ExtraDisk
 	for _, e := range m.Extra {
 		x := virt.ExtraDisk{Index: e.Index, SizeGB: e.SizeGB,
-			Path: fmt.Sprintf("/dev/zvol/%s/%s-disk%d", s.Backups.Dataset, dom, e.Index)}
+			Path: "/dev/zvol/" + s.Backups.DiskDataset(dom, e.Index)}
 		if w, ok := s.Disks.(extraWaiter); ok {
 			d, err := w.WaitExtra(ctx, dom, e.Index)
 			if err != nil {
@@ -314,7 +314,7 @@ func (s *Service) restoreAsNew(ctx context.Context, name string, m Backup, p job
 		return fail(err)
 	}
 	undo = append(undo, func() { s.logErr("rollback restored disk", s.Disks.DestroyDisk(bg, dom)) })
-	disk := "/dev/zvol/" + s.Backups.Dataset + "/" + dom + "-disk0"
+	disk := "/dev/zvol/" + s.Backups.DiskDataset(dom, 0)
 	if w, ok := s.Disks.(deviceWaiter); ok {
 		d, err := w.WaitDevice(ctx, dom)
 		if err != nil {

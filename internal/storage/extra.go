@@ -15,7 +15,7 @@ import (
 // beside <vm>-disk0. Snapshots, rollbacks and deletes cover all of them.
 
 func (z *ZFS) extraDataset(vm string, i int) string {
-	return fmt.Sprintf("%s/%s-disk%d", z.Dataset, vm, i)
+	return z.DiskDataset(vm, i)
 }
 
 // ExtraPath is the block device of data disk i.
@@ -23,11 +23,12 @@ func (z *ZFS) ExtraPath(vm string, i int) string { return "/dev/zvol/" + z.extra
 
 // Extras lists the indexes of the VM's data disks that exist.
 func (z *ZFS) Extras(ctx context.Context, vm string) []int {
-	out, err := z.Run.Run(ctx, "zfs", "list", "-H", "-o", "name", "-t", "volume", "-d", "1", z.Dataset)
+	p := z.parent(vm)
+	out, err := z.Run.Run(ctx, "zfs", "list", "-H", "-o", "name", "-t", "volume", "-d", "1", p)
 	if err != nil {
 		return nil
 	}
-	return parseExtras(string(out), z.Dataset+"/"+vm+"-disk")
+	return parseExtras(string(out), p+"/"+vm+"-disk")
 }
 
 func parseExtras(out, prefix string) []int {

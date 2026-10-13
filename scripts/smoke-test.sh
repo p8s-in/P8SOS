@@ -508,6 +508,36 @@ else
   echo "  skipped: home network not set up on this host"
 fi
 
+step "9. network storage (NAS / SAN tests only with P8S_NFS=server:/export, P8S_ISCSI='portal target lun')"
+api GET /storages; expect "list network storage" 200
+api POST /storages '{"name":"Bad Name","type":"nfs","server":"x","export":"/x"}'; expect "bad storage name is refused" 400
+command -v iscsiadm >/dev/null && ok "iscsiadm installed" || bad "open-iscsi missing (sudo apt install open-iscsi)"
+command -v mount.nfs >/dev/null && ok "mount.nfs installed" || bad "nfs-common missing (sudo apt install nfs-common)"
+systemctl is-enabled -q p8s-storages.service 2>/dev/null && ok "p8s-storages.service enabled (connects them at boot)" || bad "p8s-storages.service not enabled"
+if [[ -n ${P8S_NFS:-} ]]; then
+  api POST /storages '{"name":"smokenas","type":"nfs","server":"'"${P8S_NFS%%:*}"'","export":"'"${P8S_NFS#*:}"'"}'; expect "connect NFS share" 201
+  mountpoint -q /mnt/p8s/smokenas && ok "mounted at /mnt/p8s/smokenas" || bad "not mounted"
+  sudo test -d /mnt/p8s/smokenas/p8s/iso && ok "p8s/iso folder on the NAS" || bad "no p8s/iso folder"
+  grep -q "^# p8s-storage smokenas" /etc/fstab && ok "in /etc/fstab" || bad "not in /etc/fstab"
+  api DELETE /storages/smokenas; expect "disconnect NFS share" 204
+  grep -q "p8s-storage smokenas" /etc/fstab && bad "fstab line left" || ok "fstab line removed"
+fi
+if [[ -n ${P8S_ISCSI:-} ]]; then
+  read -r ip_ tgt_ lun_ <<<"$P8S_ISCSI"
+  api POST /storages/discover '{"portal":"'"$ip_"'"}'; expect "find iSCSI targets" 200
+  api POST /storages '{"name":"smokesan","type":"iscsi","portal":"'"$ip_"'","target":"'"$tgt_"'","lun":'"${lun_:-0}"',"format":true}'
+  expect "connect iSCSI disk (formats it)" 201
+  sudo zpool list -H p8s-smokesan >/dev/null 2>&1 && ok "pool p8s-smokesan imported" || bad "pool p8s-smokesan missing"
+  SN=${NAME}san
+  api POST /vms '{"name":"'"$SN"'","template":"'"$TEMPLATE"'","vcpus":1,"memory_mib":512,"storage":"smokesan","start":false}'
+  expect "create VM on the SAN" 201
+  [[ $(jq -r .storage <<<"$BODY") == smokesan ]] && ok "API reports storage smokesan" || bad "storage: $(jq -r .storage <<<"$BODY")"
+  sudo zfs list -H "p8s-smokesan/vms/p8s-$SN-disk0" >/dev/null 2>&1 && ok "its disk is on the SAN" || bad "disk not on the SAN"
+  api DELETE /storages/smokesan; expect "disconnect refused while a VM is on it" 409
+  api DELETE "/vms/$SN"; expect "delete SAN VM" 204
+  api DELETE /storages/smokesan; expect "disconnect iSCSI disk" 204
+fi
+
 echo
 echo "== result: $pass passed, $fail failed"
 [[ $fail -eq 0 ]]

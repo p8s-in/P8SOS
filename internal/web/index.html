@@ -244,6 +244,8 @@ dialog.as-page #mClose,dialog.as-page #cmClose{display:none}
   <div class="hint" id="cNetHint"></div>
   <div id="cVlanBox" hidden><label for="cVlan">VLAN <span class="muted">(optional; the switch port must carry it tagged)</span></label>
     <input id="cVlan" type="number" min="1" max="4094" placeholder="none — the untagged home network"></div>
+  <div id="cStoreBox" hidden><label for="cStore">Storage <span class="muted">(where its disks live)</span></label>
+    <select id="cStore"></select></div>
   <div id="cPlanBox" hidden><label>Size and price</label><div id="cPlans" class="plans"></div></div>
   <div id="cOwnerBox" hidden><label for="cOwner">For</label><select id="cOwner"></select>
     <div class="hint">The customer sees and manages this VM; it counts against their plan.</div></div>
@@ -1053,6 +1055,9 @@ async function openCreate(){
   }
   if (!lan && $("#cNet").value === "lan") $("#cNet").value = "nat";
   netHint();
+  const stores = host?.storages || [];
+  $("#cStoreBox").hidden = !(isAdmin() && stores.length > 1);
+  $("#cStore").innerHTML = stores.map(x => `<option value="${esc(x)}">${x === "local" ? "This server's disks (local)" : esc(x) + " — network storage (iSCSI)"}</option>`).join("");
   await cloudCreate();
   $("#dlgCreate").showModal(); $("#cName").focus();
 }
@@ -1120,6 +1125,7 @@ $("#fCreate").onsubmit = async e => {
     const common = {name, ...(plan ? {plan: plan.id} : {vcpus: +$("#cCpu").value, memory_mib: +$("#cMem").value, disk_gb: +$("#cDisk").value}),
       ...(plan?.public_ip ? {} : pool ? {ip_pool: pool} : {network: net}),
       ...(net === "lan" && !$("#cVlanBox").hidden && +$("#cVlan").value ? {vlan: +$("#cVlan").value} : {}),
+      ...(!$("#cStoreBox").hidden && $("#cStore").value !== "local" ? {storage: $("#cStore").value} : {}),
       ...(!$("#cOwnerBox").hidden && $("#cOwner").value ? {owner: $("#cOwner").value} : {}),
       ...($("#cNodeBox") && !$("#cNodeBox").hidden && $("#cNode").value ? {node: $("#cNode").value} : {})};
     if (iso) {
@@ -1265,7 +1271,7 @@ function renderManage(){
   const v = vms.find(x => x.name === mName);
   if (!v) { $("#dlgManage").close(); return; }
   const stopped = v.state === "stopped";
-  $("#mSub").textContent = `${v.state} · ${v.vcpus} CPU · ${gb(v.memory_mib)} RAM · ${v.disk_gb} GB disk` + ((v.disks || []).length ? ` + ${v.disks.length} extra` : "");
+  $("#mSub").textContent = `${v.state} · ${v.vcpus} CPU · ${gb(v.memory_mib)} RAM · ${v.disk_gb} GB disk` + ((v.disks || []).length ? ` + ${v.disks.length} extra` : "") + (v.storage ? ` · on ${v.storage}` : "");
   if ($("#mRzHint").dataset.st !== v.state + mName) $("#mRzHint").innerHTML = stopped ? "Change CPUs, memory or disk size. Takes effect when you start the VM."
     : `Stop the VM first to resize it. <button class="btn" data-m="stop">Stop ${esc(v.name)}</button>`;
   $("#mRzHint").dataset.st = v.state + mName;
@@ -1564,8 +1570,8 @@ async function loadIsos(){
   try {
     const l = (await call("GET", "/isos")).isos;
     $("#iList").innerHTML = l.length ? l.map(i => `<tr data-iso="${esc(i.name)}"><td><b class="mono">${esc(i.name)}</b>
-      <div class="sub">${fmtBytes(i.bytes)} · added ${esc(fmtTime(i.added_at))} · ${isoBoot[i.boot] || "boot: unknown"}</div></td>
-      <td><button class="btn danger" data-i="del">Delete</button></td></tr>`).join("")
+      <div class="sub">${fmtBytes(i.bytes)} · added ${esc(fmtTime(i.added_at))} · ${isoBoot[i.boot] || "boot: unknown"}${i.storage ? ` · on NAS ${esc(i.storage)}` : ""}</div></td>
+      <td>${i.storage ? `<span class="sub">on the NAS</span>` : `<button class="btn danger" data-i="del">Delete</button>`}</td></tr>`).join("")
       : `<tr><td class="muted">No ISOs yet.</td></tr>`;
   } catch (err) { toast(err.message, true); }
 }
@@ -2026,5 +2032,6 @@ document.addEventListener("DOMContentLoaded", render); // after cloud.js has loa
 <script src="/security.js"></script>
 <script src="/remote.js"></script>
 <script src="/disks.js"></script>
+<script src="/storages.js"></script>
 </body>
 </html>

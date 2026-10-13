@@ -50,6 +50,7 @@ var (
 		"PUT /alerts/settings", "PUT /ha/settings",
 		"PUT /offsite/targets/[^/]+", "DELETE /offsite/targets/[^/]+",
 		"PUT /sso", "PUT /audit/settings", "PUT /security", "PUT /ldap", "POST /ldap/test",
+		"POST /storages", "POST /storages/[^/]+/connect", "DELETE /storages/[^/]+",
 		"PUT /remote/vpn", "POST /remote/vpn/devices", "DELETE /remote/vpn/devices/[^/]+", "POST /remote/forward",
 		// server-to-server calls of the cluster (the master's token is an admin)
 		"* /cluster/(vm-export|replica|replica-send)/.+", "* /cluster/(vm-import|replica-recv|ha-sync)",

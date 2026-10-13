@@ -78,6 +78,11 @@ fi
 if ! command -v swtpm >/dev/null || [[ ! -e /usr/share/OVMF/OVMF_CODE_4M.ms.fd && ! -e /usr/share/OVMF/OVMF_CODE_4M.secboot.fd ]]; then
   apt-get install -y -qq swtpm swtpm-tools ovmf >/dev/null 2>&1 && ok "TPM and UEFI firmware installed (Windows 11 VMs)" || echo "  note: swtpm not installed; Windows 11 VMs won't be available"
 fi
+# Network storage: NFS shares (NAS) and iSCSI disks (SAN).
+if ! command -v mount.nfs >/dev/null || ! command -v iscsiadm >/dev/null; then
+  apt-get install -y -qq nfs-common open-iscsi >/dev/null 2>&1 && ok "NFS and iSCSI tools installed (network storage)" || echo "  note: nfs-common/open-iscsi not installed; network storage won't be available"
+fi
+systemctl enable --now iscsid.socket >/dev/null 2>&1 || true
 # Clusters: servers talk over a WireGuard tunnel (kernel module is built in; this is the wg tool).
 if ! command -v wg >/dev/null; then
   apt-get install -y -qq wireguard-tools >/dev/null 2>&1 && ok "WireGuard tools installed (clusters)" || echo "  note: wireguard-tools not installed; clusters won't be available"
@@ -173,6 +178,8 @@ install -m 0755 "$REPO/scripts/vlans.sh" /usr/local/share/p8s/vlans.sh
 install -m 0755 "$REPO/scripts/setup-bond.sh" /usr/local/share/p8s/setup-bond.sh
 install -m 0755 "$REPO/scripts/ipv6.sh" /usr/local/share/p8s/ipv6.sh
 install -m 0644 "$REPO/deploy/p8s-vlans.service" /etc/systemd/system/p8s-vlans.service
+install -m 0755 "$REPO/scripts/storages-up.sh" /usr/local/share/p8s/storages-up.sh
+install -m 0644 "$REPO/deploy/p8s-storages.service" /etc/systemd/system/p8s-storages.service
 # guest internet: repair at boot and after every firewall reload (which can wipe libvirt's NAT rules)
 install -m 0644 "$REPO/deploy/p8s-net.service" /etc/systemd/system/p8s-net.service
 install -d -m 0755 /etc/systemd/system/nftables.service.d
@@ -248,6 +255,7 @@ ok "p8sd running: $(curl -kfs https://127.0.0.1:8006/api/v1/health)"
 # Guest internet: check and repair now (VMs keep running), and at every boot
 systemctl enable p8s-net.service >/dev/null 2>&1 || true
 systemctl enable p8s-vlans.service >/dev/null 2>&1 || true
+systemctl enable p8s-storages.service >/dev/null 2>&1 || true
 bash /usr/local/share/p8s/netcheck.sh --repair | sed 's/^/  /' || true
 
 # Host tuning: ZFS cache limit, KSM, vhost_net, low swappiness

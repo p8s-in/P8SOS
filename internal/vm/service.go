@@ -130,6 +130,9 @@ type VM struct {
 	Public *ippool.Lease `json:"public,omitempty"`
 	// Disks are the data disks next to the root disk (DiskGB).
 	Disks []Disk `json:"disks,omitempty"`
+	// Storage holds the VM's disks: empty = this server's own pool, else a
+	// network storage (iSCSI).
+	Storage string `json:"storage,omitempty"`
 }
 
 type CreateRequest struct {
@@ -143,6 +146,8 @@ type CreateRequest struct {
 	UserData  string   `json:"user_data,omitempty"`
 	Network   string   `json:"network,omitempty"` // "nat" (default), "lan", or "public" (with ip_pool)
 	VLAN      int      `json:"vlan,omitempty"`    // with "lan": put it on this tagged VLAN (1-4094)
+	// Storage puts the disks on a network storage (iSCSI); "" / "local" = this server's pool.
+	Storage string `json:"storage,omitempty"`
 	// IPPool gives the VM a public address from this pool (static, via cloud-init).
 	IPPool string `json:"ip_pool,omitempty"`
 	// Plan is a priced size (P8S Cloud); the API fills in CPUs/RAM/disk from it.
@@ -306,6 +311,9 @@ func (s *Service) validate(r *CreateRequest) (config.Template, error) {
 	if msg := s.checkVLAN(r.Network, r.VLAN); msg != "" {
 		errs = append(errs, msg)
 	}
+	if msg := s.checkStorage(r.Storage); msg != "" {
+		errs = append(errs, msg)
+	}
 	if r.RootPassword != "" {
 		if len(r.RootPassword) < 8 || len(r.RootPassword) > 128 || strings.ContainsAny(r.RootPassword, "\n\r\x00") {
 			errs = append(errs, "root_password must be 8-128 characters on one line")
@@ -362,6 +370,9 @@ func (s *Service) Create(ctx context.Context, r CreateRequest) (VM, error) {
 	// Rollback must still run if the client disconnects mid-create.
 	bg := context.WithoutCancel(ctx)
 
+	if err := s.place(dom, r.Storage); err != nil {
+		return VM{}, err
+	}
 	disk, err := s.Disks.CloneDisk(ctx, t.Snapshot, dom, r.DiskGB)
 	if err != nil {
 		return VM{}, err
@@ -475,6 +486,7 @@ func (s *Service) get(ctx context.Context, dom string) (VM, error) {
 		v.Drivers = filepath.Base(spec.DriversISO)
 	}
 	v.OSType = spec.OSType
+	v.Storage = s.storageOf(dom)
 	for _, e := range spec.Extra {
 		v.Disks = append(v.Disks, Disk{Index: e.Index, SizeGB: e.SizeGB, Device: virt.ExtraTarget(spec, e.Index)})
 	}

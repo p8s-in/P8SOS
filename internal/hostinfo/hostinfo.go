@@ -21,8 +21,9 @@ type Info struct {
 	PoolSizeGB  float64  `json:"pool_size_gb"`
 	PoolFreeGB  float64  `json:"pool_free_gb"`
 	UptimeSec   int      `json:"uptime_sec"`
-	Networks    []string `json:"networks"` // networks new VMs can join: "nat", and "lan" once set up
-	VLANs       bool     `json:"vlans"`    // VMs on "lan" may use tagged VLANs
+	Networks    []string `json:"networks"`           // networks new VMs can join: "nat", and "lan" once set up
+	VLANs       bool     `json:"vlans"`              // VMs on "lan" may use tagged VLANs
+	Storages    []string `json:"storages,omitempty"` // where new VMs' disks can go ("local", iSCSI storages)
 }
 
 // Collect never fails as a whole: missing pieces are left at zero.

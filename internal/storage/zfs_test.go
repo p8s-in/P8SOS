@@ -177,3 +177,37 @@ func TestExtraDisks(t *testing.T) {
 		t.Error("disk 2 has no such snapshot; it must be left alone")
 	}
 }
+
+func TestPools(t *testing.T) {
+	r := &testfake.Runner{Out: map[string]string{
+		"zfs list -H -o name -t volume -d 1 p8s-san/vms": "p8s-san/vms/p8s-db-disk0\np8s-san/vms/p8s-db-disk1\n",
+	}}
+	z := &ZFS{Run: r, Dataset: "tank/vms", Exists: func(string) bool { return true },
+		Pools: func() map[string]string { return map[string]string{"san": "p8s-san/vms"} }}
+	ctx := context.Background()
+	if z.DevicePath("p8s-db") != "/dev/zvol/p8s-san/vms/p8s-db-disk0" || z.StorageOf("p8s-db") != "san" {
+		t.Fatalf("found on san: %s %s", z.DevicePath("p8s-db"), z.StorageOf("p8s-db"))
+	}
+	if z.StorageOf("p8s-web") != "local" || z.DevicePath("p8s-web") != "/dev/zvol/tank/vms/p8s-web-disk0" {
+		t.Fatal("others stay local")
+	}
+	if got := z.Extras(ctx, "p8s-db"); len(got) != 1 || got[0] != 1 {
+		t.Fatalf("extras on san %v", got)
+	}
+	if err := z.Place("p8s-new", "nope"); err == nil {
+		t.Fatal("unknown storage accepted")
+	}
+	if err := z.Place("p8s-new", "san"); err != nil {
+		t.Fatal(err)
+	}
+	if dev, err := z.CreateDisk(ctx, "p8s-new", 10); err != nil || dev != "/dev/zvol/p8s-san/vms/p8s-new-disk0" {
+		t.Fatalf("create on san %q %v", dev, err)
+	}
+	if s := z.Storages(); len(s) != 2 || s[0] != "local" || s[1] != "san" {
+		t.Fatalf("storages %v", s)
+	}
+	_ = z.DestroyDisk(ctx, "p8s-new")
+	if !strings.Contains(strings.Join(r.Calls, "\n"), "zfs destroy -r p8s-san/vms/p8s-new-disk0") {
+		t.Fatalf("calls %v", r.Calls)
+	}
+}

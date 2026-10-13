@@ -115,6 +115,9 @@ func (s *Service) createFromISO(ctx context.Context, r CreateRequest) (VM, error
 	default:
 		errs = append(errs, `network must be "nat", "lan" or "public"`)
 	}
+	if msg := s.checkStorage(r.Storage); msg != "" {
+		errs = append(errs, msg)
+	}
 	if len(errs) > 0 {
 		return VM{}, fmt.Errorf("%w: %s", ErrInvalid, strings.Join(errs, "; "))
 	}
@@ -131,6 +134,9 @@ func (s *Service) createFromISO(ctx context.Context, r CreateRequest) (VM, error
 	}
 	if err := s.Disks.DestroyDisk(ctx, dom); err != nil { // leftover of an interrupted create
 		return VM{}, fmt.Errorf("remove leftover disk: %w", err)
+	}
+	if err := s.place(dom, r.Storage); err != nil {
+		return VM{}, err
 	}
 	bg := context.WithoutCancel(ctx)
 	disk, err := dc.CreateDisk(ctx, dom, r.DiskGB)

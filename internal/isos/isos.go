@@ -29,6 +29,8 @@ type ISO struct {
 	// Boot: what can start from it — "bios+uefi", "bios", "uefi" or "none"
 	// (drivers/data disc or damaged download; see BootInfo).
 	Boot string `json:"boot"`
+	// Storage is the network storage (NAS) it is on; empty = this server.
+	Storage string `json:"storage,omitempty"`
 }
 
 var (
@@ -49,6 +51,20 @@ const MaxBytes = 16 << 30
 type Library struct {
 	Dir    string       // e.g. /var/lib/p8s/isos
 	Client *http.Client // for downloads; nil = http.DefaultClient
+	// Shelves are more ISO folders, read-only (NFS storages): name -> folder.
+	Shelves func() map[string]string
+}
+
+func (l *Library) shelves() [][2]string {
+	if l.Shelves == nil {
+		return nil
+	}
+	var out [][2]string
+	for name, dir := range l.Shelves() {
+		out = append(out, [2]string{name, dir})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i][0] < out[j][0] })
+	return out
 }
 
 // ipv4First downloads via netx: IPv4 first, system resolver and public DNS
@@ -79,15 +95,44 @@ func (l *Library) Path(name string) (string, error) {
 		return "", fmt.Errorf("%w: %q", ErrNotFound, name)
 	}
 	p := filepath.Join(l.Dir, name)
-	if _, err := os.Stat(p); err != nil {
-		return "", fmt.Errorf("%w: %q", ErrNotFound, name)
+	if _, err := os.Stat(p); err == nil {
+		return p, nil
 	}
-	return p, nil
+	for _, sh := range l.shelves() {
+		p := filepath.Join(sh[1], name)
+		if _, err := os.Stat(p); err == nil {
+			return p, nil
+		}
+	}
+	return "", fmt.Errorf("%w: %q", ErrNotFound, name)
 }
 
-// List returns all ISOs, sorted by name.
+// List returns all ISOs, sorted by name: this server's, then those on network
+// storages (a name this server has hides the same name on a NAS).
 func (l *Library) List() ([]ISO, error) {
-	ents, err := os.ReadDir(l.Dir)
+	out, err := listDir(l.Dir, "")
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	for _, i := range out {
+		seen[i.Name] = true
+	}
+	for _, sh := range l.shelves() {
+		more, _ := listDir(sh[1], sh[0]) // a NAS that is away just shows nothing
+		for _, i := range more {
+			if !seen[i.Name] {
+				seen[i.Name] = true
+				out = append(out, i)
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+func listDir(dir, storage string) ([]ISO, error) {
+	ents, err := os.ReadDir(dir)
 	if errors.Is(err, os.ErrNotExist) {
 		return []ISO{}, nil
 	}
@@ -100,10 +145,10 @@ func (l *Library) List() ([]ISO, error) {
 			continue
 		}
 		if fi, err := e.Info(); err == nil {
-			out = append(out, ISO{Name: e.Name(), Bytes: fi.Size(), AddedAt: fi.ModTime().UTC().Format(time.RFC3339), Boot: Boot(filepath.Join(l.Dir, e.Name()))})
+			out = append(out, ISO{Name: e.Name(), Bytes: fi.Size(), AddedAt: fi.ModTime().UTC().Format(time.RFC3339),
+				Boot: Boot(filepath.Join(dir, e.Name())), Storage: storage})
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
 }
 
@@ -166,6 +211,9 @@ func (l *Library) Delete(name string) error {
 	p, err := l.Path(name)
 	if err != nil {
 		return err
+	}
+	if filepath.Dir(p) != filepath.Clean(l.Dir) {
+		return fmt.Errorf("%w: %q is on a network storage; delete it there (on the NAS)", ErrInvalid, name)
 	}
 	return os.Remove(p)
 }

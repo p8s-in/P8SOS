@@ -118,3 +118,24 @@ func TestPresetMirrors(t *testing.T) {
 		t.Fatal("virtio-win needs a fallback")
 	}
 }
+
+func TestShelves(t *testing.T) {
+	dir, nas := t.TempDir(), t.TempDir()
+	os.WriteFile(filepath.Join(dir, "a.iso"), []byte("x"), 0o644)
+	os.WriteFile(filepath.Join(nas, "a.iso"), []byte("nas copy"), 0o644)
+	os.WriteFile(filepath.Join(nas, "win.iso"), []byte("y"), 0o644)
+	l := &Library{Dir: dir, Shelves: func() map[string]string { return map[string]string{"nas": nas, "gone": "/nonexistent/p8s"} }}
+	list, err := l.List()
+	if err != nil || len(list) != 2 || list[0].Storage != "" || list[1].Name != "win.iso" || list[1].Storage != "nas" {
+		t.Fatalf("list %+v %v", list, err)
+	}
+	if p, _ := l.Path("win.iso"); p != filepath.Join(nas, "win.iso") {
+		t.Fatalf("path %s", p)
+	}
+	if err := l.Delete("win.iso"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("delete on NAS: %v", err)
+	}
+	if err := l.Delete("a.iso"); err != nil {
+		t.Fatal(err)
+	}
+}

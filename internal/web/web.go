@@ -37,6 +37,8 @@ var (
 	haJS []byte
 	//go:embed security.js
 	securityJS []byte
+	//go:embed storages.js
+	storagesJS []byte
 	//go:embed disks.js
 	disksJS []byte
 	//go:embed remote.js
@@ -75,6 +77,7 @@ var assets = map[string]asset{
 	"/security.js":       {securityJS, "text/javascript; charset=utf-8", "no-cache"},
 	"/remote.js":         {remoteJS, "text/javascript; charset=utf-8", "no-cache"},
 	"/disks.js":          {disksJS, "text/javascript; charset=utf-8", "no-cache"},
+	"/storages.js":       {storagesJS, "text/javascript; charset=utf-8", "no-cache"},
 	"/terminal":          {terminalPage, "text/html; charset=utf-8", "no-cache"},
 	"/xterm.min.js":      {xtermJS, "text/javascript; charset=utf-8", "public, max-age=86400"},
 	"/xterm-fit.min.js":  {xtermFitJS, "text/javascript; charset=utf-8", "public, max-age=86400"},

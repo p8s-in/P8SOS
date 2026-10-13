@@ -54,6 +54,7 @@ import (
 	"p8sos/internal/secpol"
 	"p8sos/internal/sso"
 	"p8sos/internal/storage"
+	"p8sos/internal/storages"
 	"p8sos/internal/support"
 	"p8sos/internal/tasks"
 	"p8sos/internal/tlsutil"
@@ -110,7 +111,9 @@ func serve(args []string) error {
 	}
 
 	run := execx.System{}
-	disks := &storage.ZFS{Run: run, Dataset: cfg.VMDataset}
+	// network storages (NFS shares, iSCSI disks with a ZFS pool for VM disks)
+	nets := &storages.Manager{Run: run, File: filepath.Join(cfg.DataDir, "storages.json")}
+	disks := &storage.ZFS{Run: run, Dataset: cfg.VMDataset, Pools: nets.VMPools}
 	pools := &ippool.Store{Path: filepath.Join(cfg.DataDir, "ippools.json")}
 	svc := &vm.Service{
 		HV:           &virt.Virsh{Run: run, URI: cfg.LibvirtURI},
@@ -124,9 +127,9 @@ func serve(args []string) error {
 		Limits:       vm.Limits{MaxVCPUs: cfg.MaxVCPUs, MaxMemoryMiB: cfg.MaxMemoryMiB, MaxDiskGB: cfg.MaxDiskGB},
 		SSHKeys:      cfg.SSHKeys,
 		Log:          log,
-		Backups:      &backup.Store{Dir: cfg.BackupDir, Dataset: cfg.VMDataset, Run: run},
+		Backups:      &backup.Store{Dir: cfg.BackupDir, Dataset: cfg.VMDataset, Run: run, Parent: disks.Parent},
 		Jobs:         &jobs.Manager{Log: log},
-		ISOs:         &isos.Library{Dir: cfg.ISODir},
+		ISOs:         &isos.Library{Dir: cfg.ISODir, Shelves: nets.ISOShelves},
 		ImportDir:    filepath.Join(cfg.DataDir, "import"),   // Proxmox backups, disk images to import
 		ReplicaDir:   filepath.Join(cfg.DataDir, "replicas"), // copies of other servers' VMs (high availability)
 		Pools:        pools,
@@ -334,6 +337,18 @@ func serve(args []string) error {
 			_, err := run.Run(context.Background(), "systemctl", "poweroff")
 			return err
 		},
+		Storages: func(ctx context.Context) []monitor.Storage {
+			var out []monitor.Storage
+			for _, st := range nets.List(ctx) {
+				free := -1
+				if st.SizeBytes > 0 {
+					free = int(st.FreeBytes * 100 / st.SizeBytes)
+				}
+				out = append(out, monitor.Storage{Name: st.Name, Online: st.Online, Error: st.Error,
+					VMDisks: st.Type == storages.ISCSI, FreePct: free})
+			}
+			return out
+		},
 	}
 	go mon.Loop(ctx)
 
@@ -344,6 +359,7 @@ func serve(args []string) error {
 			in := hostinfo.Collect(ctx, run, cfg.VMDataset)
 			in.Networks = svc.Networks()
 			in.VLANs = svc.VLANs != nil && svc.LANAvailable()
+			in.Storages = svc.Storages()
 			return in
 		},
 		UI:       web.Handler(),
@@ -484,7 +500,8 @@ func serve(args []string) error {
 	apiSrv.LDAP = &ldap.Manager{Dir: cfg.DataDir}                                    // company directory (AD / LDAP)
 	apiSrv.Security = &secpol.Store{Dir: cfg.DataDir}                                // allowed networks, password policy, staff 2FA
 	apiSrv.Security.Load()
-	apiSrv.Encryption = disks.Encryption // encryption at rest (Server page → Storage)
+	apiSrv.Encryption = disks.Encryption              // encryption at rest (Server page → Storage)
+	apiSrv.Storages, apiSrv.LocalVMs = nets, svc.List // NFS / iSCSI (Server page → Network storage)
 	remoteVPN := &vpn.Manager{Dir: filepath.Join(cfg.DataDir, "vpn"), Run: run}
 	if err := remoteVPN.Apply(ctx); err != nil {
 		log.Error("remote-access vpn", "err", err)

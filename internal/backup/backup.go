@@ -79,6 +79,23 @@ type Store struct {
 	Disk func(dom string) string
 	// RecvOpts are the zfs receive -o options; nil = volmode=dev (VM zvols).
 	RecvOpts []string
+	// Parent says which dataset holds a VM's disks (network storage); nil = Dataset.
+	Parent func(dom string) string
+}
+
+func (s *Store) parent(dom string) string {
+	if s.Parent != nil {
+		return s.Parent(dom)
+	}
+	return s.Dataset
+}
+
+// DiskDataset is the dataset of a VM's disk i (0 = root).
+func (s *Store) DiskDataset(dom string, i int) string {
+	if i == 0 {
+		return s.disk(dom)
+	}
+	return s.extraDisk(dom, i)
 }
 
 func (s *Store) cmd(ctx context.Context, name string, args ...string) *exec.Cmd {
@@ -118,7 +135,7 @@ func (s *Store) disk(dom string) string {
 	if s.Disk != nil {
 		return s.Disk(dom)
 	}
-	return s.Dataset + "/" + dom + "-disk0"
+	return s.parent(dom) + "/" + dom + "-disk0"
 }
 
 func (s *Store) paths(vm, id, comp string) (data, meta string) {

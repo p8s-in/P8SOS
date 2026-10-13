@@ -258,6 +258,14 @@ SATA/SCSI) when another disk is removed. They count toward a customer's disk quo
 Snapshots, rollbacks, backups and restores cover every disk. Moves and high availability
 refuse VMs with extra disks for now (`409` / a reason in the HA list).
 
+### Network storage (admins)
+See [network-storage.md](network-storage.md). `GET /storages` → `{"storages":[{name,type,online,path,size_bytes,free_bytes,uses,vms,error,...}],"initiator":"iqn..."}`;
+`POST /storages` `{"name":"nas","type":"nfs","server":"10.0.0.5","export":"/mnt/tank/p8s","backups":true}` or
+`{"name":"san","type":"iscsi","portal":"10.0.0.5","target":"iqn...","lun":0,"format":true}` → `201 {"storage":…,"note":…}`
+(`409 confirm` when the disk would be erased without `format`); `POST /storages/discover` `{"portal"}` → `{"targets":[…]}`;
+`POST /storages/{name}/connect`; `DELETE /storages/{name}` (`409` while VMs are on it).
+Create a VM there with `"storage":"san"` in `POST /vms`; the VM object then has `"storage":"san"`.
+
 ### Snapshots
 A snapshot is a ZFS snapshot of the VM's disks (instant, copy-on-write; all disks at the
 same moment). Only the disks are saved — CPU/RAM settings are not. At most 30 per VM.

@@ -35,6 +35,7 @@ import (
 	"p8sos/internal/secpol"
 	"p8sos/internal/sso"
 	"p8sos/internal/storage"
+	"p8sos/internal/storages"
 	"p8sos/internal/support"
 	"p8sos/internal/tasks"
 	"p8sos/internal/tunnel"
@@ -151,6 +152,10 @@ type Server struct {
 	Encryption func(ctx context.Context) (storage.Encryption, error)
 	// Remote is remote access (VPN, Tailscale, tunnel status); nil = off.
 	Remote *Remote
+	// Storages are network storages (NFS, iSCSI); nil = off.
+	Storages *storages.Manager
+	// LocalVMs lists this server's own VMs (not the cluster's); nil = VMs.List.
+	LocalVMs func(ctx context.Context) ([]vm.VM, error)
 	// Security: allowed networks, password policy, 2FA for staff; nil = defaults.
 	Security *secpol.Store
 	// Monitor watches the server's health and sends alerts; nil = off.
@@ -314,6 +319,11 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("GET /api/v1/node/encryption", s.getEncryption)
 	auth.HandleFunc("POST /api/v1/node/encryption-key", s.encryptionKey)
 	auth.HandleFunc("GET /api/v1/remote", s.getRemote)
+	auth.HandleFunc("GET /api/v1/storages", s.listStorages)
+	auth.HandleFunc("POST /api/v1/storages", s.addStorage)
+	auth.HandleFunc("POST /api/v1/storages/discover", s.discoverISCSI)
+	auth.HandleFunc("POST /api/v1/storages/{name}/connect", s.connectStorage)
+	auth.HandleFunc("DELETE /api/v1/storages/{name}", s.removeStorage)
 	auth.HandleFunc("PUT /api/v1/remote/vpn", s.putVPN)
 	auth.HandleFunc("POST /api/v1/remote/vpn/devices", s.addVPNDevice)
 	auth.HandleFunc("DELETE /api/v1/remote/vpn/devices/{id}", s.deleteVPNDevice)

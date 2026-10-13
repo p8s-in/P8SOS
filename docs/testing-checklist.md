@@ -153,6 +153,18 @@ hardware**. Work through it on the new machine; tick each line and note problems
 - [ ] Remove disk 1 (two clicks) → gone in the VM, `zfs list` has no …-disk1
 - [ ] HA on a VM with an extra disk is refused with a clear message; Move too
 
+## 15. Network storage (needs a NAS/SAN — TrueNAS in a VM on the second laptop works)
+
+- [ ] `p8 test` section 9 passes; with `P8S_NFS=192.168.0.x:/mnt/tank/p8s p8 test` and `P8S_ISCSI='192.168.0.x iqn... 0' p8 test` the NAS/SAN lines pass too
+- [ ] NFS share with "Copy every backup here": take a backup → after a minute it is in `p8s/backups` on the NAS (Backups → Off-site shows the copy)
+- [ ] An ISO copied into `p8s/iso` on the NAS shows in the ISO library "on NAS" and a VM installs from it
+- [ ] NAS switched off: Server → Network storage shows it offline within seconds (dashboard doesn't hang); on again → Connect
+- [ ] iSCSI: Find disks lists the target; Connect without Format on a used disk asks to confirm; with Format → pool p8s-san online
+- [ ] Create a VM on san → boots, snapshot, backup, extra disk all work; `zfs list p8s-san/vms` shows its disks
+- [ ] Reboot the server: the SAN VM starts by itself (pool imported before libvirt)
+- [ ] Remove is refused while the VM is on it; after deleting the VM it disconnects
+- [ ] Reinstall test: remove, add again without Format → "taken over", the VM disk is still in `zfs list`
+
 ## Add new features here as they are built
 
 (Every new feature adds its own lines above before it counts as done.)

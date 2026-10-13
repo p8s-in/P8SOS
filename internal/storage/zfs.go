@@ -20,6 +20,10 @@ type ZFS struct {
 	Wait    time.Duration     // max wait for /dev/zvol/...; 0 = 30s
 	// BusyRetry is the pause between destroy attempts while the disk is busy; 0 = 1s.
 	BusyRetry time.Duration
+	// Pools are other storages for VM disks: name -> parent dataset (nil = none).
+	Pools func() map[string]string
+
+	place placement
 }
 
 func (z *ZFS) exists(p string) bool {
@@ -30,7 +34,12 @@ func (z *ZFS) exists(p string) bool {
 	return err == nil
 }
 
-func (z *ZFS) diskDataset(vm string) string { return z.Dataset + "/" + vm + "-disk0" }
+func (z *ZFS) diskDataset(vm string) string { return z.parent(vm) + "/" + vm + "-disk0" }
+
+// DiskDataset is the dataset of the VM's disk i (0 = root).
+func (z *ZFS) DiskDataset(vm string, i int) string {
+	return fmt.Sprintf("%s/%s-disk%d", z.parent(vm), vm, i)
+}
 
 // DevicePath is the block device libvirt attaches for the VM's root disk.
 func (z *ZFS) DevicePath(vm string) string { return "/dev/zvol/" + z.diskDataset(vm) }
@@ -40,7 +49,12 @@ func (z *ZFS) DevicePath(vm string) string { return "/dev/zvol/" + z.diskDataset
 // space until the guest writes.
 func (z *ZFS) CloneDisk(ctx context.Context, snapshot, vm string, sizeGB int) (string, error) {
 	ds := z.diskDataset(vm)
-	if _, err := z.Run.Run(ctx, "zfs", "clone", "-p", snapshot, ds); err != nil {
+	if poolOf(snapshot) != poolOf(ds) { // network storage: a full copy
+		if err := z.copyTemplate(ctx, snapshot, ds); err != nil {
+			_ = z.DestroyDisk(context.WithoutCancel(ctx), vm)
+			return "", fmt.Errorf("copy template to %s: %w", poolOf(ds), err)
+		}
+	} else if _, err := z.Run.Run(ctx, "zfs", "clone", "-p", snapshot, ds); err != nil {
 		return "", fmt.Errorf("clone disk: %w", err)
 	}
 	if err := z.ResizeDisk(ctx, vm, sizeGB); err != nil {
@@ -83,7 +97,11 @@ func (z *ZFS) DestroyDisk(ctx context.Context, vm string) error {
 			return err
 		}
 	}
-	return z.destroy(ctx, z.diskDataset(vm))
+	if err := z.destroy(ctx, z.diskDataset(vm)); err != nil {
+		return err
+	}
+	z.forget(vm)
+	return nil
 }
 
 func errStderr(err error) string {

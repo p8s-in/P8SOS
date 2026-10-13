@@ -388,3 +388,39 @@ func (m *Monitor) checkClock(ctx context.Context) []finding {
 	}
 	return []finding{f}
 }
+
+// Storage is a network storage as the health check sees it.
+type Storage struct {
+	Name    string
+	Online  bool
+	Error   string
+	VMDisks bool // iSCSI: VM disks live there
+	FreePct int  // free space, 0-100 (-1 = unknown)
+}
+
+// checkStorages: a NAS or SAN that went away, or is nearly full.
+func (m *Monitor) checkStorages(ctx context.Context) []finding {
+	if m.Storages == nil {
+		return nil
+	}
+	var out []finding
+	for _, s := range m.Storages(ctx) {
+		f := finding{key: "storage:" + s.Name, name: "Network storage " + s.Name, status: "ok", value: "online"}
+		switch {
+		case !s.Online:
+			f.value, f.status = "offline", Warning
+			f.title = "network storage " + s.Name + " is offline"
+			f.detail = s.Error + ". Backup copies to it fail until it is back; then Server → Network storage → Connect."
+			if s.VMDisks {
+				f.status = Critical
+				f.detail = s.Error + ". VMs on it stop working. Check the SAN and the network, then Server → Network storage → Connect."
+			}
+		case s.FreePct >= 0 && s.FreePct < 10:
+			f.value, f.status = fmt.Sprintf("%d%% free", s.FreePct), Warning
+			f.title = "network storage " + s.Name + " is almost full"
+			f.detail = "Delete old backups / VM snapshots there, or make the share / LUN bigger."
+		}
+		out = append(out, f)
+	}
+	return out
+}

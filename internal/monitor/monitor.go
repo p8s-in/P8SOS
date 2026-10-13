@@ -123,12 +123,13 @@ type Monitor struct {
 	Root     string // prefix for /sys, /proc (tests); "" = /
 
 	// what to watch
-	Paths      []string                          // filesystems to watch for space (default "/")
-	Guests     func(ctx context.Context) []Guest // VMs
-	FailedJobs func(since time.Time) []string    // failed backups/restores since (descriptions)
-	MemUsedPct func() int                        // RAM really used, 0-100
-	StopGuests func(ctx context.Context) error   // clean shutdown of every VM/container
-	Poweroff   func() error                      // power the server off
+	Paths      []string                            // filesystems to watch for space (default "/")
+	Guests     func(ctx context.Context) []Guest   // VMs
+	FailedJobs func(since time.Time) []string      // failed backups/restores since (descriptions)
+	MemUsedPct func() int                          // RAM really used, 0-100
+	StopGuests func(ctx context.Context) error     // clean shutdown of every VM/container
+	Poweroff   func() error                        // power the server off
+	Storages   func(ctx context.Context) []Storage // network storages (NAS / SAN)
 
 	mu       sync.Mutex
 	set      *Settings
@@ -315,6 +316,7 @@ func (m *Monitor) Tick(ctx context.Context) {
 	fs = append(fs, m.checkGuests(ctx)...)
 	fs = append(fs, m.checkJobs()...)
 	fs = append(fs, m.checkClock(ctx)...)
+	fs = append(fs, m.checkStorages(ctx)...)
 	power, pf := m.checkPower(ctx, set)
 	fs = append(fs, pf...)
 	if needSmart {

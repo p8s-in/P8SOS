@@ -91,6 +91,9 @@ func (s *Service) HACheck(ctx context.Context, name string) (string, error) {
 	if len(v.Disks) > 0 {
 		return "it has extra disks; high availability copies only VMs with one disk for now", nil
 	}
+	if v.Storage != "" {
+		return "its disks are on network storage " + v.Storage + "; high availability copies only VMs on local storage for now", nil
+	}
 	return "", nil
 }
 

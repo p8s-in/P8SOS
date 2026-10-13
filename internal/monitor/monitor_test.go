@@ -213,3 +213,14 @@ func TestClock(t *testing.T) {
 		t.Fatal("not resolved")
 	}
 }
+
+func TestStorageCheck(t *testing.T) {
+	m := &Monitor{Storages: func(context.Context) []Storage {
+		return []Storage{{Name: "nas", Online: true, FreePct: 50}, {Name: "san", Error: "pool not imported", VMDisks: true, FreePct: -1},
+			{Name: "nas2", Online: true, FreePct: 3}}
+	}}
+	fs := m.checkStorages(context.Background())
+	if len(fs) != 3 || fs[0].status != "ok" || fs[1].status != Critical || fs[2].status != Warning || !strings.Contains(fs[1].detail, "VMs on it") {
+		t.Fatalf("%+v", fs)
+	}
+}
