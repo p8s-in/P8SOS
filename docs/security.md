@@ -60,8 +60,8 @@ full DN or just the CN ("P8S Admins").
 Settings → **Security**:
 
 - **Who may open this dashboard:** addresses or networks (CIDR). Everything else
-  gets "403" before sign-in. The server itself (SSH tunnel) and the cluster
-  tunnel are always allowed; so are joining servers, the payment webhook and
+  gets "403" before sign-in. The server itself (SSH tunnel), the cluster
+  tunnel and the remote-access VPN (10.251.0.0/24) are always allowed; so are joining servers, the payment webhook and
   `/api/v1/health`. A list without your own address is refused. Locked out:
   `sudo rm /var/lib/p8s/security.json && sudo systemctl restart p8sd`.
 - **Passwords:** shortest length (10-64), letters + digits, and the most

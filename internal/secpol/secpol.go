@@ -128,8 +128,12 @@ func (s *Store) Save(st Settings, from string) (Settings, error) {
 	return st, nil
 }
 
-// cluster tunnel addresses (servers of the same cluster)
-var tunnel = &net.IPNet{IP: net.IPv4(10, 250, 0, 0), Mask: net.CIDRMask(24, 32)}
+// cluster tunnel addresses (servers of the same cluster) and the admins'
+// remote-access VPN (10.251.0.0/24, its devices are admins' own)
+var (
+	tunnel = &net.IPNet{IP: net.IPv4(10, 250, 0, 0), Mask: net.CIDRMask(24, 32)}
+	remote = &net.IPNet{IP: net.IPv4(10, 251, 0, 0), Mask: net.CIDRMask(24, 32)}
+)
 
 func allowed(nets []*net.IPNet, addr string) bool {
 	if len(nets) == 0 {
@@ -139,7 +143,7 @@ func allowed(nets []*net.IPNet, addr string) bool {
 	if ip == nil {
 		return false
 	}
-	if ip.IsLoopback() || tunnel.Contains(ip) {
+	if ip.IsLoopback() || tunnel.Contains(ip) || remote.Contains(ip) {
 		return true
 	}
 	for _, n := range nets {

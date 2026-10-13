@@ -149,6 +149,8 @@ type Server struct {
 	LDAP *ldap.Manager
 	// Encryption reports the VM storage's encryption at rest (storage.ZFS); nil = unknown.
 	Encryption func(ctx context.Context) (storage.Encryption, error)
+	// Remote is remote access (VPN, Tailscale, tunnel status); nil = off.
+	Remote *Remote
 	// Security: allowed networks, password policy, 2FA for staff; nil = defaults.
 	Security *secpol.Store
 	// Monitor watches the server's health and sends alerts; nil = off.
@@ -308,6 +310,11 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("PUT /api/v1/vms/{name}/firewall", s.putFirewall)
 	auth.HandleFunc("GET /api/v1/node/encryption", s.getEncryption)
 	auth.HandleFunc("POST /api/v1/node/encryption-key", s.encryptionKey)
+	auth.HandleFunc("GET /api/v1/remote", s.getRemote)
+	auth.HandleFunc("PUT /api/v1/remote/vpn", s.putVPN)
+	auth.HandleFunc("POST /api/v1/remote/vpn/devices", s.addVPNDevice)
+	auth.HandleFunc("DELETE /api/v1/remote/vpn/devices/{id}", s.deleteVPNDevice)
+	auth.HandleFunc("POST /api/v1/remote/forward", s.forwardVPN)
 	auth.HandleFunc("GET /api/v1/security", s.getSecurity)
 	auth.HandleFunc("PUT /api/v1/security", s.putSecurity)
 	auth.HandleFunc("GET /api/v1/ldap", s.getLDAP)

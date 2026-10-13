@@ -168,6 +168,7 @@ install -m 0755 "$REPO/scripts/os-upgrade.sh" /usr/local/share/p8s/os-upgrade.sh
 install -m 0755 "$REPO/scripts/make-ct-template.sh" /usr/local/share/p8s/make-ct-template.sh
 install -m 0755 "$REPO/scripts/tune.sh" /usr/local/share/p8s/tune.sh
 install -m 0755 "$REPO/scripts/netcheck.sh" /usr/local/share/p8s/netcheck.sh
+install -m 0755 "$REPO/scripts/tailscale.sh" /usr/local/share/p8s/tailscale.sh
 # guest internet: repair at boot and after every firewall reload (which can wipe libvirt's NAT rules)
 install -m 0644 "$REPO/deploy/p8s-net.service" /etc/systemd/system/p8s-net.service
 install -d -m 0755 /etc/systemd/system/nftables.service.d

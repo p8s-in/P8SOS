@@ -121,6 +121,14 @@ hardware**. Work through it on the new machine; tick each line and note problems
 - [ ] Two-factor for staff on: an operator without 2FA lands in My account and can't do anything else until it is set up
 - [ ] Fresh install with "encrypted VM storage" (boot menu): `zfs get encryption tank/p8s` = aes-256-gcm; VMs work after a reboot (key loaded); Server → Storage → Show the key
 
+## 11. Remote access (from outside the home network)
+
+- [ ] Server → Remote access: public IP shown; the CGNAT line matches what the router's status page says
+- [ ] Tailscale: Install and connect → sign-in link in the task log → phone with Tailscale on mobile data opens https://100.x.x.x:8006
+- [ ] Tailscale with "Also reach my home network": approve the route, reach a LAN VM from the phone
+- [ ] (only with a real public IP) Built-in VPN: on, Open the port on my router (or forward UDP 51830 by hand), add a phone, import the .conf, dashboard at https://10.251.0.1:8006 on mobile data; Remove cuts it off
+- [ ] Reboot: the VPN comes back (p8s-vpn interface), devices reconnect
+
 ## Add new features here as they are built
 
 (Every new feature adds its own lines above before it counts as done.)

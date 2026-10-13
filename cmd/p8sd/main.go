@@ -62,6 +62,7 @@ import (
 	"p8sos/internal/users"
 	"p8sos/internal/virt"
 	"p8sos/internal/vm"
+	"p8sos/internal/vpn"
 	"p8sos/internal/web"
 )
 
@@ -479,6 +480,11 @@ func serve(args []string) error {
 	apiSrv.Security = &secpol.Store{Dir: cfg.DataDir}                                // allowed networks, password policy, staff 2FA
 	apiSrv.Security.Load()
 	apiSrv.Encryption = disks.Encryption // encryption at rest (Server page → Storage)
+	remoteVPN := &vpn.Manager{Dir: filepath.Join(cfg.DataDir, "vpn"), Run: run}
+	if err := remoteVPN.Apply(ctx); err != nil {
+		log.Error("remote-access vpn", "err", err)
+	}
+	apiSrv.Remote = &api.Remote{VPN: remoteVPN, Run: run, PublicIP: cluster.PublicIP, FindRouter: vpn.FindRouter}
 	go ha.Loop(ctx, 15*time.Second)
 	if cfg.HostShellOn() {
 		apiSrv.HostShell = ct.HostShell // Server → Shell (admins), like Proxmox
