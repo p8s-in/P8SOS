@@ -67,7 +67,20 @@ hardware**. Work through it on the new machine; tick each line and note problems
 - [ ] Move it back worker → master; with 3 servers also worker → worker
 - [ ] A running VM / one with a CD in the drive: Move is greyed out with the reason
 - [ ] Pull the network cable halfway through a move: the job fails, the original is still there and starts
+- [ ] Move a UEFI / Windows 11 VM: boots without the EFI shell, Windows doesn't ask for the BitLocker key
 - [ ] Remove the worker; leave the cluster
+
+## 6b. High availability (two machines on the same network)
+
+- [ ] VM on the worker → Options → High availability → Protect (copy on the master): "last copy" shows within a minute; Server → High availability lists it
+- [ ] Change a file in the VM, wait for the next copy (set 1 minute to test)
+- [ ] Pull the worker's power plug: about 3 minutes later the VM runs on the master (alert arrives), the changed file is there
+- [ ] Plug the worker back in: the old VM is gone from it, Server → High availability on the worker lists the copy, copies go master → worker
+- [ ] Pull only the worker's network cable: after ~1 minute the worker switches the VM off (its log says so), the master starts the copy; plug in: no VM runs twice
+- [ ] Stop p8sd on the worker (`sudo systemctl stop p8sd`): no failover (tunnel still up), warning alert instead
+- [ ] Reboot the worker normally: the protected VM starts again by itself when it is back
+- [ ] Protected VM on the master: switch the master off, worker dashboard → Server → High availability → Start here
+- [ ] Turn off HA: the copy is deleted on the other server
 
 ## 7. Admin and safety
 

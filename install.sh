@@ -60,6 +60,7 @@ if zpool list -H "$POOL" >/dev/null 2>&1 && command -v virsh >/dev/null && comma
   command -v qemu-img >/dev/null || apt-get install -y qemu-utils >/dev/null 2>&1 || true  # importing disk images (VMware, Hyper-V, ...)
   command -v lzop >/dev/null || apt-get install -y lzop >/dev/null 2>&1 || true  # importing .vma.lzo Proxmox backups
   command -v smartctl >/dev/null || apt-get install -y smartmontools >/dev/null 2>&1 || true  # disk health alerts
+  command -v ping >/dev/null || apt-get install -y iputils-ping >/dev/null 2>&1 || true  # high availability: is the router reachable
 else
   P8S_BRIDGE=$BRIDGE bash "$REPO/scripts/bootstrap-debian13.sh" $DEV
 fi

@@ -122,7 +122,8 @@ func serve(args []string) error {
 		Backups:      &backup.Store{Dir: cfg.BackupDir, Dataset: cfg.VMDataset, Run: run},
 		Jobs:         &jobs.Manager{Log: log},
 		ISOs:         &isos.Library{Dir: cfg.ISODir},
-		ImportDir:    filepath.Join(cfg.DataDir, "import"), // Proxmox backups, disk images to import
+		ImportDir:    filepath.Join(cfg.DataDir, "import"),   // Proxmox backups, disk images to import
+		ReplicaDir:   filepath.Join(cfg.DataDir, "replicas"), // copies of other servers' VMs (high availability)
 		Pools:        pools,
 		ScheduleFile: filepath.Join(cfg.DataDir, "backup-schedule.json"),
 		FirewallFile: filepath.Join(cfg.DataDir, "firewall.json"),
@@ -467,6 +468,10 @@ func serve(args []string) error {
 	apiSrv.Migrate, apiSrv.LocalMoves = cvms, svc // moving VMs between servers
 	apiSrv.Dial, apiSrv.RemoteMetrics = cvms.Dial, cvms.RemoteMetrics
 	go clu.Loop(ctx, 15*time.Second)
+	ha := &cluster.HA{C: cvms, Local: svc, Dir: filepath.Join(cfg.DataDir, "cluster"), Log: log,
+		Notify: func(sev, title, detail string) { mon.Notice("ha", sev, title, detail) }}
+	apiSrv.HA, apiSrv.LocalHA = ha, svc // high availability
+	go ha.Loop(ctx, 15*time.Second)
 	if cfg.HostShellOn() {
 		apiSrv.HostShell = ct.HostShell // Server → Shell (admins), like Proxmox
 	}

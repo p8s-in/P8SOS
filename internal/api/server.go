@@ -136,6 +136,9 @@ type Server struct {
 	// this server's side of a move (vm.Service). nil = off.
 	Migrate    Migrator
 	LocalMoves cluster.LocalMover
+	// HA is high availability (cluster.HA); LocalHA this server's copies (vm.Service).
+	HA      *cluster.HA
+	LocalHA cluster.LocalHA
 	// Monitor watches the server's health and sends alerts; nil = off.
 	Monitor *monitor.Monitor
 	// Imports brings VMs in from Proxmox backups / disk images; nil = off.
@@ -209,6 +212,22 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("GET /api/v1/vms/{name}/move-check", s.moveCheck)
 	auth.HandleFunc("GET /api/v1/cluster/vm-export/{name}", s.vmExport)
 	auth.HandleFunc("POST /api/v1/cluster/vm-import", s.vmImport)
+	auth.HandleFunc("PUT /api/v1/vms/{name}/autostart", s.setAutostart)
+	auth.HandleFunc("GET /api/v1/ha", s.haStatus)
+	auth.HandleFunc("PUT /api/v1/ha/settings", s.haSettings)
+	auth.HandleFunc("POST /api/v1/ha/replicas/{name}/start", s.haStartCopy)
+	auth.HandleFunc("DELETE /api/v1/ha/replicas/{name}", s.haDropCopy)
+	auth.HandleFunc("GET /api/v1/vms/{name}/ha", s.haInfo)
+	auth.HandleFunc("PUT /api/v1/vms/{name}/ha", s.haSet)
+	auth.HandleFunc("POST /api/v1/vms/{name}/ha/failover", s.haFailover)
+	auth.HandleFunc("GET /api/v1/vms/{name}/ha-check", s.haCheck)
+	auth.HandleFunc("GET /api/v1/cluster/ha-sync", s.haSync)
+	auth.HandleFunc("GET /api/v1/cluster/replica/{name}", s.replicaSnaps)
+	auth.HandleFunc("DELETE /api/v1/cluster/replica/{name}", s.haDropCopy)
+	auth.HandleFunc("GET /api/v1/cluster/replica-send/{name}", s.replicaSend)
+	auth.HandleFunc("POST /api/v1/cluster/replica-recv", s.replicaRecv)
+	auth.HandleFunc("POST /api/v1/cluster/replica/{name}/promote", s.replicaPromote)
+	auth.HandleFunc("POST /api/v1/cluster/replica/{name}/retire", s.replicaRetire)
 	auth.HandleFunc("GET /api/v1/alerts", s.getAlerts)
 	auth.HandleFunc("PUT /api/v1/alerts/settings", s.putAlertSettings)
 	auth.HandleFunc("POST /api/v1/alerts/test", s.testAlert)

@@ -1175,6 +1175,7 @@ async function openManage(name){
   $("#mCharts").innerHTML = "";
   $("#mSites").innerHTML = ""; $("#mSiteName").value = ""; $("#mSitePort").value = 80; $("#mSiteTLS").checked = false;
   $("#mMoveBox").hidden = true; loadMove();
+  if (typeof loadHA === "function") { $("#mHABox").hidden = true; loadHA(); }
   await Promise.all([loadSnaps(), loadBackups(), loadVMCharts(), loadFirewall(), loadSites()]);
 }
 // Moving a VM to another cluster server (admins; shut-down VMs).
@@ -1929,5 +1930,6 @@ document.addEventListener("DOMContentLoaded", render); // after cloud.js has loa
 <script src="/pages.js"></script>
 <script src="/imports.js"></script>
 <script src="/cluster.js"></script>
+<script src="/ha.js"></script>
 </body>
 </html>

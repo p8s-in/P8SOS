@@ -161,7 +161,13 @@ func (z *ZFS) Snapshots(ctx context.Context, vm string) ([]Snapshot, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list snapshots: %w", err)
 	}
-	return ParseSnapshots(string(out)), nil
+	all, l := ParseSnapshots(string(out)), []Snapshot{}
+	for _, sn := range all {
+		if !hidden(sn.Name) {
+			l = append(l, sn)
+		}
+	}
+	return l, nil
 }
 
 // ParseSnapshots reads `zfs list -H -p -o name,creation,used` output.
@@ -186,6 +192,7 @@ func ParseSnapshots(out string) []Snapshot {
 // Rollback returns the disk to a snapshot. destroyNewer also deletes snapshots
 // taken after it (ZFS can only roll back to the latest one).
 func (z *ZFS) Rollback(ctx context.Context, vm, name string, destroyNewer bool) error {
+	z.dropRepSnaps(ctx, vm) // ours are newer; the next copy for HA is then a full one
 	args := []string{"rollback"}
 	if destroyNewer {
 		args = append(args, "-r")

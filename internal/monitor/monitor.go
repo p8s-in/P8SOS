@@ -144,7 +144,7 @@ type Monitor struct {
 
 type finding struct {
 	key, name, status, value, title, detail string
-	display bool // only shown in the health list (another finding carries the alert)
+	display                                 bool // only shown in the health list (another finding carries the alert)
 }
 
 func (m *Monitor) now() time.Time {
@@ -475,6 +475,22 @@ func (m *Monitor) Test() error {
 	m.save()
 	m.mu.Unlock()
 	return nil
+}
+
+// Notice records and sends a one-off event from elsewhere (e.g. high
+// availability: "web1 restarted on node2").
+func (m *Monitor) Notice(key, severity, title, detail string) {
+	e := Event{Time: m.now().UTC().Format(time.RFC3339), Key: key, Severity: severity, Title: title, What: "action"}
+	m.mu.Lock()
+	m.load()
+	m.history = append(m.history, e)
+	if len(m.history) > 500 {
+		m.history = m.history[len(m.history)-500:]
+	}
+	m.save()
+	set := *m.set
+	m.mu.Unlock()
+	m.notify(set, e, detail)
 }
 
 // emergency shuts everything down once (power failing / overheating).

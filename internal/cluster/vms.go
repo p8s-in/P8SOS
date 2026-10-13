@@ -776,3 +776,16 @@ func (m *Manager) Handshakes(ctx context.Context) map[string]time.Time {
 	}
 	return out
 }
+
+// SetAutostart sets whether a VM starts when its server boots.
+func (c *VMs) SetAutostart(ctx context.Context, name string, on bool) (vm.VM, error) {
+	return c.remoteVM(ctx, name, func() (vm.VM, error) {
+		a, ok := c.Local.(interface {
+			SetAutostart(context.Context, string, bool) (vm.VM, error)
+		})
+		if !ok {
+			return vm.VM{}, fmt.Errorf("%w: autostart can't be changed here", vm.ErrConflict)
+		}
+		return a.SetAutostart(ctx, name, on)
+	}, "PUT", vpath(name, "/autostart"), map[string]bool{"autostart": on})
+}

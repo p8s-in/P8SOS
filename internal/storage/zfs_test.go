@@ -100,7 +100,12 @@ func TestSnapshots(t *testing.T) {
 		"zfs destroy tank/vms/p8s-a1-disk0@first",
 		"zfs set volsize=30G tank/vms/p8s-a1-disk0",
 	}
-	got := r.Calls[2:]
+	var got []string
+	for _, c := range r.Calls[2:] {
+		if !strings.HasPrefix(c, "zfs list -H -t snapshot -o name ") { // replica snapshots looked up before a rollback
+			got = append(got, c)
+		}
+	}
 	for i, w := range want {
 		if got[i] != w {
 			t.Errorf("call %d = %q, want %q", i, got[i], w)

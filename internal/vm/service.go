@@ -88,6 +88,10 @@ type Service struct {
 	// NVRAMDir is where libvirt keeps UEFI variables (<vm>_VARS.fd); empty =
 	// /var/lib/libvirt/qemu/nvram.
 	NVRAMDir string
+	// TPMDir is where libvirt keeps software TPM state; empty = /var/lib/libvirt/swtpm.
+	TPMDir string
+	// ReplicaDir keeps the settings of VM copies held here for high availability.
+	ReplicaDir string
 
 	locks    sync.Map // name -> *sync.Mutex; serializes ops per VM
 	memSched sync.Map // backup schedules when ScheduleFile is empty (tests)
@@ -541,6 +545,13 @@ func (s *Service) Stop(ctx context.Context, name string, force bool) (VM, error)
 func (s *Service) Delete(ctx context.Context, name string) error {
 	dom := Prefix + name
 	defer s.lock(dom)()
+	return s.remove(ctx, name, false)
+}
+
+// remove deletes the VM (caller holds the lock); keepDisk leaves its disk
+// for the caller (failover: it becomes the copy).
+func (s *Service) remove(ctx context.Context, name string, keepDisk bool) error {
+	dom := Prefix + name
 	st, err := s.state(ctx, dom)
 	if err != nil {
 		return err
@@ -558,6 +569,9 @@ func (s *Service) Delete(ctx context.Context, name string) error {
 	s.logErr("remove backup schedule", s.SetSchedule(name, Schedule{}))
 	s.logErr("remove firewall", s.dropFirewall(context.WithoutCancel(ctx), name))
 	s.releaseIP(context.WithoutCancel(ctx), name)
+	if keepDisk {
+		return nil
+	}
 	if err := s.Disks.DestroyDisk(context.WithoutCancel(ctx), dom); err != nil {
 		return fmt.Errorf("domain removed but disk cleanup failed: %w", err)
 	}

@@ -96,6 +96,14 @@ a job (shown like a backup), from any server to any other, also worker → worke
 API: `GET /api/v1/vms/{name}/move` (where it can go, or why not),
 `POST /api/v1/vms/{name}/move {"to":"n2","start":true}` → job.
 
+UEFI variables and the TPM state move with the VM (Windows 11 keeps its boot
+entries and BitLocker keys).
+
+## High availability
+
+Protected VMs are copied to a second server every few minutes and started there
+if their server dies. See [ha.md](ha.md).
+
 ## Security
 
 - Join codes are random, single use, expire after an hour, and carry the
@@ -126,6 +134,6 @@ Files: `/var/lib/p8s/cluster/state.json` (roles, keys, tokens; root only),
 ## Not yet
 
 - Moving a running VM (live migration) and moving containers
-- High availability (restart VMs of a dead server elsewhere; needs shared or replicated storage)
+- Containers in high availability (VMs: see [ha.md](ha.md)); shared storage (Ceph/NFS)
 - Containers on workers (containers run on the master), ISO installs and public IPs on workers
 - One shared ISO library and template list
