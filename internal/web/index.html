@@ -408,13 +408,14 @@ dialog.as-page #mClose,dialog.as-page #cmClose{display:none}
 
 <dialog id="dlgUsers" class="wide"><div class="dlg-body">
   <h2>Users</h2>
-  <div class="sub">Admins manage everything. Customers see only their own VMs and stay within their plan.</div>
+  <div class="sub"><b>Admins</b> manage everything. <b>Operators</b> run every VM and container but can't change accounts or server settings.
+    <b>Auditors</b> see everything, including the Activity log, and change nothing. <b>Customers</b> see only their own VMs and stay within their plan.</div>
   <table class="snaps"><tbody id="uList"></tbody></table>
   <h3>Add a user</h3>
   <form id="fUser" class="uform">
     <div class="row">
       <div><label for="uName">User name</label><input id="uName" required pattern="[a-z][a-z0-9._\-]{1,31}" autocomplete="off" placeholder="alice"></div>
-      <div><label for="uRole">Role</label><select id="uRole"><option value="customer">Customer</option><option value="admin">Admin</option></select></div>
+      <div><label for="uRole">Role</label><select id="uRole"><option value="customer">Customer</option><option value="operator">Operator</option><option value="auditor">Auditor</option><option value="admin">Admin</option></select></div>
       <div><label for="uPw">Password</label><input id="uPw" type="password" minlength="10" maxlength="128" required autocomplete="new-password" placeholder="10+ characters"></div>
     </div>
     <div class="row qrow" id="uQuota">
@@ -487,12 +488,40 @@ dialog.as-page #mClose,dialog.as-page #cmClose{display:none}
     <div class="dlg-actions"><button class="btn primary" id="pGo">Add pool</button></div>
   </details>
 
+  <h3>Company login (single sign-on)</h3>
+  <div class="sub">Let people sign in with your company account — Google Workspace, Microsoft Entra ID (Office 365), Keycloak, Authentik, Okta…
+    (OpenID Connect). Their groups decide the role; new people get an account the first time.</div>
+  <details class="uedit" id="ssoBox"><summary><b id="ssoState">Set up</b></summary>
+    <div class="row" style="grid-template-columns:1fr 1fr">
+      <div><label for="ssoName">Button text: "Sign in with …"</label><input id="ssoName" placeholder="Google" autocomplete="off"></div>
+      <div><label for="ssoIssuer">Issuer</label><input id="ssoIssuer" placeholder="https://accounts.google.com" autocomplete="off"></div>
+      <div><label for="ssoClient">Client ID</label><input id="ssoClient" autocomplete="off"></div>
+      <div><label for="ssoSecret">Client secret</label><input id="ssoSecret" type="password" autocomplete="off" placeholder="unchanged"></div>
+      <div><label for="ssoBase">This dashboard's address</label><input id="ssoBase" autocomplete="off"></div>
+      <div><label for="ssoDomains">Allowed email domains <span class="muted">(empty = any)</span></label><input id="ssoDomains" placeholder="p8s.in" autocomplete="off"></div>
+      <div><label for="ssoAdmins">Admin groups</label><input id="ssoAdmins" placeholder="p8s-admins" autocomplete="off"></div>
+      <div><label for="ssoOps">Operator groups</label><input id="ssoOps" autocomplete="off"></div>
+      <div><label for="ssoAud">Auditor groups</label><input id="ssoAud" autocomplete="off"></div>
+      <div><label for="ssoCust">Customer groups</label><input id="ssoCust" autocomplete="off"></div>
+      <div><label for="ssoClaim">Groups claim</label><input id="ssoClaim" placeholder="groups" autocomplete="off"></div>
+      <div><label for="ssoDefault">People in none of these groups</label><select id="ssoDefault"><option value="">can't sign in (unless they have an account)</option><option value="customer">become customers</option></select></div>
+    </div>
+    <div class="hint">In the provider, register a web application with this redirect address: <span class="mono copy" id="ssoCb"></span></div>
+    <label class="check"><input id="ssoOn" type="checkbox"> Show "Sign in with …" on the sign-in page</label>
+    <div class="dlg-actions"><button class="btn primary" id="ssoSave">Save</button></div>
+  </details>
+
   <div class="dlg-actions"><button class="btn" id="tClose">Close</button></div>
 </div></dialog>
 
 <dialog id="dlgAudit" class="wide"><div class="dlg-body">
   <h2>Activity</h2>
   <div class="sub" id="aSub">Every change and sign-in, newest first.</div>
+  <div class="inline" id="aTools" hidden style="flex-wrap:wrap">
+    <label class="sub" style="margin:0">From <input id="aFrom" type="date" style="width:auto"></label>
+    <label class="sub" style="margin:0">to <input id="aTo" type="date" style="width:auto"></label>
+    <button class="btn" id="aCSV">Download CSV</button><button class="btn" id="aVerify">Check integrity</button>
+    <span class="sub" id="aVerifyOut"></span></div>
   <table class="snaps"><tbody id="aList"></tbody></table>
   <div class="dlg-actions"><button class="btn" id="aClose">Close</button></div>
 </div></dialog>
@@ -559,7 +588,9 @@ function sshLine(name, user){
 }
 // "P8S Cloud" -> P8S <b>Cloud</b>: the last word in the accent colour, like the original logo.
 function brandHTML(){ const w = esc(brandName).split(" "); return w.length > 1 ? w.slice(0, -1).join(" ") + " <b>" + w[w.length - 1] + "</b>" : "<b>" + w[0] + "</b>"; }
-const isAdmin = () => me?.role === "admin";
+const isAdmin = () => ["admin", "operator", "auditor"].includes(me?.role); // staff: sees every VM
+const isFullAdmin = () => me?.role === "admin"; // accounts, settings, the server itself
+const isAuditor = () => me?.role === "auditor";
 
 function toast(msg, err){
   const t = document.createElement("div");
@@ -609,6 +640,7 @@ function renderLogin(){
       <label class="check"><input id="lRem" type="checkbox"> Remember on this device</label>
       <div id="lUnver" class="hint" hidden>Didn't get the email? <button type="button" class="linkbtn" id="lResend">Send it again</button></div>
       <div class="dlg-actions"><button type="button" class="linkbtn" id="lTokLink">Use an API token instead</button><span class="spacer"></span><button class="btn primary">Sign in</button></div>
+      <div id="lSSO" hidden style="margin-top:10px"><a class="btn" id="lSSOGo" href="/api/v1/sso/start" style="display:block;text-align:center;text-decoration:none"></a></div>
       <div class="login-links"><button type="button" class="linkbtn" id="lSignupLink" hidden>Create an account</button>
         <button type="button" class="linkbtn" id="lForgotLink" hidden>Forgot password?</button></div>
     </form>
@@ -672,6 +704,9 @@ function renderLogin(){
     accounts = !!a.accounts; $("#lUserLink").hidden = !accounts;
     brandName = a.brand || "P8S OS"; document.title = brandName; $("#lBrand").innerHTML = brandHTML();
     $("#lSignupLink").hidden = !a.signup; $("#lForgotLink").hidden = !a.reset;
+    if (a.sso) { $("#lSSO").hidden = false; $("#lSSOGo").textContent = "Sign in with " + a.sso; }
+    if (hash.get("sso")) return enter(hash.get("sso"));
+    if (hash.get("sso_error")) { toast(hash.get("sso_error"), true); history.replaceState(null, "", location.pathname); }
     if (hash.get("verify")) {
       const r = await post("/verify", {code: hash.get("verify")});
       if (r.ok) { toast("Email confirmed — welcome!"); return enter(r.d.token); }
@@ -876,8 +911,11 @@ function renderHost(){
   const run = vms.filter(v => v.state === "running").length;
   $("#vmCount").textContent = vms.length ? `${run} running · ${vms.length} total` : "";
   if (me) {
-    $("#bMe").textContent = me.account ? me.name : "admin (token)";
-    $("#bIsos").hidden = $("#bImports").hidden = $("#bUsers").hidden = $("#bSettings").hidden = !isAdmin();
+    $("#bMe").textContent = (me.account ? me.name : "admin (token)") + (isAuditor() ? " (read-only)" : me.role === "operator" ? " (operator)" : "");
+    $("#bIsos").hidden = $("#bImports").hidden = $("#bUsers").hidden = !isAdmin();
+    $("#bSettings").hidden = !isFullAdmin();
+    document.body.classList.toggle("ro", isAuditor());
+    if (isAuditor()) $("#bNew").hidden = $("#bNewCT").hidden = true; // read-only
     if (isAdmin() && !licLoaded) { licLoaded = true; licenseShell(); nodeShell(); }
     $("#bNodeLabel").hidden = isAdmin();
     sideGroups();
@@ -1686,7 +1724,7 @@ $("#uList").addEventListener("click", async e => {
       if (!ed.hidden) { ed.hidden = true; return; }
       const q = u.quota;
       ed.innerHTML = `<div class="row qrow">
-        <div><label>Role</label><select data-f="role"><option value="customer">Customer</option><option value="admin">Admin</option></select></div>
+        <div><label>Role</label><select data-f="role"><option value="customer">Customer</option><option value="operator">Operator</option><option value="auditor">Auditor</option><option value="admin">Admin</option></select></div>
         <div><label>VMs</label><input data-q="vms" type="number" min="0" value="${q.vms}"></div>
         <div><label>CPUs</label><input data-q="vcpus" type="number" min="0" value="${q.vcpus}"></div>
         <div><label>RAM (MB)</label><input data-q="memory_mib" type="number" min="0" step="256" value="${q.memory_mib}"></div></div>
@@ -1720,10 +1758,32 @@ let tTimer = null;
 async function openSettings(){
   $("#tToken").value = "";
   $("#dlgSettings").showModal();
-  await Promise.all([loadTunnel(), loadPools()]);
+  await Promise.all([loadTunnel(), loadPools(), loadSSO()]);
   clearInterval(tTimer);
   tTimer = setInterval(() => { if ($("#dlgSettings").open) loadTunnel(true); else clearInterval(tTimer); }, 3000);
 }
+const ssoList = v => (v || []).join(", "), ssoSplit = id => $(id).value.split(/[,\s]+/).filter(Boolean);
+async function loadSSO(){
+  let st; try { st = await call("GET", "/sso"); } catch { $("#ssoBox").hidden = true; return; }
+  $("#ssoState").textContent = st.enabled ? `On: "Sign in with ${st.name || "company login"}"` : "Set up";
+  $("#ssoName").value = st.name || ""; $("#ssoIssuer").value = st.issuer || ""; $("#ssoClient").value = st.client_id || "";
+  $("#ssoSecret").value = ""; $("#ssoSecret").placeholder = st.has_secret ? "unchanged" : "from the provider";
+  $("#ssoBase").value = st.redirect_base || location.origin; $("#ssoDomains").value = ssoList(st.allowed_domains);
+  $("#ssoAdmins").value = ssoList(st.admin_groups); $("#ssoOps").value = ssoList(st.operator_groups); $("#ssoAud").value = ssoList(st.auditor_groups);
+  $("#ssoCust").value = ssoList(st.customer_groups); $("#ssoClaim").value = st.groups_claim || ""; $("#ssoDefault").value = st.default_role || "";
+  $("#ssoOn").checked = st.enabled;
+  const cb = ($("#ssoBase").value.replace(/\/+$/, "")) + "/api/v1/sso/callback";
+  $("#ssoCb").textContent = cb; $("#ssoCb").dataset.copy = cb;
+}
+$("#ssoBase").oninput = () => { const cb = $("#ssoBase").value.replace(/\/+$/, "") + "/api/v1/sso/callback"; $("#ssoCb").textContent = cb; $("#ssoCb").dataset.copy = cb; };
+$("#ssoSave").onclick = async () => {
+  const body = {enabled: $("#ssoOn").checked, name: $("#ssoName").value.trim(), issuer: $("#ssoIssuer").value.trim(), client_id: $("#ssoClient").value.trim(),
+    client_secret: $("#ssoSecret").value, redirect_base: $("#ssoBase").value.trim(), allowed_domains: ssoSplit("#ssoDomains"),
+    admin_groups: ssoSplit("#ssoAdmins"), operator_groups: ssoSplit("#ssoOps"), auditor_groups: ssoSplit("#ssoAud"), customer_groups: ssoSplit("#ssoCust"),
+    groups_claim: $("#ssoClaim").value.trim(), default_role: $("#ssoDefault").value};
+  try { await call("PUT", "/sso", body); toast(body.enabled ? "Company login is on — try it in a private window" : "Saved"); loadSSO(); }
+  catch (e) { toast(e.message, true); }
+};
 const tStates = {connected: "Connected", starting: "Connecting…", error: "Problem", not_installed: "cloudflared missing", off: "Not running"};
 async function loadTunnel(quiet){
   let st;
@@ -1819,7 +1879,9 @@ async function openAudit(){
   $("#aList").innerHTML = `<tr><td class="muted">Loading…</td></tr>`;
   $("#dlgAudit").showModal();
   try {
-    const l = (await call("GET", "/audit?limit=300")).entries;
+    const r = await call("GET", "/audit?limit=300"), l = r.entries;
+    $("#aTools").hidden = !isAdmin(); $("#aVerifyOut").textContent = "";
+    if (r.retain_days) $("#aSub").textContent += ` Kept for ${r.retain_days} days; every entry is chained to the one before, so changes or gaps show up in "Check integrity".`;
     $("#aList").innerHTML = l.length ? l.map(e => `<tr><td><b>${esc(e.detail || e.action.replace(/^(\w+) \/api\/v1/, "$1 "))}</b>
       <div class="sub">${esc(fmtTime(e.time))} · ${esc(e.user)} · ${esc(e.ip)}</div></td>
       <td class="mono ${e.status >= 400 ? "" : "muted"}" style="color:${e.status >= 400 ? "var(--bad)" : ""}">${e.status}</td></tr>`).join("")
@@ -1827,6 +1889,21 @@ async function openAudit(){
   } catch (err) { toast(err.message, true); }
 }
 $("#aClose").onclick = () => $("#dlgAudit").close();
+$("#aCSV").onclick = async () => {
+  const q = new URLSearchParams(); if ($("#aFrom").value) q.set("from", $("#aFrom").value); if ($("#aTo").value) q.set("to", $("#aTo").value);
+  try {
+    const r = await fetch(API + "/audit/export?" + q, {headers: {"Authorization": "Bearer " + token}});
+    if (!r.ok) throw new Error((await r.json().catch(() => ({})))?.error?.message || "HTTP " + r.status);
+    const a = document.createElement("a"); a.href = URL.createObjectURL(await r.blob());
+    a.download = `p8s-activity${$("#aFrom").value ? "-" + $("#aFrom").value : ""}.csv`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  } catch (e) { toast(e.message, true); }
+};
+$("#aVerify").onclick = async () => {
+  try { const c = await call("GET", "/audit/verify");
+    $("#aVerifyOut").innerHTML = c.ok ? `<span style="color:var(--ok)">✔ ${c.entries} entries since ${esc(fmtTime(c.oldest || ""))}, none changed or missing</span>`
+      : `<span style="color:var(--bad)">✘ ${esc(c.problem)}</span>`; }
+  catch (e) { toast(e.message, true); }
+};
 
 /* ---------- my account ---------- */
 let pending2FA = false;

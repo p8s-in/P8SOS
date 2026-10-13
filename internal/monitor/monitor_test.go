@@ -184,3 +184,32 @@ func TestUPS(t *testing.T) {
 		t.Fatalf("%+v %+v", p, f)
 	}
 }
+
+func TestClock(t *testing.T) {
+	settle = 0
+	run := &testfake.Runner{Out: map[string]string{"timedatectl show": "no\n"}}
+	m := &Monitor{Dir: t.TempDir(), Run: run, Root: t.TempDir()}
+	for i := 0; i < 9; i++ {
+		m.Tick(context.Background())
+	}
+	clock := func() bool {
+		for _, a := range m.Status().Active {
+			if a.Key == "clock" {
+				return true
+			}
+		}
+		return false
+	}
+	if clock() {
+		t.Fatal("warned too early")
+	}
+	m.Tick(context.Background())
+	if !clock() {
+		t.Fatalf("%+v", m.Status().Active)
+	}
+	run.Out["timedatectl show"] = "yes\n"
+	m.Tick(context.Background())
+	if clock() {
+		t.Fatal("not resolved")
+	}
+}

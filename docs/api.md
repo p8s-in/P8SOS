@@ -410,7 +410,7 @@ VMs show `"os_type"` and `"drivers_iso"`. See [windows.md](windows.md).
 | GET | `/api/v1/vms/{name}/move-check` | (server to server) `{"why"}` for a VM on this server |
 | GET | `/api/v1/cluster/vm-export/{name}` · POST `/api/v1/cluster/vm-import` | (server to server) the VM as a stream: a JSON line with its settings, then `zfs send` of the disk |
 
-High availability: see [ha.md](ha.md#api).
+High availability: see [ha.md](ha.md#api). Roles, company login (SSO) and the activity log export: see [security.md](security.md).
 
 `POST /api/v1/vms` takes `"node"` (server id or name; admins) and VMs carry `node` / `node_id`.
 

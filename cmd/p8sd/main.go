@@ -50,6 +50,7 @@ import (
 	"p8sos/internal/metrics"
 	"p8sos/internal/offsite"
 	"p8sos/internal/portfwd"
+	"p8sos/internal/sso"
 	"p8sos/internal/storage"
 	"p8sos/internal/support"
 	"p8sos/internal/tasks"
@@ -346,7 +347,7 @@ func serve(args []string) error {
 		Billing:  &billing.Store{Dir: filepath.Join(cfg.DataDir, "billing")},
 		Mail:     mailer,
 		Support:  &support.Store{Path: filepath.Join(cfg.DataDir, "tickets.json")},
-		Audit:    &audit.Log{Path: filepath.Join(cfg.DataDir, "audit.log")},
+		Audit:    &audit.Log{Path: filepath.Join(cfg.DataDir, "audit.log"), RetainDays: cfg.AuditRetainDays},
 		Issuer:   issuer(),
 		License:  lic,
 		Updates:  upd,
@@ -470,7 +471,8 @@ func serve(args []string) error {
 	go clu.Loop(ctx, 15*time.Second)
 	ha := &cluster.HA{C: cvms, Local: svc, Dir: filepath.Join(cfg.DataDir, "cluster"), Log: log,
 		Notify: func(sev, title, detail string) { mon.Notice("ha", sev, title, detail) }}
-	apiSrv.HA, apiSrv.LocalHA = ha, svc // high availability
+	apiSrv.HA, apiSrv.LocalHA = ha, svc                                              // high availability
+	apiSrv.SSO = &sso.Manager{Dir: cfg.DataDir, HTTP: netx.Client(15 * time.Second)} // company login
 	go ha.Loop(ctx, 15*time.Second)
 	if cfg.HostShellOn() {
 		apiSrv.HostShell = ct.HostShell // Server → Shell (admins), like Proxmox

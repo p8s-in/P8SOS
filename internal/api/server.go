@@ -31,6 +31,7 @@ import (
 	"p8sos/internal/mail"
 	"p8sos/internal/metrics"
 	"p8sos/internal/offsite"
+	"p8sos/internal/sso"
 	"p8sos/internal/support"
 	"p8sos/internal/tasks"
 	"p8sos/internal/tunnel"
@@ -139,6 +140,8 @@ type Server struct {
 	// HA is high availability (cluster.HA); LocalHA this server's copies (vm.Service).
 	HA      *cluster.HA
 	LocalHA cluster.LocalHA
+	// SSO is the company login (OpenID Connect); nil = off.
+	SSO *sso.Manager
 	// Monitor watches the server's health and sends alerts; nil = off.
 	Monitor *monitor.Monitor
 	// Imports brings VMs in from Proxmox backups / disk images; nil = off.
@@ -169,6 +172,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/terminal", s.terminalSocket) // container shell; one-time ticket
 	mux.HandleFunc("GET /api/v1/auth", s.authInfo)
 	mux.HandleFunc("POST /api/v1/login", s.login)
+	mux.HandleFunc("GET /api/v1/sso/start", s.ssoStart)       // company login: to the provider
+	mux.HandleFunc("GET /api/v1/sso/callback", s.ssoCallback) // ...and back
 	mux.HandleFunc("POST /api/v1/signup", s.signup)
 	mux.HandleFunc("POST /api/v1/verify", s.verifyEmail)
 	mux.HandleFunc("POST /api/v1/verify/resend", s.resendVerify)
@@ -292,7 +297,11 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("DELETE /api/v1/sites/{host}", s.deleteSite)
 	auth.HandleFunc("GET /api/v1/vms/{name}/firewall", s.getFirewall)
 	auth.HandleFunc("PUT /api/v1/vms/{name}/firewall", s.putFirewall)
+	auth.HandleFunc("GET /api/v1/sso", s.getSSO)
+	auth.HandleFunc("PUT /api/v1/sso", s.putSSO)
 	auth.HandleFunc("GET /api/v1/audit", s.auditLog)
+	auth.HandleFunc("GET /api/v1/audit/export", s.auditExport)
+	auth.HandleFunc("GET /api/v1/audit/verify", s.auditVerify)
 	auth.HandleFunc("GET /api/v1/license", s.getLicense)
 	auth.HandleFunc("PUT /api/v1/license", s.putLicense)
 	auth.HandleFunc("DELETE /api/v1/license", s.deleteLicense)
@@ -353,7 +362,7 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("POST /api/v1/updates/check", s.checkUpdates)
 	auth.HandleFunc("POST /api/v1/updates/install", s.installUpdate)
 	auth.HandleFunc("PUT /api/v1/updates/channel", s.setUpdateChannel)
-	mux.Handle("/api/v1/", s.requireAuth(s.audited(auth)))
+	mux.Handle("/api/v1/", s.requireAuth(s.audited(s.roleGuard(auth))))
 	if s.UI != nil {
 		mux.Handle("/", s.UI) // the page itself is public; every API call it makes needs the token
 	}

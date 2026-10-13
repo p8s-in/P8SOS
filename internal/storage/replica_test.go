@@ -18,7 +18,7 @@ func TestReplicaCommands(t *testing.T) {
 	}
 	defer func() { StreamCmd = exec.CommandContext }()
 	r := &testfake.Runner{Out: map[string]string{
-		"zfs list -H -t snapshot -o name -s createtxg -d 1 tank/vms/p8s-a-disk0": "tank/vms/p8s-a-disk0@mine\ntank/vms/p8s-a-disk0@p8s-rep-1\ntank/vms/p8s-a-disk0@p8s-rep-2\n",
+		"zfs list -H -t snapshot -o name -s createtxg -d 1 tank/vms/p8s-a-disk0":         "tank/vms/p8s-a-disk0@mine\ntank/vms/p8s-a-disk0@p8s-rep-1\ntank/vms/p8s-a-disk0@p8s-rep-2\n",
 		"zfs list -H -t snapshot -o name -s createtxg -d 1 tank/vms/replica/p8s-a-disk0": "tank/vms/replica/p8s-a-disk0@p8s-rep-1\ntank/vms/replica/p8s-a-disk0@p8s-rep-2\n",
 	}}
 	z := &ZFS{Run: r, Dataset: "tank/vms", Exists: func(string) bool { return true }}

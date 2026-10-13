@@ -44,6 +44,8 @@ type Config struct {
 	// get a random one, shown to their owner (default yes, like a VPS panel).
 	AutoRootPasswords *bool `json:"auto_root_passwords"`
 	SSHPortBase       int   `json:"ssh_port_base"`
+	// AuditRetainDays keeps the Activity log this many days (default 180, CERT-In).
+	AuditRetainDays int `json:"audit_retain_days"`
 }
 
 // SSHPortsOn reports whether NAT guests get SSH ports (default yes).

@@ -361,3 +361,30 @@ func (m *Monitor) checkSmart(ctx context.Context, s Settings) []finding {
 	}
 	return fs
 }
+
+// checkClock: the clock must be right (NTP) for logs, TLS and 2FA codes; CERT-In
+// asks for logs with synced time. Warns after 10 minutes unsynced.
+func (m *Monitor) checkClock(ctx context.Context) []finding {
+	out, err := m.Run.Run(ctx, "timedatectl", "show", "-p", "NTPSynchronized", "--value")
+	v := strings.TrimSpace(string(out))
+	if err != nil || v == "" {
+		return nil
+	}
+	m.mu.Lock()
+	if v == "yes" {
+		m.unsynced = 0
+	} else {
+		m.unsynced++
+	}
+	n := m.unsynced
+	m.mu.Unlock()
+	f := finding{key: "clock", name: "Clock (NTP)", status: "ok", value: "synced"}
+	if v != "yes" {
+		f.value = "not synced"
+		if n >= 10 {
+			f.status, f.title = Warning, "the clock is not synced (NTP)"
+			f.detail = "Times in logs, backups and 2FA codes may be wrong. Check internet access to NTP (UDP 123) and run: timedatectl set-ntp true"
+		}
+	}
+	return []finding{f}
+}

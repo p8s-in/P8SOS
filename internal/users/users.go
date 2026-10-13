@@ -26,8 +26,18 @@ import (
 // Roles.
 const (
 	Admin    = "admin"    // everything, every VM, the host
+	Operator = "operator" // every VM and container (create, run, back up, move); not accounts or server settings
+	Auditor  = "auditor"  // sees everything (incl. the Activity log), changes nothing
 	Customer = "customer" // own VMs only, within the quota
 )
+
+// ValidRole reports whether r is a role.
+func ValidRole(r string) bool { return r == Admin || r == Operator || r == Auditor || r == Customer }
+
+// Staff roles see every VM (no owner checks, no quota).
+func Staff(r string) bool { return r == Admin || r == Operator || r == Auditor }
+
+const roleErr = "role must be admin, operator, auditor or customer"
 
 // Quota limits what a customer may have in total. Admins have no quota.
 type Quota struct {
@@ -70,6 +80,8 @@ type User struct {
 	Codes []string `json:"codes,omitempty"`
 	// API tokens the user made for scripts (only hashes kept).
 	Tokens []APIToken `json:"tokens,omitempty"`
+	// SSO is the company-login identity (issuer|subject) this account signs in with.
+	SSO string `json:"sso,omitempty"`
 }
 
 // APIToken is a personal API token (acts as its user).
@@ -232,8 +244,8 @@ func (s *Store) Add(name, role, password string, q Quota) (Public, error) {
 	if !ValidName(name) {
 		return Public{}, fmt.Errorf("%w: user name must be 2-32 chars: lowercase letters, digits, . _ -; start with a letter", ErrInvalid)
 	}
-	if role != Admin && role != Customer {
-		return Public{}, fmt.Errorf("%w: role must be admin or customer", ErrInvalid)
+	if !ValidRole(role) {
+		return Public{}, fmt.Errorf("%w: "+roleErr, ErrInvalid)
 	}
 	if err := CheckPassword(password); err != nil {
 		return Public{}, err
@@ -282,8 +294,8 @@ func (s *Store) Update(name string, fn func(u *User) error) (Public, error) {
 	if err := fn(&c); err != nil {
 		return Public{}, err
 	}
-	if c.Role != Admin && c.Role != Customer {
-		return Public{}, fmt.Errorf("%w: role must be admin or customer", ErrInvalid)
+	if !ValidRole(c.Role) {
+		return Public{}, fmt.Errorf("%w: "+roleErr, ErrInvalid)
 	}
 	if err := checkQuota(c.Quota); err != nil {
 		return Public{}, err

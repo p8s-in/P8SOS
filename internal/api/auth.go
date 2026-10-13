@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"p8sos/internal/audit"
 	"p8sos/internal/backup"
@@ -30,6 +31,7 @@ type principal struct {
 	User     bool   // a P8S user account (can have a password / 2FA)
 	ViaToken bool   // a personal API token (scripts): no account changes
 	Cluster  bool   // the cluster master acting on this server (users live on the master)
+	Role     string // users.Admin, Operator, Auditor or Customer (API tokens: admin)
 }
 
 type ctxKey struct{}
@@ -49,22 +51,22 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 			if s.Sessions != nil && s.Users != nil {
 				if name, found := s.Sessions.User(tok); found {
 					if u, err := s.Users.Get(name); err == nil && !u.Disabled {
-						p = principal{Name: u.Name, Admin: u.Role == users.Admin, Quota: u.Quota, Session: tok, User: true}
+						p = principal{Name: u.Name, Admin: users.Staff(u.Role), Role: u.Role, Quota: u.Quota, Session: tok, User: true}
 					}
 				}
 			}
 			if p.Name == "" && s.Users != nil {
 				if u, ok := s.Users.TokenUser(tok); ok {
-					p = principal{Name: u.Name, Admin: u.Role == users.Admin, Quota: u.Quota, User: true, ViaToken: true}
+					p = principal{Name: u.Name, Admin: users.Staff(u.Role), Role: u.Role, Quota: u.Quota, User: true, ViaToken: true}
 				}
 			}
 			if p.Name == "" {
 				if name, valid := s.tokenName(tok); valid {
-					p = principal{Name: "api-token:" + name, Admin: true}
+					p = principal{Name: "api-token:" + name, Admin: true, Role: users.Admin}
 				}
 			}
 			if p.Name == "" && s.Cluster != nil && s.Cluster.Accepts(tok) {
-				p = principal{Name: "cluster-master", Admin: true, Cluster: true}
+				p = principal{Name: "cluster-master", Admin: true, Cluster: true, Role: users.Admin}
 			}
 		}
 		if p.Name == "" {
@@ -334,6 +336,11 @@ func (s *Server) authInfo(w http.ResponseWriter, r *http.Request) {
 		n = s.Users.Count()
 	}
 	out := map[string]any{"accounts": s.Users != nil && s.Sessions != nil && n > 0, "brand": "P8S OS"}
+	if s.SSO != nil {
+		if on, name := s.SSO.On(); on {
+			out["sso"] = name
+		}
+	}
 	if s.Cloud != nil {
 		st := s.Cloud.Settings()
 		out["brand"], out["signup"], out["currency"] = s.brand().Name, st.SignupOpen && n > 0 && s.License.Allows(license.FeatSelling), st.Currency
@@ -357,7 +364,7 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 		"accounts_on": s.Users != nil && s.Sessions != nil && s.Users.Count() > 0,
 	}
 	if p.Admin {
-		out["role"] = users.Admin
+		out["role"] = p.Role
 	}
 	out["ssh_keys"] = []string{}
 	out["via_token"] = p.ViaToken
@@ -672,7 +679,54 @@ func (s *Server) auditLog(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"entries": list})
+	out := map[string]any{"entries": list}
+	if p.Admin && s.Audit != nil {
+		out["retain_days"] = s.Audit.RetainDays
+		if s.Audit.RetainDays <= 0 {
+			out["retain_days"] = 180
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// auditExport: the Activity log from..to (YYYY-MM-DD, host time) as CSV.
+func (s *Server) auditExport(w http.ResponseWriter, r *http.Request) {
+	if !s.adminOnly(w, r) {
+		return
+	}
+	var from, to time.Time
+	var err error
+	if v := r.URL.Query().Get("from"); v != "" {
+		if from, err = time.ParseInLocation("2006-01-02", v, time.Local); err != nil {
+			writeErr(w, http.StatusBadRequest, "invalid", "from: use YYYY-MM-DD")
+			return
+		}
+	}
+	if v := r.URL.Query().Get("to"); v != "" {
+		if to, err = time.ParseInLocation("2006-01-02", v, time.Local); err != nil {
+			writeErr(w, http.StatusBadRequest, "invalid", "to: use YYYY-MM-DD")
+			return
+		}
+		to = to.Add(24 * time.Hour) // the whole day
+	}
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="p8s-activity.csv"`)
+	if err := s.Audit.WriteCSV(w, from, to); err != nil && s.Log != nil {
+		s.Log.Error("audit export", "err", err)
+	}
+}
+
+// auditVerify checks the log's hash chain (nothing changed or removed).
+func (s *Server) auditVerify(w http.ResponseWriter, r *http.Request) {
+	if !s.adminOnly(w, r) {
+		return
+	}
+	c, err := s.Audit.Verify()
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, c)
 }
 
 // --- jobs and backups by owner ---

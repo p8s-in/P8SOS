@@ -105,6 +105,17 @@ hardware**. Work through it on the new machine; tick each line and note problems
 - [ ] A crashed VM (e.g. `virsh destroy` doesn't count; kill its qemu process) shows a critical alert
 - [ ] The red/orange number on the server button in the sidebar
 
+## 10. Security
+
+- [ ] Users: make an **operator** — can create/stop VMs and open consoles; no Settings button, no server shell, can't add users
+- [ ] Make an **auditor** — sees all VMs and Activity, "(read-only)" next to the name; stopping a VM is refused
+- [ ] Settings → Company login with a real Google Workspace or Keycloak: "Sign in with …" works, account created, role from the group
+- [ ] Remove the person from the admin group in the provider: next sign-in has the new role
+- [ ] Activity → Check integrity ✔; edit a line in /var/lib/p8s/audit.log by hand → Check integrity shows it (then restore)
+- [ ] Activity → Download CSV for a date range opens in Excel
+- [ ] `journalctl --disk-usage` grows over days; logs survive a reboot
+- [ ] `timedatectl` shows NTP synced; Health & alerts has "Clock (NTP)"
+
 ## Add new features here as they are built
 
 (Every new feature adds its own lines above before it counts as done.)

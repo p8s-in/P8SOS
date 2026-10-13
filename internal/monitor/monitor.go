@@ -138,6 +138,7 @@ type Monitor struct {
 	smart    []finding // last SMART results (they run every 30 minutes)
 	smartAt  time.Time
 	hot      int  // ticks in a row over the thermal limit
+	unsynced int  // ticks in a row with the clock not synced
 	shutting bool // a power/thermal shutdown is under way
 	lastJobs time.Time
 }
@@ -313,6 +314,7 @@ func (m *Monitor) Tick(ctx context.Context) {
 	fs = append(fs, tf...)
 	fs = append(fs, m.checkGuests(ctx)...)
 	fs = append(fs, m.checkJobs()...)
+	fs = append(fs, m.checkClock(ctx)...)
 	power, pf := m.checkPower(ctx, set)
 	fs = append(fs, pf...)
 	if needSmart {

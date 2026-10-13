@@ -46,6 +46,51 @@ func (s *Store) ByEmail(email string) (User, error) {
 	return User{}, fmt.Errorf("%w: no account with that email", ErrNotFound)
 }
 
+// BySSO finds the account linked to a company-login identity.
+func (s *Store) BySSO(key string) (User, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.load(); err != nil {
+		return User{}, err
+	}
+	for _, u := range s.users {
+		if key != "" && u.SSO == key {
+			return *u, nil
+		}
+	}
+	return User{}, fmt.Errorf("%w: no account for that login", ErrNotFound)
+}
+
+// FreeName turns a wish ("Ravi.K") into an unused valid user name.
+func (s *Store) FreeName(wish string) string {
+	b := strings.Builder{}
+	for _, r := range strings.ToLower(wish) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '.', r == '_', r == '-':
+			b.WriteRune(r)
+		}
+	}
+	base := strings.TrimLeft(b.String(), "0123456789._-")
+	if len(base) > 24 {
+		base = base[:24]
+	}
+	if len(base) < 2 {
+		base = "user"
+	}
+	for i := 1; ; i++ {
+		n := base
+		if i > 1 {
+			n = fmt.Sprintf("%s%d", base, i)
+		}
+		if _, err := s.Get(n); err != nil && ValidName(n) {
+			return n
+		}
+	}
+}
+
+// RandomPassword is for accounts that sign in elsewhere (company login).
+func RandomPassword() string { return randHex(24) }
+
 // EmailTaken reports whether another account uses the address.
 func (s *Store) EmailTaken(email, except string) bool {
 	u, err := s.ByEmail(email)

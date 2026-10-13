@@ -123,6 +123,7 @@ async function loadHealth(){
 
 async function openNode(){
   taskOpen = "";
+  $("#ndShell").hidden = !isFullAdmin(); // operators and auditors: no root shell
   $("#ndLogBox").hidden = true;
   $("#dlgNode").showModal();
   await loadNode();
