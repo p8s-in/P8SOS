@@ -76,6 +76,16 @@ func (m *Manager) call(ctx context.Context, n Node, method, path string, in, out
 // DialVNC opens the raw VNC stream of a VM on node n (the worker bridges it
 // to the VM's local VNC port after an HTTP Upgrade).
 func (m *Manager) DialVNC(ctx context.Context, n Node, vm string) (net.Conn, error) {
+	return m.dialUpgrade(ctx, n, "/api/v1/cluster/vnc/"+url.PathEscape(vm), "p8s-vnc")
+}
+
+// DialShell opens the root shell of node n (Server → Shell of a worker). The
+// stream carries frames to the node (see ShellFrame) and raw output back.
+func (m *Manager) DialShell(ctx context.Context, n Node, user string) (net.Conn, error) {
+	return m.dialUpgrade(ctx, n, "/api/v1/cluster/shell?user="+url.QueryEscape(user), "p8s-shell")
+}
+
+func (m *Manager) dialUpgrade(ctx context.Context, n Node, path, proto string) (net.Conn, error) {
 	u, err := url.Parse(n.API)
 	if err != nil {
 		return nil, err
@@ -104,10 +114,10 @@ func (m *Manager) DialVNC(ctx context.Context, n Node, vm string) (net.Conn, err
 		}
 		conn = tc
 	}
-	req, _ := http.NewRequest("GET", strings.TrimRight(n.API, "/")+"/api/v1/cluster/vnc/"+url.PathEscape(vm), nil)
+	req, _ := http.NewRequest("GET", strings.TrimRight(n.API, "/")+path, nil)
 	req.Header.Set("Authorization", "Bearer "+n.Token)
 	req.Header.Set("Connection", "Upgrade")
-	req.Header.Set("Upgrade", "p8s-vnc")
+	req.Header.Set("Upgrade", proto)
 	if err := req.Write(conn); err != nil {
 		conn.Close()
 		return nil, err
@@ -121,7 +131,7 @@ func (m *Manager) DialVNC(ctx context.Context, n Node, vm string) (net.Conn, err
 	if resp.StatusCode != http.StatusSwitchingProtocols {
 		msg := apiError(resp)
 		conn.Close()
-		return nil, fmt.Errorf("console on %s: %s", n.Name, msg)
+		return nil, fmt.Errorf("%s on %s: %s", proto, n.Name, msg)
 	}
 	return &bufConn{Conn: conn, r: br}, nil
 }
@@ -133,3 +143,37 @@ type bufConn struct {
 }
 
 func (c *bufConn) Read(p []byte) (int, error) { return c.r.Read(p) }
+
+// Shell stream frames (master -> node): 1 byte kind, 2 bytes length, payload.
+// Kind 0 = keystrokes, 1 = size as "cols rows".
+const (
+	ShellData   = 0
+	ShellResize = 1
+)
+
+// WriteShellFrame writes one frame.
+func WriteShellFrame(w io.Writer, kind byte, p []byte) error {
+	for len(p) > 0 || kind == ShellResize {
+		n := min(len(p), 65535)
+		hdr := []byte{kind, byte(n >> 8), byte(n)}
+		if _, err := w.Write(append(hdr, p[:n]...)); err != nil {
+			return err
+		}
+		p = p[n:]
+		if kind == ShellResize {
+			break
+		}
+	}
+	return nil
+}
+
+// ReadShellFrame reads one frame.
+func ReadShellFrame(r io.Reader) (kind byte, p []byte, err error) {
+	hdr := make([]byte, 3)
+	if _, err = io.ReadFull(r, hdr); err != nil {
+		return 0, nil, err
+	}
+	p = make([]byte, int(hdr[1])<<8|int(hdr[2]))
+	_, err = io.ReadFull(r, p)
+	return hdr[0], p, err
+}

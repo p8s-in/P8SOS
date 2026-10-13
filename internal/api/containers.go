@@ -4,10 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/url"
+	"p8sos/internal/cluster"
 	"strings"
 	"sync"
+	"time"
 
 	"p8sos/internal/console"
 	"p8sos/internal/ct"
@@ -436,14 +440,55 @@ func (s *Server) terminalSocket(w http.ResponseWriter, r *http.Request) {
 	}
 	id, ok := s.tickets().Redeem(r.URL.Query().Get("ticket"))
 	name, isCT := strings.CutPrefix(id, "ct:")
-	if !ok || !isCT || s.CTs == nil {
+	hostUser, isHost := strings.CutPrefix(id, "host:")
+	hostUser, nodeID, remote := strings.Cut(hostUser, "@")
+	if !ok || !(isCT && s.CTs != nil || isHost && (s.HostShell != nil || remote && s.Cluster != nil)) {
 		writeErr(w, http.StatusUnauthorized, "unauthorized", "terminal ticket is invalid, used or expired")
 		return
 	}
-	term, err := s.CTs.Shell(r.Context(), name)
-	if err != nil {
-		s.fail(w, r, err)
-		return
+	var term shellIO
+	switch {
+	case isHost && remote: // a worker's shell, through the cluster tunnel
+		var n cluster.Node
+		for _, x := range s.Cluster.Workers() {
+			if x.ID == nodeID {
+				n = x
+			}
+		}
+		if n.ID == "" {
+			writeErr(w, http.StatusNotFound, "not_found", "server "+nodeID+" is not in the cluster")
+			return
+		}
+		conn, err := s.Cluster.DialShell(r.Context(), n, hostUser)
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		term, name = remoteShell{conn}, n.Name+" (root shell, "+hostUser+")"
+	case isHost:
+		t, err := s.HostShell()
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		term, name = localShell{t}, "server (root shell, "+hostUser+")"
+	default:
+		t, err := s.CTs.Shell(r.Context(), name)
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		term = localShell{t}
+	}
+	if isHost {
+		opened, what := time.Now(), "server shell"
+		if remote {
+			what = "shell of " + name
+		}
+		s.audit(r, hostUser, http.StatusOK, what+" opened")
+		defer func() {
+			s.audit(r, hostUser, http.StatusOK, what+" closed after "+time.Since(opened).Round(time.Second).String())
+		}()
 	}
 	ws, err := console.Upgrade(w, r)
 	if err != nil {
@@ -451,7 +496,7 @@ func (s *Server) terminalSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.Log != nil {
-		s.Log.Info("terminal opened", "container", name, "remote", r.RemoteAddr)
+		s.Log.Info("terminal opened", "target", name, "remote", r.RemoteAddr)
 	}
 	var once sync.Once
 	stop := func() { once.Do(func() { _ = ws.SendClose(); _ = ws.Close(); term.Close() }) }
@@ -459,7 +504,7 @@ func (s *Server) terminalSocket(w http.ResponseWriter, r *http.Request) {
 		defer stop()
 		buf := make([]byte, 32*1024)
 		for {
-			n, err := term.PTY.Read(buf)
+			n, err := term.Read(buf)
 			if n > 0 {
 				if ws.WriteBinary(buf[:n]) != nil {
 					return
@@ -482,11 +527,89 @@ func (s *Server) terminalSocket(w http.ResponseWriter, r *http.Request) {
 			}
 			continue
 		}
-		if _, err := term.PTY.Write(p); err != nil {
+		if err := term.Keys(p); err != nil {
 			break
 		}
 	}
 	stop()
+}
+
+// shellIO is a terminal the browser drives: here (PTY) or on a cluster worker.
+type shellIO interface {
+	Read(p []byte) (int, error)
+	Keys(p []byte) error
+	Resize(cols, rows int) error
+	Close()
+}
+
+type localShell struct{ t *ct.Terminal }
+
+func (l localShell) Read(p []byte) (int, error)  { return l.t.PTY.Read(p) }
+func (l localShell) Keys(p []byte) error         { _, err := l.t.PTY.Write(p); return err }
+func (l localShell) Resize(cols, rows int) error { return l.t.Resize(cols, rows) }
+func (l localShell) Close()                      { l.t.Close() }
+
+type remoteShell struct{ c net.Conn }
+
+func (r remoteShell) Read(p []byte) (int, error) { return r.c.Read(p) }
+func (r remoteShell) Keys(p []byte) error        { return cluster.WriteShellFrame(r.c, cluster.ShellData, p) }
+func (r remoteShell) Resize(cols, rows int) error {
+	return cluster.WriteShellFrame(r.c, cluster.ShellResize, []byte(fmt.Sprintf("%d %d", cols, rows)))
+}
+func (r remoteShell) Close() { _ = r.c.Close() }
+
+// clusterShell gives the master a root shell of this worker (Server → Shell
+// of this server in the master's dashboard). The user is the master's admin.
+func (s *Server) clusterShell(w http.ResponseWriter, r *http.Request) {
+	if !who(r).Cluster {
+		writeErr(w, http.StatusForbidden, "forbidden", "only the cluster master can do that")
+		return
+	}
+	if s.HostShell == nil {
+		writeErr(w, http.StatusNotFound, "not_found", "the server shell is turned off on this server (host_shell in /etc/p8s/p8sd.json)")
+		return
+	}
+	user := r.URL.Query().Get("user")
+	if user == "" || len(user) > 64 {
+		user = "master"
+	}
+	t, err := s.HostShell()
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	conn, buf, err := http.NewResponseController(w).Hijack()
+	if err != nil {
+		t.Close()
+		writeErr(w, http.StatusInternalServerError, "internal", "can't take over the connection: "+err.Error())
+		return
+	}
+	_ = conn.SetDeadline(time.Time{})
+	_, _ = buf.WriteString("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: p8s-shell\r\n\r\n")
+	_ = buf.Flush()
+	opened := time.Now()
+	s.audit(r, "master:"+user, http.StatusOK, "server shell opened from the cluster master")
+	var once sync.Once
+	stop := func() { once.Do(func() { conn.Close(); t.Close() }) }
+	go func() { _, _ = io.Copy(conn, t.PTY); stop() }()
+	for {
+		kind, p, err := cluster.ReadShellFrame(buf)
+		if err != nil {
+			break
+		}
+		if kind == cluster.ShellResize {
+			var c, rws int
+			if _, err := fmt.Sscan(string(p), &c, &rws); err == nil {
+				_ = t.Resize(c, rws)
+			}
+			continue
+		}
+		if _, err := t.PTY.Write(p); err != nil {
+			break
+		}
+	}
+	stop()
+	s.audit(r, "master:"+user, http.StatusOK, "server shell closed after "+time.Since(opened).Round(time.Second).String())
 }
 
 // ctSetupSSH installs (or repairs) the SSH server inside a container.
@@ -627,4 +750,33 @@ func (s *Server) reapplyFirewall(ctx context.Context) {
 			s.Log.Warn("firewall", "err", err)
 		}
 	}
+}
+
+// hostShellTicket lets an admin open the server's root shell (Server → Shell).
+func (s *Server) hostShellTicket(w http.ResponseWriter, r *http.Request) {
+	if !s.adminOnly(w, r) {
+		return
+	}
+	p := who(r)
+	if p.Cluster {
+		writeErr(w, http.StatusForbidden, "forbidden", "not for the cluster master's token")
+		return
+	}
+	id := "host:" + p.Name
+	if node := r.URL.Query().Get("node"); node != "" && s.Cluster != nil && node != s.Cluster.SelfID() {
+		found := false
+		for _, n := range s.Cluster.Workers() {
+			found = found || n.ID == node
+		}
+		if !found {
+			writeErr(w, http.StatusNotFound, "not_found", "no server "+node+" in this cluster")
+			return
+		}
+		id += "@" + node // a worker's shell, through the tunnel
+	} else if s.HostShell == nil {
+		writeErr(w, http.StatusNotFound, "not_found", "the server shell is turned off on this host (host_shell in /etc/p8s/p8sd.json)")
+		return
+	}
+	t, ttl := s.tickets().Issue(id)
+	writeJSON(w, http.StatusCreated, map[string]any{"ticket": t, "path": "/api/v1/terminal?ticket=" + t, "expires_in": int(ttl.Seconds())})
 }

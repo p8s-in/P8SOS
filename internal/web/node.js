@@ -7,7 +7,8 @@ let node = null, nodeTimer = null, taskOpen = "";
 
 document.body.insertAdjacentHTML("beforeend", `
 <dialog id="dlgNode" class="wide"><div class="dlg-body">
-  <h2>Server <span class="sub" id="ndHost"></span></h2>
+  <div class="inline" style="margin:0"><h2 style="margin:0">Server <span class="sub" id="ndHost"></span></h2><span class="spacer"></span>
+    <button class="btn" id="ndShell" type="button" title="Root shell on this server, in a new window (like at its keyboard)">&gt;_ Shell</button></div>
   <div id="ndRunning" class="toast" style="max-width:none;box-shadow:none;margin:8px 0;border-left-color:var(--warn)" hidden></div>
 
   <h3>VM storage</h3>
@@ -152,5 +153,6 @@ async function showTask(id, quiet){
   } catch (e) { if (!quiet) toast(e.message, true); }
 }
 
+$("#ndShell").onclick = () => window.open("/terminal?host=1", "p8s-host-shell");
 $("#ndClose").onclick = () => { clearTimeout(nodeTimer); $("#dlgNode").close(); };
 $("#ndLogClose").onclick = () => { taskOpen = ""; $("#ndLogBox").hidden = true; };

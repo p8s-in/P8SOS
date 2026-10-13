@@ -122,6 +122,8 @@ type Server struct {
 	ClusterVMs *cluster.VMs
 	// Offsite copies backups to other places; nil = not available.
 	Offsite *offsite.Manager
+	// HostShell opens the server's root shell for admins; nil = turned off.
+	HostShell func() (*ct.Terminal, error)
 	// SSHPorts lists guest -> SSH port on this server; nil = off.
 	SSHPorts func() map[string]int
 
@@ -268,6 +270,7 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("GET /api/v1/cluster/capacity", s.clusterCapacity)
 	auth.HandleFunc("GET /api/v1/cluster/candidates", s.clusterCandidates)
 	auth.HandleFunc("GET /api/v1/cluster/vnc/{name}", s.clusterVNC)
+	auth.HandleFunc("GET /api/v1/cluster/shell", s.clusterShell)
 	auth.HandleFunc("GET /api/v1/cluster/discover", s.clusterDiscover)
 	auth.HandleFunc("POST /api/v1/cluster/invite-send", s.clusterInviteSend)
 	auth.HandleFunc("GET /api/v1/cluster/invites", s.clusterInvites)
@@ -291,6 +294,7 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("GET /api/v1/ssh-ports", s.sshPorts)
 	auth.HandleFunc("GET /api/v1/node", s.getNode)
 	auth.HandleFunc("GET /api/v1/node/tasks", s.listTasks)
+	auth.HandleFunc("POST /api/v1/node/shell", s.hostShellTicket)
 	auth.HandleFunc("POST /api/v1/node/tasks", s.startTask)
 	auth.HandleFunc("GET /api/v1/node/tasks/{id}", s.getTask)
 	auth.HandleFunc("GET /api/v1/updates", s.getUpdates)

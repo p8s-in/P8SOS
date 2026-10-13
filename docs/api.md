@@ -361,6 +361,12 @@ VMs show `"os_type"` and `"drivers_iso"`. See [windows.md](windows.md).
 | POST | `/api/v1/ct-backups/{name}/{id}/restore` | `{"name"}` restore as a new container (202 + job); counts against the quota |
 | GET | `/api/v1/ct-templates` | installed container templates |
 
+### Server shell (admins)
+
+| Method | Path | |
+|---|---|---|
+| POST | `/api/v1/node/shell` | one-time ticket for `GET /api/v1/terminal?ticket=` — a root shell on this server (like Proxmox's node Shell). `?node=n2`: a cluster worker's shell, through the tunnel. Opening and closing are written to the activity log. Off with `"host_shell": false` in `/etc/p8s/p8sd.json` |
+
 ### Cluster (admins)
 
 | Method | Path | |

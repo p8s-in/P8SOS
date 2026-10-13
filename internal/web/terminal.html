@@ -244,10 +244,11 @@ button{background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:6
 <script src="/xterm-fit.min.js"></script>
 <script>
 "use strict";
-const ct = new URLSearchParams(location.search).get("ct") || "";
+const qs = new URLSearchParams(location.search);
+const ct = qs.get("ct") || "", host = qs.get("host") === "1", node = qs.get("node") || "", nodeName = qs.get("name") || node;
 const token = (() => { try { return sessionStorage.getItem("p8s.token") || localStorage.getItem("p8s.token") || ""; } catch { return ""; } })();
-document.title = ct + " — terminal";
-document.getElementById("name").textContent = ct + " (container)";
+document.title = host ? (nodeName || "Server") + " shell — root" : ct + " — terminal";
+document.getElementById("name").textContent = host ? (nodeName ? nodeName + " — " : "") + "server shell (root)" : ct + " (container)";
 const term = new Terminal({cursorBlink: true, fontFamily: "ui-monospace,SFMono-Regular,Menlo,Consolas,monospace", fontSize: 14, scrollback: 5000,
   theme: {background: "#0e1116", foreground: "#e6edf3"}});
 const fit = new FitAddon.FitAddon();
@@ -266,7 +267,7 @@ async function connect(){
   status("connecting…");
   let ticket;
   try {
-    const r = await fetch("/api/v1/containers/" + encodeURIComponent(ct) + "/console", {method: "POST", headers: {"Authorization": "Bearer " + token}});
+    const r = await fetch(host ? "/api/v1/node/shell" + (node ? "?node=" + encodeURIComponent(node) : "") : "/api/v1/containers/" + encodeURIComponent(ct) + "/console", {method: "POST", headers: {"Authorization": "Bearer " + token}});
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(j?.error?.message || "HTTP " + r.status);
     ticket = j.ticket;

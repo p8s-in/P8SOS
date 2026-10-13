@@ -404,6 +404,9 @@ func serve(args []string) error {
 	apiSrv.VMs, apiSrv.Cluster, apiSrv.ClusterVMs = cvms, clu, cvms
 	apiSrv.Dial, apiSrv.RemoteMetrics = cvms.Dial, cvms.RemoteMetrics
 	go clu.Loop(ctx, 15*time.Second)
+	if cfg.HostShellOn() {
+		apiSrv.HostShell = ct.HostShell // Server → Shell (admins), like Proxmox
+	}
 
 	srv := &http.Server{
 		Addr:              cfg.Listen,

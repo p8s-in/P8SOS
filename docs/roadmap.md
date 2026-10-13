@@ -52,6 +52,8 @@ Each phase ships something usable on its own.
 - [x] Containers (LXC, unprivileged, ZFS clones, cgroup limits, cloud-init, browser terminal with xterm.js), Create CT, Manage, container templates on the Server page, `p8 ct` ([containers.md](containers.md))
 - [x] Container backups (freeze + ZFS snapshot + zstd, restore as new, daily schedule), per-container firewall,
   public IPs from pools, P8S Cloud plans and billing for containers
+- [x] Server shell in the browser (root, like Proxmox's node Shell): Server → >_ Shell, and per cluster server; admins only,
+  logged in Activity, `host_shell: false` turns it off
 - [x] Clusters v1: master + workers over WireGuard (works across NAT/CGNAT), one-time join codes with certificate pinning,
   one dashboard for all servers' VMs, automatic placement by free RAM (or pick a server), console/backups/firewall
   through the tunnel, `p8 cluster` / `p8 join` ([cluster.md](cluster.md)). Next: move VMs between servers, HA

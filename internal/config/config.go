@@ -39,11 +39,16 @@ type Config struct {
 	// SSHPorts gives every VM and container on the private (NAT) network an SSH
 	// port on this server, from SSHPortBase up (default on, from 2201).
 	SSHPorts    *bool `json:"ssh_ports"`
+	HostShell   *bool `json:"host_shell"`
 	SSHPortBase int   `json:"ssh_port_base"`
 }
 
 // SSHPortsOn reports whether NAT guests get SSH ports (default yes).
 func (c *Config) SSHPortsOn() bool { return c.SSHPorts == nil || *c.SSHPorts }
+
+// HostShellOn reports whether admins get the server's root shell in the
+// dashboard (Server → Shell, like Proxmox); "host_shell": false turns it off.
+func (c *Config) HostShellOn() bool { return c.HostShell == nil || *c.HostShell }
 
 // GuardOn reports whether VM isolation rules are wanted (default yes).
 func (c *Config) GuardOn() bool { return c.VMGuard == nil || *c.VMGuard }

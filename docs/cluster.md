@@ -62,6 +62,9 @@ make a machine with a public IP (e.g. a VPS) the master instead.
 - VMs installed **from an ISO** and VMs with a **public IP** go on the master for
   now (its ISO library and IP pools).
 
+Each worker has a **>_ Shell** button in Server → Cluster: a root shell of that
+server in the browser, through the tunnel (logged on both servers).
+
 Everything else works the same for VMs on workers: console (through the tunnel),
 start/stop, resize, snapshots, backups and restore, firewall, password, owner,
 usage charts. Customers' quotas, plans and billing are handled on the master.

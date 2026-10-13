@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bufio"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -19,6 +20,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
+	"p8sos/internal/ct"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -307,3 +310,55 @@ func TestClusterDiscoverInvite(t *testing.T) {
 }
 
 func mustJSON(v any) string { b, _ := json.Marshal(v); return string(b) }
+
+func TestClusterWorkerShell(t *testing.T) {
+	empty := func() *ownedVMs { return &ownedVMs{fakeVMs: &fakeVMs{}, vms: map[string]vm.VM{}} }
+	mo, wo := empty(), empty()
+	master := newClusterNode(t, 8192, mo, mo)
+	worker := newClusterNode(t, 8192, wo, wo)
+	worker.s.HostShell = func() (*ct.Terminal, error) {
+		return ct.StartPTY(exec.Command("sh", "-c", "read x; echo got:$x; sleep 1"))
+	}
+	b := master.req(t, "POST", "/api/v1/cluster/join-code", secret, fmt.Sprintf(`{"master_url":%q}`, master.srv.URL), 201)
+	code := strings.SplitN(strings.SplitN(b, `"code":"`, 2)[1], `"`, 2)[0]
+	worker.req(t, "POST", "/api/v1/cluster/join", secret, fmt.Sprintf(`{"url":%q,"code":%q}`, master.srv.URL, code), 200)
+
+	master.req(t, "POST", "/api/v1/node/shell?node=n9", secret, "", 404)
+	tk := master.req(t, "POST", "/api/v1/node/shell?node=n2", secret, "", 201)
+	path := strings.SplitN(strings.SplitN(tk, `"path":"`, 2)[1], `"`, 2)[0]
+	host := strings.TrimPrefix(master.srv.URL, "https://")
+	c, err := tls.Dial("tcp", host, &tls.Config{InsecureSkipVerify: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	io.WriteString(c, "GET "+path+" HTTP/1.1\r\nHost: "+host+"\r\nOrigin: "+master.srv.URL+"\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"+
+		"Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: MDEyMzQ1Njc4OWFiY2RlZg==\r\n\r\n")
+	br := bufio.NewReader(c)
+	resp, err := http.ReadResponse(br, nil)
+	if err != nil || resp.StatusCode != 101 {
+		t.Fatalf("upgrade %v %v", resp, err)
+	}
+	// a masked client frame with "hello\n"
+	msg := []byte("hello\n")
+	mask := []byte{1, 2, 3, 4}
+	fr := []byte{0x82, 0x80 | byte(len(msg))}
+	fr = append(fr, mask...)
+	for i, ch := range msg {
+		fr = append(fr, ch^mask[i%4])
+	}
+	c.Write(fr)
+	c.SetReadDeadline(time.Now().Add(5 * time.Second))
+	var out strings.Builder
+	for !strings.Contains(out.String(), "got:hello") {
+		hdr := make([]byte, 2)
+		if _, err := io.ReadFull(br, hdr); err != nil {
+			t.Fatalf("read: %v (got %q)", err, out.String())
+		}
+		p := make([]byte, hdr[1]&0x7f)
+		io.ReadFull(br, p)
+		out.Write(p)
+	}
+	// the master's token can't ask a worker for its own shell tickets
+	worker.req(t, "GET", "/api/v1/cluster/shell", secret, "", 403)
+}
