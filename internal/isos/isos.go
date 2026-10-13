@@ -26,6 +26,9 @@ type ISO struct {
 	Name    string `json:"name"`
 	Bytes   int64  `json:"bytes"`
 	AddedAt string `json:"added_at"`
+	// Boot: what can start from it — "bios+uefi", "bios", "uefi" or "none"
+	// (drivers/data disc or damaged download; see BootInfo).
+	Boot string `json:"boot"`
 }
 
 var (
@@ -97,7 +100,7 @@ func (l *Library) List() ([]ISO, error) {
 			continue
 		}
 		if fi, err := e.Info(); err == nil {
-			out = append(out, ISO{Name: e.Name(), Bytes: fi.Size(), AddedAt: fi.ModTime().UTC().Format(time.RFC3339)})
+			out = append(out, ISO{Name: e.Name(), Bytes: fi.Size(), AddedAt: fi.ModTime().UTC().Format(time.RFC3339), Boot: Boot(filepath.Join(l.Dir, e.Name()))})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
@@ -145,7 +148,7 @@ func (l *Library) Save(name string, r io.Reader) (ISO, error) {
 		os.Remove(tmp)
 		return ISO{}, err
 	}
-	return ISO{Name: name, Bytes: n, AddedAt: time.Now().UTC().Format(time.RFC3339)}, nil
+	return ISO{Name: name, Bytes: n, AddedAt: time.Now().UTC().Format(time.RFC3339), Boot: Boot(final)}, nil
 }
 
 // looksLikeISO checks the volume descriptor at sector 16 (offset 32769):

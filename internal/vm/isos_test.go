@@ -13,6 +13,21 @@ import (
 
 func isoBytes() []byte { b := make([]byte, 40000); copy(b[32769:], "CD001"); return b }
 
+// bootISO is an image that starts on BIOS and UEFI (El Torito catalog at sector 19).
+func bootISO() []byte {
+	b := make([]byte, 20*2048)
+	copy(b[32769:], "CD001")
+	r := b[17*2048:]
+	copy(r[1:], "CD001\x01EL TORITO SPECIFICATION")
+	r[0x47] = 19
+	c := b[19*2048:]
+	c[0], c[1], c[0x1e], c[0x1f] = 0x01, 0x00, 0x55, 0xAA // validation entry, x86
+	c[32] = 0x88                                          // default entry: bootable
+	c[64], c[65], c[66] = 0x91, 0xEF, 1                   // last section: EFI, 1 entry
+	c[96] = 0x88
+	return b
+}
+
 func TestCreateFromISO(t *testing.T) {
 	ctx := context.Background()
 	svc, hv, disks, seeds := newSvc()
@@ -20,7 +35,13 @@ func TestCreateFromISO(t *testing.T) {
 		t.Fatalf("no library: %v", err)
 	}
 	svc.ISOs = &isos.Library{Dir: t.TempDir()}
-	if _, err := svc.SaveISO("win2022.iso", bytes.NewReader(isoBytes())); err != nil {
+	if _, err := svc.SaveISO("data.iso", bytes.NewReader(isoBytes())); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Create(ctx, CreateRequest{Name: "d1", ISO: "data.iso", OSType: "windows", DiskGB: 64, MemoryMiB: 4096}); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "no boot record") {
+		t.Fatalf("non-bootable iso: %v", err)
+	}
+	if _, err := svc.SaveISO("win2022.iso", bytes.NewReader(bootISO())); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := svc.SaveISO("bad.iso", strings.NewReader("nope")); !errors.Is(err, ErrInvalid) {
@@ -68,7 +89,7 @@ func TestCreateFromISO(t *testing.T) {
 	if err := svc.DeleteISO(ctx, "win2022.iso"); err != nil {
 		t.Fatal(err)
 	}
-	if l, _ := svc.ListISOs(); len(l) != 0 {
+	if l, _ := svc.ListISOs(); len(l) != 1 || l[0].Boot != "none" {
 		t.Fatalf("list %+v", l)
 	}
 	if err := svc.DeleteISO(ctx, "win2022.iso"); !errors.Is(err, ErrNotFound) {
@@ -104,10 +125,11 @@ func TestCreateWindows11(t *testing.T) {
 	ctx := context.Background()
 	svc, hv, _, _ := newSvc()
 	svc.ISOs = &isos.Library{Dir: t.TempDir()}
-	for _, n := range []string{"Win11.iso", "virtio-win.iso"} {
-		if _, err := svc.SaveISO(n, bytes.NewReader(isoBytes())); err != nil {
-			t.Fatal(err)
-		}
+	if _, err := svc.SaveISO("Win11.iso", bytes.NewReader(bootISO())); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.SaveISO("virtio-win.iso", bytes.NewReader(isoBytes())); err != nil {
+		t.Fatal(err)
 	}
 	if _, err := svc.Create(ctx, CreateRequest{Name: "w11", ISO: "Win11.iso", OSType: "windows11", DiskGB: 40, MemoryMiB: 4096}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("too small: %v", err)

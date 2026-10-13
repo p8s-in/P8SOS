@@ -29,6 +29,8 @@ document.body.insertAdjacentHTML("beforeend", `
 
   <h3>Home network</h3>
   <div id="ndLan"></div>
+  <div class="inline" style="margin-top:6px"><button class="btn" id="ndNetCheck">Check guest internet</button><button class="btn" id="ndNetFix">Repair</button>
+    <span class="sub">VMs or containers can't reach the internet? Check finds why (NAT rules, forwarding, DHCP, firewall); Repair fixes it while they keep running.</span></div>
 
   <h3>Debian updates and power</h3>
   <div id="ndOS"></div>
@@ -112,6 +114,9 @@ function renderNode(){
     ? `<div class="sub">✔ VMs can join your home network (choose "Home network" when creating a VM).</div>`
     : `<div class="inline"><button class="btn" id="ndLanGo" ${dis}>Set up</button><span class="sub">Lets VMs get addresses from your router, like other devices. Needs an Ethernet cable;
        the network drops for a few seconds and the old settings come back by themselves if anything goes wrong.</span></div>`;
+  $("#ndNetCheck").disabled = $("#ndNetFix").disabled = busy;
+  $("#ndNetCheck").onclick = () => runTask("net-check", "");
+  $("#ndNetFix").onclick = () => runTask("net-repair", "", "Repair the guest network now? Running VMs and containers keep running; the dashboard may restart for a moment.");
   if ($("#ndLanGo")) $("#ndLanGo").onclick = () => runTask("lan-setup", "", "Set up the home network now? The server's network drops for a few seconds; if it doesn't come back within 60 s the old settings are restored.");
 
   const o = n.os;

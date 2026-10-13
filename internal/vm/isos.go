@@ -90,6 +90,9 @@ func (s *Service) createFromISO(ctx context.Context, r CreateRequest) (VM, error
 	default:
 		errs = append(errs, `os_type must be "linux", "windows" or "windows11"`)
 	}
+	if perr == nil {
+		errs = append(errs, bootProblem(r.ISO, isos.Boot(isoPath), r.OSType)...)
+	}
 	driversPath := ""
 	if r.DriversISO != "" {
 		p, err := lib.Path(r.DriversISO)
@@ -326,4 +329,19 @@ func (s *Service) UpgradeDomains(ctx context.Context) (needRestart []string, err
 		}
 	}
 	return needRestart, nil
+}
+
+// bootProblem explains why a VM of this type can't start from the ISO.
+func bootProblem(name, boot, osType string) []string {
+	uefi := osType == "windows11"
+	switch {
+	case boot == "none":
+		return []string{fmt.Sprintf("%s can't start a computer: it has no boot record. It is a drivers or data disc "+
+			"(like virtio-win) or the download is incomplete — pick the installer ISO, or add it again", name)}
+	case uefi && boot == "bios":
+		return []string{fmt.Sprintf("%s only starts on BIOS machines; choose type \"Windows 10 / Server\" or \"Linux\" instead of Windows 11", name)}
+	case !uefi && boot == "uefi":
+		return []string{fmt.Sprintf("%s only starts on UEFI machines; choose type \"Windows 11\" for it", name)}
+	}
+	return nil
 }

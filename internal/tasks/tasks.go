@@ -31,13 +31,15 @@ const (
 	OSUpgrade   = "os-upgrade"   // install Debian updates
 	Reboot      = "reboot"       // restart the server
 	ZFSCache    = "zfs-cache"    // arg: ZFS cache limit in MiB, or "auto" (10% of RAM)
+	NetCheck    = "net-check"    // why guests have no internet
+	NetRepair   = "net-repair"   // fix it (VMs keep running)
 )
 
 // Titles for the task log.
 var Titles = map[string]string{
 	Template: "Add OS template", CTTemplate: "Add container template", StorageGrow: "Grow VM storage", LANSetup: "Set up the home network",
 	OSCheck: "Check for Debian updates", OSUpgrade: "Install Debian updates", Reboot: "Reboot the server",
-	ZFSCache: "Set the ZFS cache limit",
+	ZFSCache: "Set the ZFS cache limit", NetCheck: "Check the guest network", NetRepair: "Repair the guest network",
 }
 
 // Task is one run.
@@ -130,6 +132,10 @@ func (m *Manager) command(kind, arg string) ([]string, error) {
 		return sh("os-upgrade.sh", "upgrade"), nil
 	case Reboot:
 		return []string{"/bin/systemctl", "reboot"}, nil
+	case NetCheck:
+		return sh("netcheck.sh"), nil
+	case NetRepair:
+		return sh("netcheck.sh", "--repair"), nil
 	case ZFSCache:
 		if n, err := strconv.Atoi(arg); arg != "auto" && (err != nil || n < 256 || n > 1<<20) {
 			return nil, fmt.Errorf("%w: ZFS cache limit must be 256 MiB or more, or auto", ErrInvalid)

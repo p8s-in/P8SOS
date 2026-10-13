@@ -1,0 +1,11 @@
+[Unit]
+Description=P8S OS guest network check (NAT rules, forwarding, DHCP for VMs and containers)
+After=network-online.target libvirtd.service virtnetworkd.service nftables.service docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/share/p8s/netcheck.sh --repair --quiet
+
+[Install]
+WantedBy=multi-user.target

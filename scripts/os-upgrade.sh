@@ -34,6 +34,11 @@ case ${1:-check} in
     echo "==> installing updates (VMs keep running)"
     "${APT[@]}" dist-upgrade
     "${APT[@]}" autoremove --purge
+    # package scripts may reload the firewall or restart libvirt: make sure guests still reach the internet
+    if [[ -x /usr/local/share/p8s/netcheck.sh ]]; then
+      echo "==> checking the guest network"
+      /usr/local/share/p8s/netcheck.sh --repair | sed 's/^/  /' || true
+    fi
     if [[ -f /var/run/reboot-required ]]; then
       echo "==> done. A reboot is needed to use the new kernel/libraries (Server page -> Reboot)."
     else

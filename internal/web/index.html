@@ -810,6 +810,8 @@ function renderShell(){
 
 const gb = mib => (mib / 1024).toFixed(mib % 1024 ? 1 : 0) + " GB";
 // RAM column: "120 MB of 0.5 GB" while running (in use now, caches not counted), else the size given
+const isoBoot = {"bios+uefi": "boots on BIOS and UEFI", bios: "boots on BIOS only (not Windows 11 type)", uefi: "boots on UEFI only (Windows 11 type)",
+  none: `<b style="color:var(--warn)">not bootable</b> — a drivers/data disc (fine as the drivers CD) or an incomplete download`};
 const ramCell = (used, size) => used ? `<span title="in use now (disk cache not counted) / RAM given">${used < 1024 ? used + " MB" : (used / 1024).toFixed(1) + " GB"} of ${gb(size)}</span>` : gb(size);
 // where the RAM goes; ZFS cache and file cache are given back when VMs need RAM
 function memSub(h){
@@ -942,7 +944,7 @@ async function openCreate(){
   $("#cTpl").innerHTML = `<optgroup label="Ready to use (cloud images)">` +
     templates.map(t => `<option value="${esc(t.name)}" data-min="${t.min_disk_gb}" data-user="${esc(t.default_user)}">${esc(t.label || t.name)}</option>`).join("") +
     `</optgroup><optgroup label="Install from ISO (in the console)">` +
-    (isoList.length ? isoList.map(i => `<option value="iso:${esc(i.name)}" data-min="1">${esc(i.name)}</option>`).join("")
+    (isoList.length ? isoList.map(i => `<option value="iso:${esc(i.name)}" data-min="1" data-boot="${esc(i.boot || "")}"${i.boot === "none" ? " disabled" : ""}>${esc(i.name)}${i.boot === "none" ? " — not bootable (drivers/data disc or incomplete download)" : ""}</option>`).join("")
       : `<option value="" disabled>No ISOs yet — add one with the ISOs button</option>`) + `</optgroup>`;
   $("#cOS").value = "linux"; $("#cDrv").innerHTML = ""; osHint();
   const min = templates[0]?.min_disk_gb || 1;
@@ -1399,7 +1401,7 @@ async function loadIsos(){
   try {
     const l = (await call("GET", "/isos")).isos;
     $("#iList").innerHTML = l.length ? l.map(i => `<tr data-iso="${esc(i.name)}"><td><b class="mono">${esc(i.name)}</b>
-      <div class="sub">${fmtBytes(i.bytes)} · added ${esc(fmtTime(i.added_at))}</div></td>
+      <div class="sub">${fmtBytes(i.bytes)} · added ${esc(fmtTime(i.added_at))} · ${isoBoot[i.boot] || "boot: unknown"}</div></td>
       <td><button class="btn danger" data-i="del">Delete</button></td></tr>`).join("")
       : `<tr><td class="muted">No ISOs yet.</td></tr>`;
   } catch (err) { toast(err.message, true); }

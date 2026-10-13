@@ -72,6 +72,17 @@ journalctl -u p8sd -f
 New and re-defined Linux VMs also get an I/O thread, `io=native` and one disk/network queue per vCPU
 (up to 8). Existing VMs pick this up when they are powered off and started again.
 
+### Guests have no internet
+
+**Server → Check guest internet** (or `sudo bash /usr/local/share/p8s/netcheck.sh`) checks the
+server's own internet and DNS, IP forwarding, libvirt's NAT network (rule + dnsmasq for DHCP/DNS),
+a FORWARD policy of DROP (Docker), br_netfilter and the P8S firewall table. **Repair** (`--repair`)
+fixes what it finds while guests keep running: it re-enables forwarding, restarts libvirt's network
+daemon (which puts its NAT rules back and restarts dnsmasq), allows virbr0/br0 through a DROP policy
+and restarts p8sd if its firewall table was wiped. `p8s-net.service` runs the repair at every boot,
+after every `nftables` start/reload (a reload of `/etc/nftables.conf` runs `flush ruleset`) and after
+Debian updates.
+
 ### Memory shown in the dashboard
 
 Linux reports the ZFS cache (ARC) as "used" memory, so a ZFS server with nothing running can look

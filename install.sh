@@ -159,6 +159,12 @@ install -m 0755 "$REPO/scripts/storage.sh" /usr/local/share/p8s/storage.sh
 install -m 0755 "$REPO/scripts/os-upgrade.sh" /usr/local/share/p8s/os-upgrade.sh
 install -m 0755 "$REPO/scripts/make-ct-template.sh" /usr/local/share/p8s/make-ct-template.sh
 install -m 0755 "$REPO/scripts/tune.sh" /usr/local/share/p8s/tune.sh
+install -m 0755 "$REPO/scripts/netcheck.sh" /usr/local/share/p8s/netcheck.sh
+# guest internet: repair at boot and after every firewall reload (which can wipe libvirt's NAT rules)
+install -m 0644 "$REPO/deploy/p8s-net.service" /etc/systemd/system/p8s-net.service
+install -d -m 0755 /etc/systemd/system/nftables.service.d
+printf '[Service]\n# P8S: loading /etc/nftables.conf flushes the ruleset; put libvirt NAT + P8S rules back\nExecStartPost=-/bin/systemctl --no-block start p8s-net.service\nExecReload=-/bin/systemctl --no-block start p8s-net.service\n' \
+  >/etc/systemd/system/nftables.service.d/p8s.conf
 ok "installed /usr/local/bin/p8sd and the 'p8' command"
 
 # ---------------------------------------------------------------------------
@@ -220,6 +226,10 @@ curl -kfs https://127.0.0.1:8006/api/v1/health >/dev/null || { journalctl -u p8s
 plog=$(journalctl -u p8sd --since "$since" --no-pager)
 grep -q "snapshot missing" <<<"$plog" && die "p8sd can't see the template snapshot"
 ok "p8sd running: $(curl -kfs https://127.0.0.1:8006/api/v1/health)"
+
+# Guest internet: check and repair now (VMs keep running), and at every boot
+systemctl enable p8s-net.service >/dev/null 2>&1 || true
+bash /usr/local/share/p8s/netcheck.sh --repair | sed 's/^/  /' || true
 
 # Host tuning: ZFS cache limit, KSM, vhost_net, low swappiness
 bash "$REPO/scripts/tune.sh" | sed 's/^/  /' || echo "  note: tuning not applied"
