@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"p8sos/internal/netx"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -282,7 +283,7 @@ func (m *Manager) Check(ctx context.Context) error {
 	req.Header.Set("Content-Type", "application/json")
 	hc := m.HTTP
 	if hc == nil {
-		hc = &http.Client{Timeout: 20 * time.Second}
+		hc = netx.Client(20 * time.Second)
 	}
 	resp, err := hc.Do(req)
 	if err != nil {

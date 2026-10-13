@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"p8sos/internal/netx"
 	"time"
 )
 
@@ -40,7 +41,7 @@ func (r *Razorpay) do(ctx context.Context, method, path string, body, out any) e
 	}
 	hc := r.HTTP
 	if hc == nil {
-		hc = &http.Client{Timeout: 30 * time.Second}
+		hc = netx.Client(30 * time.Second)
 	}
 	resp, err := hc.Do(req)
 	if err != nil {

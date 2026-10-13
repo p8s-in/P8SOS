@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"p8sos/internal/netx"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -281,7 +282,7 @@ func serve(args []string) error {
 	// off-site copies of backups (folder, S3-compatible storage, another server over SSH)
 	off := &offsite.Manager{File: filepath.Join(cfg.DataDir, "offsite.json"), BackupDir: cfg.BackupDir,
 		KeyFile: filepath.Join(cfg.DataDir, "offsite", "id_ed25519"), Log: log, Jobs: svc.Jobs,
-		HTTP:    &http.Client{Transport: &http.Transport{Proxy: http.ProxyFromEnvironment, ResponseHeaderTimeout: 2 * time.Minute}},
+		HTTP:    &http.Client{Transport: offsiteTransport()},
 		Allowed: func() bool { return lic.Allows(license.FeatOffsite) }}
 	svc.AfterBackup = off.Enqueue
 	if cts != nil {
@@ -572,4 +573,11 @@ func newBoot(stamp string) bool {
 	}
 	_ = os.WriteFile(stamp, []byte(id+"\n"), 0o600)
 	return true
+}
+
+// offsiteTransport: netx dialing (system resolver fallback) for S3 targets.
+func offsiteTransport() *http.Transport {
+	t := netx.Transport()
+	t.ResponseHeaderTimeout = 2 * time.Minute
+	return t
 }

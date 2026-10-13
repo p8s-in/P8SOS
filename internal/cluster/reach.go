@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"p8sos/internal/netx"
 	"strings"
 	"time"
 )
@@ -13,7 +14,7 @@ import (
 // PublicIP asks a public service which address this network has on the
 // internet (to fill in the "other network" form).
 func PublicIP(ctx context.Context) (string, error) {
-	c := &http.Client{Timeout: 6 * time.Second}
+	c := netx.Client(6 * time.Second)
 	var last error
 	for _, u := range []string{"https://api.ipify.org", "https://ifconfig.me/ip", "https://icanhazip.com"} {
 		req, _ := http.NewRequestWithContext(ctx, "GET", u, nil)

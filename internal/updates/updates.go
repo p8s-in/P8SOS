@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"p8sos/internal/netx"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -203,7 +204,7 @@ func (m *Manager) client() *http.Client {
 	if m.HTTP != nil {
 		return m.HTTP
 	}
-	return &http.Client{Timeout: 10 * time.Minute}
+	return netx.Client(10 * time.Minute)
 }
 
 // Check asks the update server for the newest release on the channel.

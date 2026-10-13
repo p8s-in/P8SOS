@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"p8sos/internal/netx"
 	"strings"
 	"time"
 )
@@ -52,7 +53,7 @@ func (c *Cloudflare) do(ctx context.Context, method, path string, body, out any)
 	}
 	hc := c.HTTP
 	if hc == nil {
-		hc = &http.Client{Timeout: 30 * time.Second}
+		hc = netx.Client(30 * time.Second)
 	}
 	resp, err := hc.Do(req)
 	if err != nil {

@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"p8sos/internal/netx"
 	"sort"
 	"strconv"
 	"strings"
@@ -45,7 +46,7 @@ func newS3(t Target, client *http.Client) (*s3Backend, error) {
 		region = "us-east-1"
 	}
 	if client == nil {
-		client = &http.Client{Timeout: 0}
+		client = netx.Client(0)
 	}
 	return &s3Backend{endpoint: u, region: region, bucket: t.Bucket, access: t.AccessKey, secret: t.SecretKey,
 		pathStyle: !t.VirtualHost, partSize: 64 << 20, client: client, now: time.Now}, nil

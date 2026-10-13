@@ -9,10 +9,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"p8sos/internal/netx"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -48,60 +48,12 @@ type Library struct {
 	Client *http.Client // for downloads; nil = http.DefaultClient
 }
 
-// ipv4First downloads over IPv4 first: many home and office networks hand out
-// IPv6 addresses without a working IPv6 route ("network is unreachable"). If
-// the network's DNS gives no IPv4 address, public resolvers are asked too
-// (some routers' DNS drop answers).
-var ipv4First = &http.Client{Transport: func() *http.Transport {
-	t := http.DefaultTransport.(*http.Transport).Clone()
-	t.DialContext = dialIPv4First
-	return t
-}()}
-
-var publicDNS = []string{"1.1.1.1:53", "8.8.8.8:53", "9.9.9.9:53"}
-
-func dialIPv4First(ctx context.Context, network, addr string) (net.Conn, error) {
-	d := &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}
-	c, err4 := d.DialContext(ctx, "tcp4", addr)
-	if err4 == nil {
-		return c, nil
-	}
-	host, port, _ := net.SplitHostPort(addr)
-	var dnsErr *net.DNSError
-	if errors.As(err4, &dnsErr) && net.ParseIP(host) == nil {
-		for _, srv := range publicDNS {
-			r := &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
-				return (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, "udp", srv)
-			}}
-			lctx, cancel := context.WithTimeout(ctx, 6*time.Second)
-			ips, err := r.LookupIP(lctx, "ip4", host)
-			cancel()
-			if err != nil {
-				continue
-			}
-			for _, ip := range ips {
-				if c, err := d.DialContext(ctx, "tcp4", net.JoinHostPort(ip.String(), port)); err == nil {
-					return c, nil
-				} else {
-					err4 = err
-				}
-			}
-			break // the name has IPv4 addresses, but none answered
-		}
-	}
-	c, err := d.DialContext(ctx, network, addr)
-	if err != nil {
-		if strings.Contains(err.Error(), "network is unreachable") && errors.As(err4, &dnsErr) {
-			return nil, fmt.Errorf("%w: %s can only be reached over IPv6, and this network has no IPv6 internet "+
-				"(IPv4: %v)", ErrNoRoute, host, err4)
-		}
-		return nil, fmt.Errorf("%v (IPv4: %v)", err, err4)
-	}
-	return c, nil
-}
+// ipv4First downloads via netx: IPv4 first, system resolver and public DNS
+// when Go's own DNS lookup fails (see package netx).
+var ipv4First = netx.Client(0)
 
 // ErrNoRoute means the download site can't be reached from this network.
-var ErrNoRoute = errors.New("can't reach the download site")
+var ErrNoRoute = netx.ErrNoRoute
 
 // Presets are well-known downloads with mirrors, tried in order
 // ("preset:virtio-win" as the URL).
