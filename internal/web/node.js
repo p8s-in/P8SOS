@@ -11,6 +11,9 @@ document.body.insertAdjacentHTML("beforeend", `
     <button class="btn" id="ndShell" type="button" title="Root shell on this server, in a new window (like at its keyboard)">&gt;_ Shell</button></div>
   <div id="ndRunning" class="toast" style="max-width:none;box-shadow:none;margin:8px 0;border-left-color:var(--warn)" hidden></div>
 
+  <h3>Memory</h3>
+  <div id="ndMem"></div>
+
   <h3>VM storage</h3>
   <div id="ndStorage"></div>
 
@@ -61,6 +64,7 @@ async function loadNode(quiet){
     node = await r.json();
   } catch (e) { if (!quiet) toast(e.message, true); } // p8sd may be restarting (template added)
   if (node) renderNode();
+  loadMem();
   if (taskOpen) await showTask(taskOpen, true);
   clearTimeout(nodeTimer);
   if ($("#dlgNode").open && (node?.running || !node)) nodeTimer = setTimeout(() => loadNode(true), 3000);
@@ -127,6 +131,39 @@ function renderNode(){
       <td style="text-align:right"><button class="btn" data-task="${esc(t.id)}">Log</button></td></tr>`).join("")
     : `<tr><td class="sub">No tasks yet.</td></tr>`;
   for (const b of $("#ndTasks").querySelectorAll("[data-task]")) b.onclick = () => showTask(b.dataset.task);
+}
+
+// Memory: where the RAM goes, the biggest programs, and the ZFS cache limit.
+const ndMiB = m => m >= 1024 ? (m / 1024).toFixed(m >= 10240 ? 0 : 1) + " GB" : m + " MB";
+async function loadMem(){
+  let d;
+  try { d = await call("GET", "/node/memory"); } catch { return; }
+  const m = d.mem, t = m.total_mib || 1;
+  const parts = [
+    ["VMs + containers", m.guests_mib, "var(--series-1)", "running guests"],
+    ["System", m.system_mib, "var(--series-2)", "Debian, p8sd, libvirt and other programs"],
+    ["ZFS cache", Math.max(0, t - m.used_mib - m.cache_mib - m.free_mib), "var(--series-3)", "ZFS keeps recently read disk blocks here and gives the RAM back when VMs need it"],
+    ["File cache", Math.max(0, m.cache_mib), "var(--series-4)", "Linux's normal disk cache, given back when needed"],
+  ];
+  const free = Math.max(0, t - parts.reduce((a, p) => a + p[1], 0));
+  const bar = parts.concat([["Free", free, "var(--line)", "not used at all"]]).filter(p => p[1] > 0)
+    .map(p => `<i title="${esc(p[0])}: ${ndMiB(p[1])} — ${esc(p[3])}" style="width:${(p[1] / t * 100).toFixed(2)}%;background:${p[2]};display:inline-block;height:100%"></i>`).join("");
+  const lim = d.zfs_cache_max_mib;
+  $("#ndMem").innerHTML = `<div class="inline"><b>${ndMiB(m.used_mib)} really used</b><span class="sub">of ${ndMiB(m.total_mib)}${m.swap_used_mib ? ` · swap ${ndMiB(m.swap_used_mib)}` : ""}${m.ksm_saved_mib > 64 ? ` · KSM saves ${ndMiB(m.ksm_saved_mib)}` : ""}</span></div>
+    <div style="height:14px;border-radius:7px;overflow:hidden;background:var(--bg);border:1px solid var(--line);margin:6px 0;white-space:nowrap;font-size:0">${bar}</div>
+    <div class="sub">${parts.map(p => `<span title="${esc(p[3])}"><b style="color:${p[2]}">■</b> ${esc(p[0])} ${ndMiB(p[1])}</span>`).join(" · ")} · free ${ndMiB(free)}</div>
+    <div class="sub" style="margin-top:4px">The ZFS cache and file cache are not counted as used: they speed up disks and shrink by themselves when VMs start.</div>
+    ${m.zfs_cache_mib || lim ? `<div class="inline" style="margin-top:6px"><span class="sub">ZFS cache limit</span>
+      <input id="ndArc" type="number" min="256" step="256" style="width:110px;max-width:110px;flex:none" value="${lim || ""}" placeholder="default"> <span class="sub">MB${lim ? "" : " (ZFS default: half the RAM)"}</span>
+      <button class="btn" id="ndArcSet">Set</button><button class="btn" id="ndArcAuto" title="10% of RAM, 1-16 GB">Auto</button></div>` : ""}
+    <details style="margin-top:6px"><summary class="sub">Biggest programs</summary><table class="snaps"><tbody>${(d.top || []).map(p =>
+      `<tr><td>${esc(p.name)}${p.count > 1 ? ` <span class="sub">×${p.count}</span>` : ""}</td><td style="text-align:right" class="mono">${ndMiB(p.rss_mib)}</td></tr>`).join("")}</tbody></table></details>`;
+  if ($("#ndArcSet")) $("#ndArcSet").onclick = () => {
+    const v = parseInt($("#ndArc").value, 10);
+    if (!(v >= 256)) return toast("Give the limit in MB, 256 or more", true);
+    runTask("zfs-cache", String(v), `Limit the ZFS cache to ${ndMiB(v)}? It shrinks within a minute; VMs keep running.`);
+  };
+  if ($("#ndArcAuto")) $("#ndArcAuto").onclick = () => runTask("zfs-cache", "auto", "Set the ZFS cache limit to 10% of RAM (1-16 GB)?");
 }
 
 async function runTask(kind, arg, question){

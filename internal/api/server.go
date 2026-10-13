@@ -293,6 +293,7 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("DELETE /api/v1/containers/{name}/snapshots/{snap}", s.ctDeleteSnapshot)
 	auth.HandleFunc("GET /api/v1/ssh-ports", s.sshPorts)
 	auth.HandleFunc("GET /api/v1/node", s.getNode)
+	auth.HandleFunc("GET /api/v1/node/memory", s.getMemory)
 	auth.HandleFunc("GET /api/v1/node/tasks", s.listTasks)
 	auth.HandleFunc("POST /api/v1/node/shell", s.hostShellTicket)
 	auth.HandleFunc("POST /api/v1/node/tasks", s.startTask)

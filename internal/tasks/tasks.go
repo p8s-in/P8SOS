@@ -30,12 +30,14 @@ const (
 	OSCheck     = "os-check"     // apt-get update + list what can be upgraded
 	OSUpgrade   = "os-upgrade"   // install Debian updates
 	Reboot      = "reboot"       // restart the server
+	ZFSCache    = "zfs-cache"    // arg: ZFS cache limit in MiB, or "auto" (10% of RAM)
 )
 
 // Titles for the task log.
 var Titles = map[string]string{
 	Template: "Add OS template", CTTemplate: "Add container template", StorageGrow: "Grow VM storage", LANSetup: "Set up the home network",
 	OSCheck: "Check for Debian updates", OSUpgrade: "Install Debian updates", Reboot: "Reboot the server",
+	ZFSCache: "Set the ZFS cache limit",
 }
 
 // Task is one run.
@@ -128,6 +130,11 @@ func (m *Manager) command(kind, arg string) ([]string, error) {
 		return sh("os-upgrade.sh", "upgrade"), nil
 	case Reboot:
 		return []string{"/bin/systemctl", "reboot"}, nil
+	case ZFSCache:
+		if n, err := strconv.Atoi(arg); arg != "auto" && (err != nil || n < 256 || n > 1<<20) {
+			return nil, fmt.Errorf("%w: ZFS cache limit must be 256 MiB or more, or auto", ErrInvalid)
+		}
+		return sh("tune.sh", "--arc-max", arg), nil
 	}
 	return nil, fmt.Errorf("%w: task %q", ErrInvalid, kind)
 }

@@ -14,24 +14,46 @@ mem=$((mem_kb * 1024))
 gib=$((1024 * 1024 * 1024))
 
 # --- ZFS ARC -----------------------------------------------------------------
-arc=$((mem / 10))
-((arc < gib)) && arc=$gib
-((arc > 16 * gib)) && arc=$((16 * gib))
-# never more than half of RAM on small machines
-((arc > mem / 2)) && arc=$((mem / 2))
+# `tune.sh --arc-max MIB` (Server page → Memory) sets the limit by hand;
+# `tune.sh --arc-max auto` goes back to 10% of RAM.
 conf=/etc/modprobe.d/zfs.conf
-if [[ ! -f $conf ]] || ! grep -q zfs_arc_max "$conf" || grep -q "$mark" "$conf"; then
-  { grep -v -e zfs_arc_max -e "$mark" "$conf" 2>/dev/null || true
-    echo "$mark: ARC max = 10% of RAM"
-    echo "options zfs zfs_arc_max=$arc"; } >"$conf.new"
+umark="# p8s-dashboard: ZFS cache limit"
+set_arc() { # bytes, comment
+  { grep -v -e zfs_arc_max -e "$mark" -e "$umark" "$conf" 2>/dev/null || true
+    echo "$2"
+    echo "options zfs zfs_arc_max=$1"; } >"$conf.new"
   mv "$conf.new" "$conf"
   if [[ -w /sys/module/zfs/parameters/zfs_arc_max ]]; then
     min=$(cat /sys/module/zfs/parameters/zfs_arc_min 2>/dev/null || echo 0)
-    ((arc > min)) && echo "$arc" >/sys/module/zfs/parameters/zfs_arc_max || true
+    if ((min > 0 && $1 <= min)); then echo "$((min / 2))" >/sys/module/zfs/parameters/zfs_arc_min || true; fi
+    echo "$1" >/sys/module/zfs/parameters/zfs_arc_max || true
   fi
-  echo "ZFS ARC max: $((arc / 1024 / 1024)) MiB"
   # the root pool reads this from the initramfs on boot
   command -v update-initramfs >/dev/null && update-initramfs -u >/dev/null 2>&1 || true
+}
+auto_arc=$((mem / 10))
+((auto_arc < gib)) && auto_arc=$gib
+((auto_arc > 16 * gib)) && auto_arc=$((16 * gib))
+# never more than half of RAM on small machines
+((auto_arc > mem / 2)) && auto_arc=$((mem / 2))
+
+if [[ ${1:-} == --arc-max ]]; then
+  case ${2:-} in
+    auto) set_arc "$auto_arc" "$mark: ARC max = 10% of RAM"
+          echo "ZFS cache limit: $((auto_arc >> 20)) MiB (10% of RAM)" ;;
+    ''|*[!0-9]*) echo "usage: tune.sh --arc-max MIB|auto" >&2; exit 2 ;;
+    *) b=$(($2 << 20))
+       ((b > mem * 3 / 4)) && { echo "that's more than 3/4 of the RAM ($((mem >> 20)) MiB)" >&2; exit 2; }
+       set_arc "$b" "$umark"
+       echo "ZFS cache limit: $2 MiB" ;;
+  esac
+  [[ -r /proc/spl/kstat/zfs/arcstats ]] && echo "ZFS cache now: $(awk '$1=="size"{print int($3/1048576)}' /proc/spl/kstat/zfs/arcstats) MiB (shrinks within a minute)"
+  exit 0
+fi
+
+if [[ ! -f $conf ]] || ! grep -q zfs_arc_max "$conf" || grep -q "$mark" "$conf"; then
+  set_arc "$auto_arc" "$mark: ARC max = 10% of RAM"
+  echo "ZFS ARC max: $((auto_arc / 1024 / 1024)) MiB"
 else
   echo "ZFS ARC max: set by hand in $conf, left alone"
 fi

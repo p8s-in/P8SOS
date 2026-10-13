@@ -2,7 +2,6 @@
 package hostinfo
 
 import (
-	"bufio"
 	"context"
 	"os"
 	"runtime"
@@ -17,7 +16,8 @@ type Info struct {
 	CPUs        int      `json:"cpus"`
 	Load1       float64  `json:"load1"`
 	MemTotalMiB int      `json:"mem_total_mib"`
-	MemFreeMiB  int      `json:"mem_free_mib"` // available, not just free
+	MemFreeMiB  int      `json:"mem_free_mib"` // total - really used (cache counts as free)
+	Mem         Mem      `json:"mem"`
 	PoolSizeGB  float64  `json:"pool_size_gb"`
 	PoolFreeGB  float64  `json:"pool_free_gb"`
 	UptimeSec   int      `json:"uptime_sec"`
@@ -39,23 +39,9 @@ func Collect(ctx context.Context, run execx.Runner, dataset string) Info {
 			in.UptimeSec = int(u)
 		}
 	}
-	if f, err := os.Open("/proc/meminfo"); err == nil {
-		sc := bufio.NewScanner(f)
-		for sc.Scan() {
-			k, v, ok := strings.Cut(sc.Text(), ":")
-			if !ok {
-				continue
-			}
-			kb, _ := strconv.Atoi(strings.TrimSuffix(strings.TrimSpace(v), " kB"))
-			switch k {
-			case "MemTotal":
-				in.MemTotalMiB = kb / 1024
-			case "MemAvailable":
-				in.MemFreeMiB = kb / 1024
-			}
-		}
-		f.Close()
-	}
+	in.Mem = ReadMem()
+	in.MemTotalMiB = in.Mem.TotalMiB
+	in.MemFreeMiB = in.Mem.TotalMiB - in.Mem.UsedMiB
 	if run != nil && dataset != "" {
 		pool, _, _ := strings.Cut(dataset, "/")
 		if out, err := run.Run(ctx, "zfs", "list", "-Hp", "-o", "used,avail", pool); err == nil {

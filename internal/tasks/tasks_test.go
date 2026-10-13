@@ -65,3 +65,18 @@ func TestTasks(t *testing.T) {
 		t.Fatalf("vanished %+v", g)
 	}
 }
+
+func TestZFSCacheArg(t *testing.T) {
+	m := &Manager{Scripts: "/s"}
+	if c, err := m.command(ZFSCache, "2048"); err != nil || strings.Join(c, " ") != "/bin/bash /s/tune.sh --arc-max 2048" {
+		t.Fatal(c, err)
+	}
+	if _, err := m.command(ZFSCache, "auto"); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{"", "100", "1;reboot", "-1"} {
+		if _, err := m.command(ZFSCache, bad); err == nil {
+			t.Fatal("accepted", bad)
+		}
+	}
+}

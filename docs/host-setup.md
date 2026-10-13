@@ -72,6 +72,15 @@ journalctl -u p8sd -f
 New and re-defined Linux VMs also get an I/O thread, `io=native` and one disk/network queue per vCPU
 (up to 8). Existing VMs pick this up when they are powered off and started again.
 
+### Memory shown in the dashboard
+
+Linux reports the ZFS cache (ARC) as "used" memory, so a ZFS server with nothing running can look
+nearly full. P8S counts it the way it behaves: the part of the ZFS cache that is given back to VMs
+(everything above `zfs_arc_min`) and the normal file cache are shown as cache, not used.
+**Server → Memory** shows the split (VMs + containers, system, ZFS cache, file cache, free), the
+biggest programs, and lets you set the ZFS cache limit (`tune.sh --arc-max MIB`, or `auto` = 10% of
+RAM). `GET /api/v1/node/memory` returns the same data.
+
 ## 5. Smoke test
 
 Follow the example session in [api.md](api.md). Then:

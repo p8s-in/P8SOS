@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 
+	"p8sos/internal/hostinfo"
 	"p8sos/internal/tasks"
 )
 
@@ -82,4 +83,16 @@ func (s *Server) getTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, t)
+}
+
+// getMemory: where the server's RAM goes (Server page → Memory).
+func (s *Server) getMemory(w http.ResponseWriter, r *http.Request) {
+	if !s.adminOnly(w, r) {
+		return
+	}
+	amax, amin := hostinfo.ARCLimits()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"mem": hostinfo.ReadMem(), "top": hostinfo.TopProcs(12),
+		"zfs_cache_max_mib": amax, "zfs_cache_min_mib": amin,
+	})
 }

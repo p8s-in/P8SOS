@@ -406,8 +406,9 @@ Names are shared with VMs (a container and a VM can't have the same name). See [
 | Method | Path | |
 |---|---|---|
 | GET | `/api/v1/node` | storage pool (size, used, free, health, how much it can grow), OS template catalog, home network, Debian updates, running task, recent tasks |
-| POST | `/api/v1/node/tasks` | `{"kind":"template","arg":"ubuntu-24.04"}` · `ct-template` (arg e.g. debian-13) · `storage-grow` · `lan-setup` · `os-check` · `os-upgrade` · `reboot` (202; 409 while another runs) |
+| POST | `/api/v1/node/tasks` | `{"kind":"template","arg":"ubuntu-24.04"}` · `ct-template` (arg e.g. debian-13) · `storage-grow` · `lan-setup` · `os-check` · `os-upgrade` · `reboot` · `zfs-cache` (arg MiB or `auto`) (202; 409 while another runs) |
 | GET | `/api/v1/node/tasks` / `/api/v1/node/tasks/{id}` | task list / one task with its log |
+| GET | `/api/v1/node/memory` | where the RAM goes: `mem` (used/guests/system/zfs_cache/cache/free/ksm_saved MiB), `top` programs, `zfs_cache_max_mib` |
 
 Tasks run as their own systemd units (`p8s-task-*`), so they finish even when p8sd restarts.
 

@@ -8,6 +8,7 @@ import (
 	"context"
 	"math"
 	"os"
+	"p8sos/internal/hostinfo"
 	"strconv"
 	"strings"
 	"sync"
@@ -258,27 +259,9 @@ func parseCPULine(line string) (busy, total uint64, ok bool) {
 	return busy, total, true
 }
 
-// ProcMem reads used (total - available) and total memory from /proc/meminfo.
+// ProcMem reads really-used and total memory (see hostinfo.ReadMem: page
+// cache and the part of the ZFS cache that is given back count as free).
 func ProcMem() (usedMiB, totalMiB int) {
-	f, err := os.Open("/proc/meminfo")
-	if err != nil {
-		return 0, 0
-	}
-	defer f.Close()
-	var tot, avail int
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		k, v, ok := strings.Cut(sc.Text(), ":")
-		if !ok {
-			continue
-		}
-		kb, _ := strconv.Atoi(strings.TrimSuffix(strings.TrimSpace(v), " kB"))
-		switch k {
-		case "MemTotal":
-			tot = kb
-		case "MemAvailable":
-			avail = kb
-		}
-	}
-	return (tot - avail) / 1024, tot / 1024
+	m := hostinfo.ReadMem()
+	return m.UsedMiB, m.TotalMiB
 }
