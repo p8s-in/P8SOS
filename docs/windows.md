@@ -37,3 +37,12 @@ Microsoft SPLA licensing).
   Disk snapshots don't include them. A VM restored from a backup as a new VM gets a fresh TPM: if
   BitLocker is on, have the recovery key ready.
 - Resizing, ejecting and upgrades keep UEFI and the TPM (the definition is re-rendered from its type).
+
+## Setup says "Let's connect you to a network" / "Something went wrong"
+
+Windows 11 setup wants internet. If the network shows **Connected** but setup still fails, the VM
+has a link but no working internet or DNS: run **Server → Check guest internet** (and **Repair**).
+To finish setup without internet: console → **Keys… → Shift+F10**, then type
+`start ms-cxh:localonly` (newer Windows 11) or `OOBE\BYPASSNRO` (older builds; the VM restarts and
+offers "I don't have internet"). Microsoft removes these shortcuts from time to time, so they may
+not work on the newest builds.

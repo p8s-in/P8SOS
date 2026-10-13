@@ -30,6 +30,16 @@ no() { say "  ✘ $*"; bad=$((bad + 1)); }
 fix() { say "    → fixed: $*"; fixed=$((fixed + 1)); }
 hint() { say "    $*"; }
 
+# dnsq SERVER NAME: one plain DNS A query (no EDNS, like most guests send);
+# prints "rcode answers", nothing on timeout. Pure bash: no dig needed.
+dnsq() {
+  local q='\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00' l
+  for l in ${2//./ }; do q+=$(printf '\\x%02x' ${#l})$l; done
+  q+='\x00\x00\x01\x00\x01'
+  timeout 4 bash -c "exec 3<>/dev/udp/$1/53; printf '$q' >&3; dd bs=512 count=1 status=none <&3" 2>/dev/null |
+    od -An -tu1 -N8 | awk 'NF>=8 {print $4 % 16, $7 * 256 + $8}'
+}
+
 libvirt_unit() { # the daemon that owns virtual networks
   if systemctl is-active -q virtnetworkd 2>/dev/null; then echo virtnetworkd; else echo libvirtd; fi
 }
@@ -89,6 +99,22 @@ else
   else
     no "dnsmasq for the NAT network isn't running — guests get no address and no DNS"
     dnsok=false
+  fi
+  gw=${net:-192.168.122.1}
+  if $dnsok; then
+    r=$(dnsq "$gw" www.msftconnecttest.com)
+    if [[ ${r%% *} == 0 && ${r##* } -gt 0 ]]; then
+      ok "guests' DNS ($gw) answers (www.msftconnecttest.com, what Windows checks)"
+    else
+      up=$(awk '/^nameserver/{print $2; exit}' /etc/resolv.conf)
+      ru=$( [[ -n $up && $up != 127.* ]] && dnsq "$up" www.msftconnecttest.com )
+      no "guests' DNS ($gw) gives no answer${r:+ (rcode ${r%% *})} — guests show 'no internet' even when connected"
+      if [[ -n $up && $up != 127.* ]]; then
+        if [[ ${ru%% *} == 0 && ${ru##* } -gt 0 ]]; then hint "the server's DNS $up answers, so dnsmasq is the problem (Repair restarts it)"
+        else hint "the server's DNS $up doesn't answer plain queries either — set another DNS on your router or in /etc/resolv.conf"; fi
+      fi
+      dnsok=false
+    fi
   fi
   if $repair && { ! $natok || ! $dnsok; }; then
     reload_libvirt_net

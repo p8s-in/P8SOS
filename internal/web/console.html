@@ -41,6 +41,18 @@ textarea{min-height:80px;font-family:ui-monospace,Menlo,Consolas,monospace}
   <span class="st" id="st"><span class="dot"></span><span id="stText">Connecting…</span></span>
   <span class="spacer"></span>
   <button class="btn" id="bCAD" disabled title="Send Ctrl+Alt+Del to the VM">Ctrl+Alt+Del</button>
+  <select class="btn" id="bKeys" disabled title="Send a key combination the browser would keep for itself">
+    <option value="">Keys…</option>
+    <option value="sf10">Shift+F10 (Windows setup: command prompt)</option>
+    <option value="win">Windows key</option>
+    <option value="alttab">Alt+Tab</option>
+    <option value="altf4">Alt+F4</option>
+    <option value="esc">Esc</option>
+    <option value="f2">F2 (firmware setup)</option>
+    <option value="f12">F12 (boot menu)</option>
+    <option value="caf1">Ctrl+Alt+F1</option>
+    <option value="caf2">Ctrl+Alt+F2</option>
+  </select>
   <button class="btn" id="bType" disabled title="Type text into the VM (e.g. a long password)">Type text</button>
   <button class="btn" id="bPw" title="Set a login password inside the VM">Set password</button>
   <select class="btn" id="bMode" title="How the screen is sent. Sharp is exact (use it on your home network); Compressed uses less bandwidth.">
@@ -136,9 +148,9 @@ async function connect(){
   rfb.scaleViewport = true;
   rfb.background = "#000";
   rfb.focusOnClick = true;
-  rfb.addEventListener("connect", () => { status("Connected", "ok"); $("#bCAD").disabled = $("#bType").disabled = false; rfb.focus(); });
+  rfb.addEventListener("connect", () => { status("Connected", "ok"); $("#bCAD").disabled = $("#bType").disabled = $("#bKeys").disabled = false; rfb.focus(); });
   rfb.addEventListener("disconnect", e => {
-    $("#bCAD").disabled = $("#bType").disabled = true; rfb = null;
+    $("#bCAD").disabled = $("#bType").disabled = $("#bKeys").disabled = true; rfb = null;
     status(e.detail.clean ? "Disconnected" : "Connection lost", "bad");
     message("The console is closed. If the VM was stopped or restarted, press Reconnect.");
     $("#bRe").hidden = false;
@@ -149,6 +161,18 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt
 
 $("#bRe").onclick = connect;
 $("#bCAD").onclick = () => { rfb?.sendCtrlAltDel(); rfb?.focus(); };
+// key combos: [keysym, code] held in order, then released in reverse
+const KC = {shift: [0xffe1, "ShiftLeft"], ctrl: [0xffe3, "ControlLeft"], alt: [0xffe9, "AltLeft"], win: [0xffeb, "MetaLeft"],
+  tab: [0xff09, "Tab"], esc: [0xff1b, "Escape"], f1: [0xffbe, "F1"], f2: [0xffbf, "F2"], f4: [0xffc1, "F4"], f10: [0xffc7, "F10"], f12: [0xffc9, "F12"]};
+const COMBOS = {sf10: ["shift", "f10"], win: ["win"], alttab: ["alt", "tab"], altf4: ["alt", "f4"], esc: ["esc"], f2: ["f2"], f12: ["f12"],
+  caf1: ["ctrl", "alt", "f1"], caf2: ["ctrl", "alt", "f2"]};
+$("#bKeys").onchange = () => {
+  const c = COMBOS[$("#bKeys").value]; $("#bKeys").value = "";
+  if (!rfb || !c) return;
+  for (const k of c) rfb.sendKey(KC[k][0], KC[k][1], true);
+  for (const k of [...c].reverse()) rfb.sendKey(KC[k][0], KC[k][1], false);
+  rfb.focus();
+};
 $("#bShot").onclick = async () => {
   if (!token) return toast("Open the console from the dashboard to use this", true);
   const r = await fetch(`/api/v1/vms/${encodeURIComponent(vm)}/screenshot`, {headers: {"Authorization": "Bearer " + token}});
