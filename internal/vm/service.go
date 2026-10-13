@@ -83,6 +83,11 @@ type Service struct {
 	OtherBackup func(ctx context.Context, key string, keep int) error
 	// AfterBackup is told about every finished backup (off-site copies); nil = nothing.
 	AfterBackup func(kind, guest, id string)
+	// ImportDir holds files to import (Proxmox backups, disk images); empty = imports off.
+	ImportDir string
+	// NVRAMDir is where libvirt keeps UEFI variables (<vm>_VARS.fd); empty =
+	// /var/lib/libvirt/qemu/nvram.
+	NVRAMDir string
 
 	locks    sync.Map // name -> *sync.Mutex; serializes ops per VM
 	memSched sync.Map // backup schedules when ScheduleFile is empty (tests)

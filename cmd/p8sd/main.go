@@ -121,6 +121,7 @@ func serve(args []string) error {
 		Backups:      &backup.Store{Dir: cfg.BackupDir, Dataset: cfg.VMDataset, Run: run},
 		Jobs:         &jobs.Manager{Log: log},
 		ISOs:         &isos.Library{Dir: cfg.ISODir},
+		ImportDir:    filepath.Join(cfg.DataDir, "import"), // Proxmox backups, disk images to import
 		Pools:        pools,
 		ScheduleFile: filepath.Join(cfg.DataDir, "backup-schedule.json"),
 		FirewallFile: filepath.Join(cfg.DataDir, "firewall.json"),
@@ -318,6 +319,8 @@ func serve(args []string) error {
 		// root passwords made for new VMs/containers, shown to their owners
 		Creds:         &creds.Store{File: filepath.Join(cfg.DataDir, "credentials.json")},
 		AutoPasswords: cfg.AutoRootPasswordsOn(),
+		Imports:       svc,
+		ImportFolder:  filepath.Join(cfg.DataDir, "import"),
 		Node: &tasks.Node{
 			Tasks: &tasks.Manager{Dir: filepath.Join(cfg.DataDir, "tasks"), Scripts: scriptsDir(), Run: run},
 			Run:   run, Pool: strings.SplitN(cfg.VMDataset, "/", 2)[0], DataDir: cfg.DataDir,

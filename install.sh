@@ -57,6 +57,8 @@ if zpool list -H "$POOL" >/dev/null 2>&1 && command -v virsh >/dev/null && comma
   ok "already installed, pool '$POOL' exists"
   command -v zstd >/dev/null || apt-get install -y zstd >/dev/null 2>&1 || true  # backups compress with it (newer versions)
   command -v ssh >/dev/null || apt-get install -y openssh-client >/dev/null 2>&1 || true  # off-site copies to another server
+  command -v qemu-img >/dev/null || apt-get install -y qemu-utils >/dev/null 2>&1 || true  # importing disk images (VMware, Hyper-V, ...)
+  command -v lzop >/dev/null || apt-get install -y lzop >/dev/null 2>&1 || true  # importing .vma.lzo Proxmox backups
 else
   P8S_BRIDGE=$BRIDGE bash "$REPO/scripts/bootstrap-debian13.sh" $DEV
 fi
@@ -152,6 +154,8 @@ systemctl daemon-reload
 chown -R "$USER_NAME": "$REPO/bin" 2>/dev/null || true
 install -m 0755 "$REPO/scripts/p8" /usr/local/bin/p8
 install -d -m 0755 /usr/local/share/p8s
+# files to import (Proxmox backups, disk images): the admin user can scp them here
+install -d -m 0775 -o "$USER_NAME" -g root /var/lib/p8s/import
 install -m 0755 "$REPO/scripts/smoke-test.sh" /usr/local/share/p8s/smoke-test.sh
 install -m 0755 "$REPO/scripts/setup-bridge.sh" /usr/local/share/p8s/setup-bridge.sh
 install -m 0755 "$REPO/scripts/make-template.sh" /usr/local/share/p8s/make-template.sh

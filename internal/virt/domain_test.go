@@ -195,3 +195,30 @@ func TestBalloon(t *testing.T) {
 		t.Fatal(string(b))
 	}
 }
+
+func TestImportOverrides(t *testing.T) {
+	s := Spec{Name: "imp", VCPUs: 2, MemoryMiB: 2048, DiskGB: 32, DiskPath: "/dev/zvol/t/imp-disk0", Bridge: "virbr0",
+		MAC: "52:54:00:00:00:09", OSType: "windows", DiskBus: "scsi", NICModel: "vmxnet3", Firmware: "uefi"}
+	x, err := DomainXML(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`<controller type="scsi" model="virtio-scsi">`, `bus="scsi"`, `<model type="vmxnet3">`, `<os firmware="efi">`} {
+		if !strings.Contains(string(x), want) {
+			t.Fatalf("missing %s:\n%s", want, x)
+		}
+	}
+	if strings.Contains(string(x), "secure-boot") {
+		t.Fatal("plain UEFI got secure boot")
+	}
+	back, err := ParseDomainXML(x)
+	if err != nil || back.DiskBus != "scsi" || back.NICModel != "vmxnet3" || back.Firmware != "uefi" {
+		t.Fatalf("round trip %+v %v", back, err)
+	}
+	// a Linux VM imported from a SATA disk keeps it
+	s = Spec{Name: "l", VCPUs: 4, MemoryMiB: 1024, DiskPath: "/dev/x", Bridge: "b", MAC: "52:54:00:00:00:0a", DiskBus: "sata"}
+	x, _ = DomainXML(s)
+	if !strings.Contains(string(x), `bus="sata"`) || strings.Contains(string(x), "iothread=") {
+		t.Fatalf("linux sata:\n%s", x)
+	}
+}

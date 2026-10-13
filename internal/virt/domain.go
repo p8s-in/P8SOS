@@ -41,7 +41,20 @@ type Spec struct {
 	Video string
 	// DefVersion is read back from a domain (DomainXML always writes the current one).
 	DefVersion int
+	// Overrides for VMs imported from other hypervisors, so they boot with
+	// the hardware they were installed on ("" = what OSType implies):
+	// DiskBus "virtio" | "scsi" (virtio-scsi) | "sata"; NICModel "virtio" |
+	// "e1000e" | "e1000" | "rtl8139" | "vmxnet3"; Firmware "bios" | "uefi"
+	// (UEFI without Secure Boot; "windows11" always has Secure Boot).
+	DiskBus  string
+	NICModel string
+	Firmware string
 }
+
+var (
+	DiskBuses = map[string]bool{"virtio": true, "scsi": true, "sata": true}
+	NICModels = map[string]bool{"virtio": true, "e1000e": true, "e1000": true, "rtl8139": true, "vmxnet3": true}
+)
 
 // DefVersion is the version of the VM definitions DomainXML writes. Older
 // definitions are re-rendered at start-up (vm.UpgradeDomains); they pick up
@@ -153,12 +166,21 @@ type metaXML struct {
 	DiskGB     int    `xml:"disk_gb"`
 	CreatedAt  string `xml:"created_at"`
 	Owner      string `xml:"owner,omitempty"`
+	DiskBus    string `xml:"disk_bus,omitempty"`
+	NICModel   string `xml:"nic_model,omitempty"`
+	Firmware   string `xml:"firmware,omitempty"`
+}
+
+type controllerXML struct {
+	Type  string `xml:"type,attr"`
+	Model string `xml:"model,attr,omitempty"`
 }
 
 type devicesXML struct {
-	Disks      []diskXML  `xml:"disk"`
-	Interfaces []ifaceXML `xml:"interface"`
-	Inputs     []struct {
+	Disks       []diskXML       `xml:"disk"`
+	Controllers []controllerXML `xml:"controller"`
+	Interfaces  []ifaceXML      `xml:"interface"`
+	Inputs      []struct {
 		Type string `xml:"type,attr"`
 		Bus  string `xml:"bus,attr"`
 	} `xml:"input"`
@@ -267,7 +289,8 @@ type ifaceXML struct {
 // MetadataXML is the P8S metadata element of a spec, for updating a running
 // domain in place (virsh metadata --live).
 func MetadataXML(s Spec) (string, error) {
-	m := metaXML{OSType: s.OSType, Template: s.Template, DiskGB: s.DiskGB, CreatedAt: s.CreatedAt, Owner: s.Owner}
+	m := metaXML{OSType: s.OSType, Template: s.Template, DiskGB: s.DiskGB, CreatedAt: s.CreatedAt, Owner: s.Owner,
+		DiskBus: s.DiskBus, NICModel: s.NICModel, Firmware: s.Firmware}
 	b, err := xml.Marshal(struct {
 		XMLName xml.Name `xml:"vm"`
 		metaXML
@@ -285,9 +308,11 @@ func DomainXML(s Spec) ([]byte, error) {
 	d.Type = "kvm"
 	d.Name = s.Name
 	d.UUID = s.UUID
-	d.Metadata.VM = metaXML{DefVersion: DefVersion, OSType: s.OSType, Template: s.Template, DiskGB: s.DiskGB, CreatedAt: s.CreatedAt, Owner: s.Owner}
+	d.Metadata.VM = metaXML{DefVersion: DefVersion, OSType: s.OSType, Template: s.Template, DiskGB: s.DiskGB, CreatedAt: s.CreatedAt, Owner: s.Owner,
+		DiskBus: s.DiskBus, NICModel: s.NICModel, Firmware: s.Firmware}
 	win := s.OSType == "windows" || s.OSType == "windows11"
-	uefi := s.OSType == "windows11"
+	secure := s.OSType == "windows11"
+	uefi := secure || s.Firmware == "uefi"
 	d.Memory.Unit, d.Memory.Value = "MiB", s.MemoryMiB
 	d.VCPU = s.VCPUs
 	d.OS.Type.Arch, d.OS.Type.Machine, d.OS.Type.Value = "x86_64", "q35", "hvm"
@@ -300,7 +325,10 @@ func DomainXML(s Spec) ([]byte, error) {
 		}{"cdrom"})
 	}
 	d.Features.ACPI, d.Features.APIC = &struct{}{}, &struct{}{}
-	if uefi { // UEFI with Secure Boot (Microsoft keys enrolled); SMM is required for it
+	if uefi && !secure { // plain UEFI (imported VMs installed that way)
+		d.OS.Firmware = "efi"
+	}
+	if secure { // UEFI with Secure Boot (Microsoft keys enrolled); SMM is required for it
 		d.OS.Firmware = "efi"
 		d.OS.FirmwareFeatures = &struct {
 			Features []struct {
@@ -352,10 +380,19 @@ func DomainXML(s Spec) ([]byte, error) {
 	root.Target.Dev, root.Target.Bus = "vda", "virtio"
 	// queues: one per vCPU (up to 8) so disk I/O isn't funnelled through one CPU
 	queues := min(max(s.VCPUs, 1), 8)
-	if win { // the Windows installer has no virtio driver
+	bus := s.DiskBus
+	if bus == "" && win { // the Windows installer has no virtio driver
+		bus = "sata"
+	}
+	switch bus {
+	case "sata":
 		root.Target.Dev, root.Target.Bus = "sdc", "sata"
 		root.Driver.IO = "native" // with cache=none: no extra copy through the host
-	} else {
+	case "scsi": // virtio-scsi, the Proxmox default
+		root.Target.Dev, root.Target.Bus = "sde", "scsi"
+		root.Driver.IO = "native"
+		d.Devices.Controllers = append(d.Devices.Controllers, controllerXML{Type: "scsi", Model: "virtio-scsi"})
+	default:
 		// its own I/O thread (disk work off the vCPU threads) and native AIO
 		d.IOThreads = 1
 		root.Driver.IO, root.Driver.IOThread, root.Driver.Queues = "native", 1, queues
@@ -392,7 +429,11 @@ func DomainXML(s Spec) ([]byte, error) {
 	nic.Model.Type = "virtio"
 	if win {
 		nic.Model.Type = "e1000e"
-	} else if queues > 1 { // vhost-net in the kernel, one queue per vCPU
+	}
+	if s.NICModel != "" {
+		nic.Model.Type = s.NICModel
+	}
+	if nic.Model.Type == "virtio" && queues > 1 { // vhost-net in the kernel, one queue per vCPU
 		nic.Driver = &struct {
 			Name   string `xml:"name,attr"`
 			Queues int    `xml:"queues,attr,omitempty"`
@@ -462,6 +503,9 @@ func ParseDomainXML(b []byte) (Spec, error) {
 		OSType:     d.Metadata.VM.OSType,
 		Owner:      d.Metadata.VM.Owner,
 		DefVersion: d.Metadata.VM.DefVersion,
+		DiskBus:    d.Metadata.VM.DiskBus,
+		NICModel:   d.Metadata.VM.NICModel,
+		Firmware:   d.Metadata.VM.Firmware,
 	}
 	if d.Devices.Video != nil {
 		s.Video = d.Devices.Video.Model.Type

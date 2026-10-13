@@ -740,6 +740,7 @@ const IC = {
   menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
   box: '<path d="M21 8l-9-5-9 5v8l9 5 9-5z"/><path d="M3 8l9 5 9-5M12 13v8"/>',
   vm: '<rect x="3" y="4" width="18" height="12" rx="1.5"/><path d="M8 20h8M12 16v4"/>',
+  download: '<path d="M12 3v12M7 10l5 5 5-5"/><path d="M4 19h16"/>',
 };
 const ic = n => `<svg viewBox="0 0 24 24" aria-hidden="true">${IC[n]}</svg>`;
 
@@ -765,6 +766,7 @@ function renderShell(){
     <div id="sideCTs"></div>
     <div class="side-group"><div class="side-h">Storage</div>
       <button class="btn" id="bIsos" hidden>${ic("disc")}<span>ISO images</span></button>
+      <button class="btn" id="bImports" hidden>${ic("download")}<span>Import VMs</span></button>
       <button class="btn" id="bBackups">${ic("archive")}<span>Backups</span></button>
     </div>
     <div class="side-group"><div class="side-h">Administration</div>
@@ -857,7 +859,7 @@ function renderHost(){
   $("#vmCount").textContent = vms.length ? `${run} running · ${vms.length} total` : "";
   if (me) {
     $("#bMe").textContent = me.account ? me.name : "admin (token)";
-    $("#bIsos").hidden = $("#bUsers").hidden = $("#bSettings").hidden = !isAdmin();
+    $("#bIsos").hidden = $("#bImports").hidden = $("#bUsers").hidden = $("#bSettings").hidden = !isAdmin();
     if (isAdmin() && !licLoaded) { licLoaded = true; licenseShell(); nodeShell(); }
     $("#bNodeLabel").hidden = isAdmin();
     sideGroups();
@@ -1880,6 +1882,7 @@ document.addEventListener("DOMContentLoaded", render); // after cloud.js has loa
 <script src="/containers.js"></script>
 <script src="/offsite.js"></script>
 <script src="/pages.js"></script>
+<script src="/imports.js"></script>
 <script src="/cluster.js"></script>
 </body>
 </html>

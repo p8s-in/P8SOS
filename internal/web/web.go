@@ -29,6 +29,8 @@ var (
 	offsiteJS []byte
 	//go:embed pages.js
 	pagesJS []byte
+	//go:embed imports.js
+	importsJS []byte
 	//go:embed cluster.js
 	clusterJS []byte
 	//go:embed terminal.html
@@ -59,6 +61,7 @@ var assets = map[string]asset{
 	"/containers.js":     {containersJS, "text/javascript; charset=utf-8", "no-cache"},
 	"/offsite.js":        {offsiteJS, "text/javascript; charset=utf-8", "no-cache"},
 	"/pages.js":          {pagesJS, "text/javascript; charset=utf-8", "no-cache"},
+	"/imports.js":        {importsJS, "text/javascript; charset=utf-8", "no-cache"},
 	"/cluster.js":        {clusterJS, "text/javascript; charset=utf-8", "no-cache"},
 	"/terminal":          {terminalPage, "text/html; charset=utf-8", "no-cache"},
 	"/xterm.min.js":      {xtermJS, "text/javascript; charset=utf-8", "public, max-age=86400"},

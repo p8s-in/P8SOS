@@ -131,6 +131,9 @@ type Server struct {
 	// AutoPasswords makes a root password for VMs/containers created without one.
 	Creds         *creds.Store
 	AutoPasswords bool
+	// Imports brings VMs in from Proxmox backups / disk images; nil = off.
+	Imports      Importer
+	ImportFolder string // shown so admins can scp files there
 	// RDPPorts: Windows VM -> Remote Desktop port on this server; nil = off.
 	RDPPorts func() map[string]int
 
@@ -194,6 +197,11 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("GET /api/v1/host/metrics", s.hostMetrics)
 	auth.HandleFunc("GET /api/v1/isos", s.listISOs)
 	auth.HandleFunc("PUT /api/v1/isos/{name}", s.uploadISO)
+	auth.HandleFunc("GET /api/v1/imports", s.listImports)
+	auth.HandleFunc("GET /api/v1/imports/{file}/plan", s.importPlan)
+	auth.HandleFunc("PUT /api/v1/imports/{file}", s.uploadImport)
+	auth.HandleFunc("DELETE /api/v1/imports/{file}", s.deleteImport)
+	auth.HandleFunc("POST /api/v1/imports/{file}/start", s.startImport)
 	auth.HandleFunc("POST /api/v1/isos/download", s.downloadISO)
 	auth.HandleFunc("DELETE /api/v1/isos/{name}", s.deleteISO)
 	auth.HandleFunc("POST /api/v1/vms/{name}/eject", s.ejectISO)

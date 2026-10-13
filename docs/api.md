@@ -324,6 +324,12 @@ Read it again later (owner or admin): `GET /vms/{name}/login`, `GET /containers/
 (`known:false` when P8S didn't make or set one, e.g. ISO installs). Setting root's password through
 P8S updates it; deleting the guest forgets it. Stored in `<data_dir>/credentials.json` (0600).
 
+### Importing VMs (admins)
+
+`GET /imports`, `PUT /imports/{file}` (upload), `GET /imports/{file}/plan`, `POST /imports/{file}/start`
+(→ job), `DELETE /imports/{file}`. Proxmox vzdump backups (`.vma[.zst|.lzo|.gz]`) and disk images
+(qcow2, vmdk, vhd/vhdx, vdi, raw). Details: [import.md](import.md).
+
 ### Subscription (admins)
 
 | Method | Path | |
