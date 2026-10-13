@@ -12,11 +12,30 @@ document.querySelector("#dlgNode #ndTasks").closest("table").previousElementSibl
   <div class="sub" id="clSub"></div>
   <table class="snaps"><tbody id="clNodes"></tbody></table>
   <div class="inline" id="clActions" style="flex-wrap:wrap"></div>
+  <div id="clInvites"></div>
   <div id="clAddBox" hidden style="border:1px solid var(--line);border-radius:8px;padding:10px;margin-top:8px">
-    <label for="clEndpoint">Address the new server uses to reach this one</label>
-    <input id="clEndpoint" placeholder="leave empty on the same network; public IP or name over the internet">
-    <div class="hint">Over the internet, forward TCP port <b>${location.port || 443}</b> and UDP port <b>51820</b> to this server on your router.</div>
-    <div class="inline"><span class="spacer"></span><button class="btn primary" id="clMake" type="button">Make join command</button></div>
+    <nav class="tabs" style="margin-top:0"><button type="button" data-cltab="lan" class="on">On this network</button><button type="button" data-cltab="wan">Another network</button></nav>
+    <div data-clp="lan">
+      <div class="inline"><span class="sub" style="flex:1">P8S OS servers on the same Wi-Fi / LAN as this one. Adding sends an invitation; someone accepts it on that server.</span>
+        <button class="btn" id="clFind" type="button">Search again</button></div>
+      <table class="snaps"><tbody id="clFound"></tbody></table>
+      <div id="clWait" class="hint" hidden></div>
+      <details style="margin-top:8px"><summary class="sub" style="cursor:pointer">Not listed? Add it with a command instead</summary>
+        <div class="inline"><span class="sub" style="flex:1">Makes a one-time command (valid for an hour) to run on the new server.</span><button class="btn" id="clMakeLan" type="button">Make command</button></div>
+      </details>
+    </div>
+    <div data-clp="wan" hidden>
+      <div class="sub">For a server in another house, office or a VPS. It reaches this server over the internet, so your router must let it in.</div>
+      <label for="clPublic">This server's public address</label>
+      <div class="inline" style="margin-top:0"><input id="clPublic" placeholder="public IP, or a name like myhome.duckdns.org" style="flex:1"><button class="btn" id="clCheck" type="button">Check</button></div>
+      <div class="hint" id="clCheckOut"></div>
+      <ol class="steps sub">
+        <li>On your router, forward <b>TCP ${location.port || 443}</b> (joining) and <b>UDP 51820</b> (the tunnel) to this server (${esc(location.hostname)}).</li>
+        <li>If your public IP changes, use a free dynamic-DNS name (e.g. duckdns.org) instead of the number.</li>
+        <li>Behind Jio/Airtel CGNAT nothing can reach this server from outside; then make the server with a public IP (e.g. a VPS) the master.</li>
+      </ol>
+      <div class="inline"><span class="spacer"></span><button class="btn primary" id="clMakeWan" type="button">Make join command</button></div>
+    </div>
     <div id="clCmdBox" hidden>
       <div class="sub">On the new server (P8S OS installed), run this once within an hour:</div>
       <pre id="clCmd" class="mono copy" title="Click to copy" style="white-space:pre-wrap;word-break:break-all;font-size:12.5px;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px"></pre>
@@ -43,26 +62,84 @@ async function loadCluster(){
     const c = n.status?.capacity || {}, on = n.status?.online;
     const room = c.mem_total_mib ? `${clGB(c.mem_used_mib || 0)} of ${clGB(c.mem_total_mib)} GB RAM given to VMs · ${c.vms || 0} VMs · ${c.cpus || "?"} CPUs` : "";
     return `<tr><td><b>${esc(n.name)}</b> <span class="sub">${esc(n.id)} · ${esc(n.role)}${n.self ? " · this server" : ""} · ${esc(n.wg_ip)}</span>
-      <div class="sub">${room}</div>${!on && n.status?.error ? `<div class="sub" style="color:var(--bad)">${esc(n.status.error)}</div>` : ""}</td>
+      <div class="sub">${room}</div>${!n.self && cluster.role === "master" ? `<div class="sub">${n.status?.tunnel ? "tunnel up · last handshake " + esc(new Date(n.status.tunnel).toLocaleTimeString()) : `<span style="color:var(--warn)">tunnel not up yet</span> — on another network, check UDP 51820 forwarding to this server`}</div>` : ""}
+      ${!on && n.status?.error ? `<div class="sub" style="color:var(--bad)">${esc(n.status.error)}</div>` : ""}</td>
       <td style="white-space:nowrap"><span class="state ${on ? "running" : "stopped"}"><span class="dot"></span>${on ? "online" : "offline"}</span></td>
       <td style="text-align:right">${role === "master" && !n.self ? `<button class="btn danger" data-clrm="${esc(n.id)}" type="button">Remove</button>` : ""}</td></tr>`;
   }).join("");
   $("#clActions").innerHTML = role === "worker"
     ? `<span class="spacer"></span><button class="btn danger" id="clLeave" type="button">Leave the cluster</button>`
     : `<span class="spacer"></span>${role ? "" : `<button class="btn" id="clJoinOpen" type="button">Join a master…</button>`}<button class="btn primary" id="clAddOpen" type="button">+ Add a server</button>`;
-  if ($("#clAddOpen")) $("#clAddOpen").onclick = () => { $("#clAddBox").hidden = false; $("#clJoinBox").hidden = true; $("#clCmdBox").hidden = true; };
+  if ($("#clAddOpen")) $("#clAddOpen").onclick = () => { $("#clAddBox").hidden = false; $("#clJoinBox").hidden = true; clTab("lan"); };
   if ($("#clJoinOpen")) $("#clJoinOpen").onclick = () => { $("#clJoinBox").hidden = false; $("#clAddBox").hidden = true; };
   if ($("#clLeave")) $("#clLeave").onclick = async () => {
     if (!confirm("Leave the cluster? This server's VMs keep running here; the master won't show them any more.")) return;
     try { await call("POST", "/cluster/leave"); toast("This server stands alone again. Remove it on the master too."); loadCluster(); } catch (e) { toast(e.message, true); }
   };
 }
-$("#clMake").onclick = async () => {
+async function makeCommand(masterURL, endpoint){
   try {
-    const r = await call("POST", "/cluster/join-code", {master_url: location.origin, endpoint: $("#clEndpoint").value.trim()});
+    const r = await call("POST", "/cluster/join-code", {master_url: masterURL, endpoint});
     $("#clCmd").textContent = r.command; $("#clCmdBox").hidden = false;
     loadCluster();
   } catch (e) { toast(e.message, true); }
+}
+$("#clMakeLan").onclick = () => makeCommand(location.origin, "");
+$("#clMakeWan").onclick = () => {
+  const h = $("#clPublic").value.trim().replace(/^https?:\/\//, "").replace(/[:/].*$/, "");
+  if (!h) return toast("Enter this server's public address first", true);
+  makeCommand(`https://${h.includes(":") ? "[" + h + "]" : h}:${location.port || 443}`, h);
+};
+for (const b of document.querySelectorAll("[data-cltab]")) b.onclick = () => clTab(b.dataset.cltab);
+function clTab(t){
+  for (const b of document.querySelectorAll("[data-cltab]")) b.classList.toggle("on", b.dataset.cltab === t);
+  for (const p of document.querySelectorAll("[data-clp]")) p.hidden = p.dataset.clp !== t;
+  $("#clCmdBox").hidden = true;
+  if (t === "lan") findServers();
+  if (t === "wan" && !$("#clPublic").value) call("GET", "/cluster/public-ip").then(r => { if (r.ip && !$("#clPublic").value) $("#clPublic").value = r.ip; }).catch(() => {});
+}
+let clFound = [], clWaitTimer = null;
+async function findServers(){
+  $("#clFound").innerHTML = `<tr><td class="muted">Searching this network…</td></tr>`;
+  try { clFound = (await call("GET", "/cluster/discover")).servers || []; }
+  catch (e) { $("#clFound").innerHTML = `<tr><td class="sub">${esc(e.message)}</td></tr>`; return; }
+  $("#clFound").innerHTML = clFound.length ? clFound.map((f, i) => `<tr><td><b>${esc(f.name)}</b> <span class="sub mono">${esc(f.ip)}</span>
+      <div class="sub">${f.cpus ? f.cpus + " CPUs · " : ""}${f.mem_total_mib ? clGB(f.mem_total_mib) + " GB RAM · " : ""}P8S OS ${esc(f.version || "?")}${f.why ? ` · <b>${esc(f.why)}</b>` : ""}</div></td>
+      <td style="text-align:right">${f.available ? `<button class="btn primary" data-clinv="${i}" type="button">Add</button>` : `<span class="sub">not available</span>`}</td></tr>`).join("")
+    : `<tr><td class="sub">No other P8S OS server answered. Is it switched on, on the same network, with P8S OS updated? (It answers on UDP port 51821.)</td></tr>`;
+}
+$("#clFound").addEventListener("click", async e => {
+  const b = e.target.closest("[data-clinv]"); if (!b) return;
+  const f = clFound[+b.dataset.clinv];
+  b.disabled = true;
+  try {
+    const r = await call("POST", "/cluster/invite-send", f);
+    $("#clWait").hidden = false;
+    $("#clWait").innerHTML = `Invitation sent to <b>${esc(f.name)}</b>. On ${esc(f.name)}, open <b>Server → Cluster</b> (or run <code>p8 cluster accept</code>) and accept it —
+      check that it shows the number <b style="font-size:16px;letter-spacing:2px">${esc(r.confirm)}</b>. Waiting…`;
+    const before = (cluster?.nodes || []).length;
+    clearInterval(clWaitTimer);
+    let n = 0;
+    clWaitTimer = setInterval(async () => {
+      if (++n > 300 || !$("#dlgNode").open) return clearInterval(clWaitTimer);
+      await loadCluster();
+      if ((cluster?.nodes || []).length > before) {
+        clearInterval(clWaitTimer); $("#clWait").innerHTML = `✔ <b>${esc(f.name)}</b> joined.`; toast(f.name + " joined the cluster"); findServers();
+      }
+    }, 3000);
+  } catch (err) { toast(err.message, true); b.disabled = false; }
+});
+$("#clCheck").onclick = async () => {
+  const h = $("#clPublic").value.trim().replace(/^https?:\/\//, "").replace(/[:/].*$/, "");
+  if (!h) return;
+  $("#clCheckOut").textContent = "Checking…";
+  try {
+    const r = await call("POST", "/cluster/check", {host: h, port: +(location.port || 443)});
+    $("#clCheckOut").innerHTML = r.private
+      ? `<b style="color:var(--bad)">${esc(h)} is a local or CGNAT address</b> — servers on other networks can't use it. Use your public IP or a dynamic-DNS name.`
+      : r.tcp ? `✔ Port ${location.port || 443} answered at ${esc(h)}. (UDP 51820 can only be tested by joining; the server list shows "tunnel up" when it works.)`
+      : `Port ${location.port || 443} didn't answer at ${esc(h)} from here. Check the port forwarding — some routers can't test themselves; then try joining from the other place.`;
+  } catch (e) { $("#clCheckOut").textContent = e.message; }
 };
 $("#clCmd").onclick = () => navigator.clipboard?.writeText($("#clCmd").textContent).then(() => toast("Command copied"));
 $("#clJoinGo").onclick = async () => {
@@ -129,3 +206,35 @@ async function loadNodeChoice(){
 const _openCreateCl = openCreate;
 openCreate = async function(...a){ const r = await _openCreateCl(...a); loadNodeChoice(); return r; };
 for (const id of ["#cMem", "#cNet", "#cTpl"]) $(id)?.addEventListener("change", () => { if (!$("#cNodeBox").hidden) loadNodeChoice(); });
+
+/* ---------- invitations to this server (it may join a master) ---------- */
+document.body.insertAdjacentHTML("beforeend", `<div id="clBanner" hidden style="position:fixed;top:58px;right:16px;z-index:20;max-width:420px;
+  background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:10px;padding:12px 14px;box-shadow:0 8px 24px rgba(0,0,0,.15)"></div>`);
+let clInv = [], clInvTick = 0;
+async function loadInvites(){
+  if (!token || !isAdmin()) { $("#clBanner").hidden = true; return; }
+  try { clInv = (await call("GET", "/cluster/invites")).invites || []; } catch { clInv = []; }
+  const card = i => `<div style="margin:4px 0 10px"><b>${esc(i.master_name)}</b> <span class="sub mono">(${esc(i.from)})</span> wants to add this server to its cluster.
+      <div class="sub">Its VMs will then be managed from ${esc(i.master_name)}'s dashboard. Only accept if ${esc(i.master_name)} shows the same number:</div>
+      <div style="font-size:22px;font-weight:700;letter-spacing:4px;margin:6px 0">${esc(i.confirm)}</div>
+      <div class="inline" style="margin:0"><button class="btn primary" data-clacc="${esc(i.id)}" type="button">Accept</button><button class="btn" data-cldec="${esc(i.id)}" type="button">Decline</button></div></div>`;
+  $("#clBanner").innerHTML = clInv.map(card).join("");
+  $("#clBanner").hidden = !clInv.length;
+  if ($("#clInvites")) $("#clInvites").innerHTML = clInv.length ? `<div style="border:1px solid var(--line);border-radius:8px;padding:10px;margin-top:8px">${clInv.map(card).join("")}</div>` : "";
+}
+document.addEventListener("click", async e => {
+  const a = e.target.closest("[data-clacc]"), d = e.target.closest("[data-cldec]");
+  if (!a && !d) return;
+  const id = (a || d).dataset.clacc || (a || d).dataset.cldec;
+  (a || d).disabled = true;
+  try {
+    if (a) { const r = await call("POST", `/cluster/invites/${encodeURIComponent(id)}/accept`); toast(`Joined ${r.master}'s cluster as ${r.id}. Manage this server's VMs from there now.`); }
+    else { await call("POST", `/cluster/invites/${encodeURIComponent(id)}/decline`); toast("Invitation declined"); }
+  } catch (err) { toast(err.message, true); }
+  loadInvites();
+  if ($("#dlgNode").open) loadCluster();
+});
+const _refreshCl = refresh;
+refresh = async function(...a){ await _refreshCl(...a); if (clInvTick++ % 3 === 0) loadInvites(); };
+const _loadCluster = loadCluster;
+loadCluster = async function(){ await _loadCluster(); loadInvites(); };

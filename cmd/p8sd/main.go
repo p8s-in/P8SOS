@@ -418,6 +418,11 @@ func serve(args []string) error {
 		}
 	}
 	clu.CertFile = cfg.TLSCert // pinned by the other cluster servers
+	go func() {                // answer "which P8S OS servers are on this network?" (UDP 51821)
+		if err := clu.Respond(ctx, version); err != nil {
+			log.Warn("cluster discovery off", "err", err)
+		}
+	}()
 	errc := make(chan error, 1)
 	go func() {
 		log.Info("p8sd listening", "addr", cfg.Listen, "version", version, "tls", cfg.TLSCert != "")

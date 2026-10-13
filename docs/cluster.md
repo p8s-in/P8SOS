@@ -14,18 +14,42 @@ Every added server is a **worker** ("extender") that runs VMs for it.
 
 ## Adding a server
 
-1. Install P8S OS on the new machine as usual.
-2. On the master: **Server → Cluster → + Add a server → Make join command**
-   (or `p8 cluster add`). It shows one line, valid for an hour, usable once:
-   `p8 join https://192.168.0.106:8006 abcd…`
-3. Run that line on the new machine. It joins within seconds and shows up under
-   Server → Cluster and in the sidebar.
+Install P8S OS on the new machine as usual, then on the master open
+**Server → Cluster → + Add a server**. There are two ways:
 
-Same Wi-Fi/LAN: nothing else to do. **Over the internet** (another house, a
-VPS): enter the master's public IP or name in "Address the new server uses",
-and forward **TCP 8006** (joining) and **UDP 51820** (the tunnel) to the master
-on its router. The worker itself can be behind any NAT or CGNAT (Jio, Airtel …):
-it dials out to the master and keeps the tunnel open.
+### On this network (same Wi-Fi / LAN)
+
+The master searches the network and lists every P8S OS server it finds, with
+its CPUs, RAM, version and whether it can join (not if it is already in a
+cluster or runs another P8S OS version). Click **Add**:
+
+1. The new server gets an **invitation** — a box in its dashboard, a line in its
+   log, and `p8 cluster accept` on its command line.
+2. Both screens show the same **6-digit number**. Accept only if they match.
+3. It joins; the master shows "✔ joined" and puts VMs there from now on.
+
+Nothing joins just by being found: someone must accept on that server.
+Command line: `p8 cluster find`, `p8 cluster invite NAME` (master),
+`p8 cluster accept` (new server). Servers answer the search on UDP port 51821.
+Not found (e.g. another subnet)? "Add it with a command instead" gives a
+one-time `p8 join …` line for this network.
+
+### Another network (other house, office, VPS)
+
+1. Enter the master's **public address** (filled in with your current public IP;
+   better a dynamic-DNS name like `myhome.duckdns.org` if your IP changes).
+2. On the master's router forward **TCP 8006** (joining) and **UDP 51820** (the
+   tunnel) to the master. **Check** tests the address (a LAN or CGNAT address is
+   refused at once; some routers can't test themselves).
+3. **Make join command** gives a one-time line with the public address:
+   `p8 join https://myhome.duckdns.org:8006 abcd…` — run it on the new server.
+   Command line: `p8 cluster add myhome.duckdns.org`.
+4. In Server → Cluster the new server shows **tunnel up** once WireGuard has
+   connected; "tunnel not up yet" means UDP 51820 isn't getting through.
+
+The new server can be behind any NAT or CGNAT: it dials out to the master. The
+**master** must be reachable; if your home line is CGNAT (Jio/Airtel often are),
+make a machine with a public IP (e.g. a VPS) the master instead.
 
 ## How VMs are placed
 
@@ -62,8 +86,10 @@ it does. Server → Cluster shows each server's status, RAM in use and VM count.
 | | |
 |---|---|
 | `p8 cluster` | servers, roles, tunnel addresses, RAM in use, online/offline |
-| `p8 cluster add [PUBLIC_ADDR]` | on the master: make a join command |
-| `p8 join URL CODE` | on the new server: join |
+| `p8 cluster find` / `p8 cluster invite NAME` | on the master: servers on this network / invite one |
+| `p8 cluster accept` / `p8 cluster decline ID` | on the new server: answer an invitation |
+| `p8 cluster add` / `p8 cluster add PUBLIC_ADDR` | on the master: join command for this network / another network |
+| `p8 join URL CODE` | on the new server: join with a command |
 | `p8 cluster remove n2 [--force]` | on the master: drop a server (refused while it has VMs unless `--force`; its VMs keep running there) |
 | `p8 cluster leave` | on a worker: stand alone again |
 

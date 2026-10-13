@@ -371,6 +371,12 @@ VMs show `"os_type"` and `"drivers_iso"`. See [windows.md](windows.md).
 | POST | `/api/v1/cluster/join` | `{"url","code"}` this server joins a master |
 | POST | `/api/v1/cluster/leave` | worker: stand alone again |
 | DELETE | `/api/v1/cluster/nodes/{id}` | master: drop a server (`?force=1` while it has VMs) |
+| GET | `/api/v1/cluster/discover` | P8S OS servers on this network (`available`, or `why` not) |
+| POST | `/api/v1/cluster/invite-send` | (master) a found server → `{"confirm"}` the 6-digit number |
+| POST | `/api/v1/cluster/invite` | (no login) an invitation arrives; waits for this server's admin |
+| GET | `/api/v1/cluster/invites` | open invitations |
+| POST | `/api/v1/cluster/invites/{id}/accept` · `/decline` | answer one (accept = join) |
+| GET | `/api/v1/cluster/public-ip` · POST `/api/v1/cluster/check` `{"host","port"}` | help for joining over the internet |
 | GET | `/api/v1/cluster/candidates` | `?memory_mib&disk_gb&network&iso&ip_pool` where a VM could go, best first |
 
 `POST /api/v1/vms` takes `"node"` (server id or name; admins) and VMs carry `node` / `node_id`.

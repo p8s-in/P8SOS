@@ -2,11 +2,19 @@ package api
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -62,10 +70,24 @@ func newClusterNode(t *testing.T, mem int, local cluster.Local, owned *ownedVMs)
 		}
 		return c
 	}
-	n.srv = httptest.NewTLSServer(n.s.Handler())
+	// every server has its own certificate (pinning tells them apart)
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(time.Now().UnixNano()), Subject: pkix.Name{CommonName: "p8s"},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), IPAddresses: []net.IP{net.ParseIP("127.0.0.1")},
+		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
+	der, _ := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	n.srv = httptest.NewUnstartedServer(n.s.Handler())
+	if os.Getenv("DEV") != "" { // browser tests: reachable on every address (discovery finds the LAN one)
+		n.srv.Listener.Close()
+		n.srv.Listener, _ = net.Listen("tcp4", "0.0.0.0:0")
+	}
+	n.srv.TLS = &tls.Config{Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: key}}}
+	n.srv.StartTLS()
 	t.Cleanup(n.srv.Close)
+	_, port, _ := net.SplitHostPort(strings.TrimPrefix(n.srv.URL, "https://"))
+	n.m.APIPort = port
 	cert := filepath.Join(dir, "p8sd.crt")
-	os.WriteFile(cert, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: n.srv.Certificate().Raw}), 0o600)
+	os.WriteFile(cert, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600)
 	n.m.CertFile = cert
 	n.m.TestURL = n.srv.URL
 	return n
@@ -228,3 +250,60 @@ func loginOn(t *testing.T, n *clusterNode, user, pw string) string {
 	i := strings.Index(b, `"token":"`)
 	return strings.SplitN(b[i+9:], `"`, 2)[0]
 }
+
+func TestClusterDiscoverInvite(t *testing.T) {
+	ctx := context.Background()
+	empty := func() *ownedVMs { return &ownedVMs{fakeVMs: &fakeVMs{}, vms: map[string]vm.VM{}} }
+	mo, wo := empty(), empty()
+	master := newClusterNode(t, 8192, mo, mo)
+	worker := newClusterNode(t, 8192, wo, wo)
+	// the worker answers discovery on a test port
+	pc, _ := net.ListenPacket("udp4", "127.0.0.1:0")
+	port := pc.LocalAddr().(*net.UDPAddr).Port
+	pc.Close()
+	worker.m.DiscoverPort, master.m.DiscoverPort = port, port
+	rctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go worker.m.Respond(rctx, "test")
+	time.Sleep(100 * time.Millisecond)
+
+	found, err := master.m.Discover(ctx, "test", "127.0.0.1")
+	if err != nil || len(found) != 1 || !found[0].Available || found[0].IP != "127.0.0.1" {
+		t.Fatalf("found %+v %v", found, err)
+	}
+	// the master sends an invitation; nothing happens until the worker's admin accepts
+	b := master.req(t, "POST", "/api/v1/cluster/invite-send", secret, mustJSON(found[0]), 200)
+	confirm := strings.SplitN(strings.SplitN(b, `"confirm":"`, 2)[1], `"`, 2)[0]
+	if worker.m.Role() != "" {
+		t.Fatal("joined without being accepted")
+	}
+	inv := worker.m.Invites()
+	if len(inv) != 1 || inv[0].Confirm != confirm || inv[0].MasterName == "" {
+		t.Fatalf("invites %+v (want number %s)", inv, confirm)
+	}
+	if strings.Contains(worker.req(t, "GET", "/api/v1/cluster/invites", secret, "", 200), `"code"`) {
+		t.Fatal("join code leaked in the invite list")
+	}
+	worker.req(t, "POST", "/api/v1/cluster/invites/"+inv[0].ID+"/accept", secret, "", 200)
+	if worker.m.Role() != "worker" || len(master.m.Workers()) != 1 {
+		t.Fatalf("after accept: %q %d", worker.m.Role(), len(master.m.Workers()))
+	}
+	// found again: now a member, not available
+	found, _ = master.m.Discover(ctx, "test", "127.0.0.1")
+	if len(found) != 1 || found[0].Available || found[0].Why != "already in this cluster" {
+		t.Fatalf("after joining %+v", found)
+	}
+	// a server in a cluster refuses invitations
+	worker.req(t, "POST", "/api/v1/cluster/invite", "", `{"master_name":"evil","master_url":"https://10.0.0.9:8006","code":"`+strings.Repeat("x", 50)+`"}`, 409)
+	// declined invitations are gone
+	lone := newClusterNode(t, 4096, empty(), empty())
+	time.Sleep(2100 * time.Millisecond) // invitation rate limit is per server; this is a new one anyway
+	lone.req(t, "POST", "/api/v1/cluster/invite", "", `{"master_name":"lap1","master_url":"https://10.0.0.9:8006","code":"`+strings.Repeat("x", 50)+`"}`, 202)
+	id := lone.m.Invites()[0].ID
+	lone.req(t, "POST", "/api/v1/cluster/invites/"+id+"/decline", secret, "", 204)
+	if len(lone.m.Invites()) != 0 {
+		t.Fatal("declined invite still there")
+	}
+}
+
+func mustJSON(v any) string { b, _ := json.Marshal(v); return string(b) }

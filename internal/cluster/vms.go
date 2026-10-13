@@ -654,6 +654,7 @@ func (m *Manager) NodeStatus(id string) Status {
 
 // Poll asks every worker for its capacity (the master runs it every few seconds).
 func (m *Manager) Poll(ctx context.Context) {
+	hs := m.Handshakes(ctx)
 	for _, n := range m.Workers() {
 		var c Capacity
 		cctx, cancel := context.WithTimeout(ctx, 8*time.Second)
@@ -667,6 +668,9 @@ func (m *Manager) Poll(ctx context.Context) {
 		if s == nil {
 			s = &Status{}
 			m.status[n.ID] = s
+		}
+		if t, ok := hs[n.WGPub]; ok {
+			s.Tunnel = t.UTC().Format(time.RFC3339)
 		}
 		if err != nil {
 			if s.Online && m.Log != nil {
@@ -747,4 +751,26 @@ func (c *VMs) ApplyFirewalls(ctx context.Context) error {
 		return g.ApplyFirewalls(ctx)
 	}
 	return nil
+}
+
+// Handshakes returns the last WireGuard handshake per peer key (tunnel health).
+func (m *Manager) Handshakes(ctx context.Context) map[string]time.Time {
+	out := map[string]time.Time{}
+	if m.Run == nil {
+		return out
+	}
+	b, err := m.Run.Run(ctx, "wg", "show", Iface, "latest-handshakes")
+	if err != nil {
+		return out
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		f := strings.Fields(line)
+		if len(f) == 2 {
+			var sec int64
+			if _, err := fmt.Sscan(f[1], &sec); err == nil && sec > 0 {
+				out[f[0]] = time.Unix(sec, 0)
+			}
+		}
+	}
+	return out
 }

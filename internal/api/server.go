@@ -154,6 +154,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/password/reset", s.resetPassword)
 	mux.HandleFunc("POST /api/v1/billing/razorpay/webhook", s.razorpayWebhook)
 	mux.HandleFunc("POST /api/v1/cluster/register", s.clusterRegister) // the join code is the pass
+	mux.HandleFunc("POST /api/v1/cluster/invite", s.clusterInvite)     // waits for this server's admin
 
 	auth := http.NewServeMux()
 	auth.HandleFunc("GET /api/v1/templates", s.listTemplates)
@@ -267,6 +268,12 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("GET /api/v1/cluster/capacity", s.clusterCapacity)
 	auth.HandleFunc("GET /api/v1/cluster/candidates", s.clusterCandidates)
 	auth.HandleFunc("GET /api/v1/cluster/vnc/{name}", s.clusterVNC)
+	auth.HandleFunc("GET /api/v1/cluster/discover", s.clusterDiscover)
+	auth.HandleFunc("POST /api/v1/cluster/invite-send", s.clusterInviteSend)
+	auth.HandleFunc("GET /api/v1/cluster/invites", s.clusterInvites)
+	auth.HandleFunc("POST /api/v1/cluster/invites/{id}/{answer}", s.clusterInviteAnswer)
+	auth.HandleFunc("GET /api/v1/cluster/public-ip", s.clusterPublicIP)
+	auth.HandleFunc("POST /api/v1/cluster/check", s.clusterCheck)
 	auth.HandleFunc("GET /api/v1/offsite", s.getOffsite)
 	auth.HandleFunc("PUT /api/v1/offsite/targets/{name}", s.putOffsite)
 	auth.HandleFunc("DELETE /api/v1/offsite/targets/{name}", s.deleteOffsite)

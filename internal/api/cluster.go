@@ -226,3 +226,134 @@ func (s *Server) clusterVNC(w http.ResponseWriter, r *http.Request) {
 	conn.Close()
 	tcp.Close()
 }
+
+// --- finding servers on this network, invitations, internet checks ---
+
+func (s *Server) clusterDiscover(w http.ResponseWriter, r *http.Request) {
+	if !s.adminOnly(w, r) || !s.clusterOn(w) {
+		return
+	}
+	l, err := s.Cluster.Discover(r.Context(), s.Version)
+	if err != nil {
+		s.clusterFail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"servers": l})
+}
+
+func (s *Server) clusterInviteSend(w http.ResponseWriter, r *http.Request) {
+	if !s.adminOnly(w, r) || !s.clusterOn(w) {
+		return
+	}
+	var f cluster.Found
+	if !decode(w, r, &f) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	confirm, err := s.Cluster.SendInvite(ctx, f)
+	if err != nil {
+		s.clusterFail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"confirm": confirm})
+}
+
+// clusterInvite receives an invitation (no login: it only waits for this
+// server's admin to accept it).
+func (s *Server) clusterInvite(w http.ResponseWriter, r *http.Request) {
+	if !s.clusterOn(w) {
+		return
+	}
+	var body struct {
+		MasterName string `json:"master_name"`
+		MasterURL  string `json:"master_url"`
+		Code       string `json:"code"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	inv, err := s.Cluster.ReceiveInvite(body.MasterName, body.MasterURL, body.Code, clientIP(r))
+	if err != nil {
+		s.clusterFail(w, r, err)
+		return
+	}
+	s.audit(r, "cluster-invite", http.StatusAccepted, "from "+body.MasterName+" ("+clientIP(r)+"), number "+inv.Confirm)
+	writeJSON(w, http.StatusAccepted, map[string]any{"waiting": true})
+}
+
+func (s *Server) clusterInvites(w http.ResponseWriter, r *http.Request) {
+	if !s.adminOnly(w, r) || !s.clusterOn(w) {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"invites": s.Cluster.Invites()})
+}
+
+func (s *Server) clusterInviteAnswer(w http.ResponseWriter, r *http.Request) {
+	if !s.adminOnly(w, r) || !s.clusterOn(w) {
+		return
+	}
+	id := r.PathValue("id")
+	switch r.PathValue("answer") {
+	case "accept":
+		ctx, cancel := context.WithTimeout(r.Context(), time.Minute)
+		defer cancel()
+		rep, err := s.Cluster.AcceptInvite(ctx, id)
+		if err != nil {
+			s.clusterFail(w, r, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"id": rep.ID, "wg_ip": rep.WGIP, "master": rep.Name})
+	case "decline":
+		if err := s.Cluster.DeclineInvite(id); err != nil {
+			s.clusterFail(w, r, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		writeErr(w, http.StatusNotFound, "not_found", "accept or decline")
+	}
+}
+
+func (s *Server) clusterPublicIP(w http.ResponseWriter, r *http.Request) {
+	if !s.adminOnly(w, r) {
+		return
+	}
+	ip, err := cluster.PublicIP(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ip": "", "error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ip": ip})
+}
+
+// clusterCheck tests a public address from this server (best effort).
+func (s *Server) clusterCheck(w http.ResponseWriter, r *http.Request) {
+	if !s.adminOnly(w, r) {
+		return
+	}
+	var body struct {
+		Host string `json:"host"`
+		Port int    `json:"port"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	if body.Port == 0 {
+		body.Port = 8006
+	}
+	out := map[string]any{"private": cluster.PrivateAddr(body.Host)}
+	if out["private"] == true { // a LAN/CGNAT address: no need to try
+		out["tcp"] = false
+		writeJSON(w, http.StatusOK, out)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+	defer cancel()
+	if err := cluster.CheckTCP(ctx, body.Host, body.Port); err != nil {
+		out["tcp"], out["error"] = false, err.Error()
+	} else {
+		out["tcp"] = true
+	}
+	writeJSON(w, http.StatusOK, out)
+}

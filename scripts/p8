@@ -93,8 +93,14 @@ p8 — manage P8S OS virtual machines
   p8 storage grow                  use the system disk's free space for VMs (file pool)
   p8 lan-setup                     let VMs join your home network (Ethernet only, once)
   p8 cluster                       servers in this cluster (master + workers) and their room
-  p8 cluster add [TUNNEL_ADDR]     on the master: one-time command to add a server
-                                   (TUNNEL_ADDR = public IP/name workers dial, if not this one)
+  p8 cluster find                  P8S OS servers on this network (and whether they can join)
+  p8 cluster invite NAME|IP        on the master: invite one of them (accepted on that server)
+  p8 cluster invites               on a new server: invitations waiting for you
+  p8 cluster accept [ID] / decline ID
+                                   accept (check the number matches the master's) or decline
+  p8 cluster add                   on the master: join command for a server on this network
+  p8 cluster add PUBLIC_ADDR       ... for a server on another network (PUBLIC_ADDR = your
+                                   public IP or dynamic-DNS name; forward TCP 8006 + UDP 51820)
   p8 join MASTER_URL CODE          on a new server: join the master's cluster
   p8 cluster remove ID [--force]   on the master: drop a server (n2, n3 …)
   p8 cluster leave                 on a worker: stand alone again
@@ -794,20 +800,64 @@ TXT
         jq -r '.nodes[] | [.id, .name, .role, .wg_ip, (if .status.online then "online" else "OFFLINE" end),
           "\((.status.capacity.mem_total_mib // 0) / 1024 | floor) GB RAM, \((.status.capacity.mem_used_mib // 0) / 1024 | floor) GB used, \(.status.capacity.vms // 0) VMs"] | @tsv' <<<"$body" |
           { command -v column >/dev/null && column -t -s $'\t' || cat; } ;;
+      find)
+        echo "Looking for P8S OS servers on this network…"
+        body=$(call GET /cluster/discover) || exit 1
+        [[ $(jq '.servers | length' <<<"$body") == 0 ]] && { echo "None answered (same network? P8S OS updated? UDP 51821)."; exit 0; }
+        jq -r '.servers[] | [.name, .ip, "\(.cpus) CPUs, \((.mem_total_mib // 0) / 1024 | floor) GB", (if .available then "can join: p8 cluster invite \(.ip)" else .why end)] | @tsv' <<<"$body" |
+          { command -v column >/dev/null && column -t -s $'\t' || cat; } ;;
+      invite)
+        [[ -n ${2:-} ]] || { red "which one? p8 cluster find, then: p8 cluster invite NAME|IP"; exit 1; }
+        body=$(call GET /cluster/discover) || exit 1
+        f=$(jq -c --arg x "$2" '[.servers[] | select(.ip == $x or .name == $x)] | first // empty' <<<"$body")
+        [[ -n $f ]] || { red "$2 didn't answer on this network (p8 cluster find)"; exit 1; }
+        [[ $(jq -r .available <<<"$f") == true ]] || { red "$2 can't join: $(jq -r .why <<<"$f")"; exit 1; }
+        r=$(call POST /cluster/invite-send "$f") || exit 1
+        green "✔ Invitation sent to $(jq -r .name <<<"$f")."
+        echo "On that server run:  p8 cluster accept   (or accept it in its dashboard)"
+        echo "It must show the number: $(jq -r .confirm <<<"$r")" ;;
+      invites)
+        body=$(call GET /cluster/invites) || exit 1
+        [[ $(jq '.invites | length' <<<"$body") == 0 ]] && { echo "No invitations."; exit 0; }
+        jq -r '.invites[] | "\(.id)  from \(.master_name) (\(.from))  number \(.confirm)"' <<<"$body" ;;
+      accept)
+        id=${2:-}
+        if [[ -z $id ]]; then
+          body=$(call GET /cluster/invites) || exit 1
+          n=$(jq '.invites | length' <<<"$body")
+          [[ $n == 0 ]] && { echo "No invitations."; exit 0; }
+          [[ $n == 1 ]] || { red "several invitations: p8 cluster invites, then p8 cluster accept ID"; exit 1; }
+          id=$(jq -r '.invites[0].id' <<<"$body")
+          echo "From $(jq -r '.invites[0].master_name' <<<"$body") ($(jq -r '.invites[0].from' <<<"$body")), number $(jq -r '.invites[0].confirm' <<<"$body")"
+          read -rp "Does the master show the same number? Join? [y/N] " a; [[ $a == [yY]* ]] || exit 1
+        fi
+        r=$(call POST "/cluster/invites/$id/accept") || exit 1
+        green "✔ joined $(jq -r .master <<<"$r")'s cluster as $(jq -r .id <<<"$r")" ;;
+      decline)
+        [[ -n ${2:-} ]] || { red "p8 cluster decline ID"; exit 1; }
+        call POST "/cluster/invites/$2/decline" >/dev/null && green "✔ declined" ;;
       add)
-        ip=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i=1;i<NF;i++) if ($i=="src") print $(i+1)}')
         port=${URL#https://*:}; port=${port%%/*}
-        body=$(call POST /cluster/join-code "$(jq -nc --arg u "https://$ip:$port" --arg e "${2:-}" '{master_url:$u, endpoint:$e}')") || exit 1
-        green "✔ Run this on the new server (valid for one hour, works once):"
-        echo; echo "  $(jq -r .command <<<"$body")"; echo
-        echo "It must reach https://$ip:$port and UDP port 51820 here (forward them on your router if it joins over the internet)." ;;
+        if [[ -n ${2:-} ]]; then
+          host=${2#https://}; host=${host%%[:/]*}
+          body=$(call POST /cluster/join-code "$(jq -nc --arg u "https://$host:$port" --arg e "$host" '{master_url:$u, endpoint:$e}')") || exit 1
+          green "✔ For a server on ANOTHER network — run this there (valid one hour, works once):"
+          echo; echo "  $(jq -r .command <<<"$body")"; echo
+          echo "Your router must forward TCP $port and UDP 51820 to this server."
+        else
+          ip=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i=1;i<NF;i++) if ($i=="src") print $(i+1)}')
+          body=$(call POST /cluster/join-code "$(jq -nc --arg u "https://$ip:$port" '{master_url:$u, endpoint:""}')") || exit 1
+          green "✔ For a server on THIS network — run this there (valid one hour, works once):"
+          echo; echo "  $(jq -r .command <<<"$body")"; echo
+          echo "Easier: p8 cluster find, then p8 cluster invite NAME. Other network: p8 cluster add YOUR_PUBLIC_IP"
+        fi ;;
       remove|rm)
         [[ -n ${2:-} ]] || { red "which server? p8 cluster remove n2"; exit 1; }
         q=""; [[ ${3:-} == --force ]] && q="?force=1"
         call DELETE "/cluster/nodes/$2$q" >/dev/null && green "✔ removed $2" ;;
       leave)
         call POST /cluster/leave >/dev/null && green "✔ this server stands alone again (remove it on the master too)" ;;
-      *) red "p8 cluster [list|add|remove ID|leave]"; exit 1 ;;
+      *) red "p8 cluster [list|find|invite|invites|accept|decline|add|remove|leave]"; exit 1 ;;
     esac ;;
 
   join)

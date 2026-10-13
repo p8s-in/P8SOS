@@ -69,8 +69,9 @@ type Node struct {
 }
 
 type joinCode struct {
-	Hash    string `json:"hash"`
-	Expires string `json:"expires"`
+	Hash     string `json:"hash"`
+	Expires  string `json:"expires"`
+	Endpoint string `json:"endpoint,omitempty"` // tunnel address this code's server dials
 }
 
 // State is what this server knows about the cluster (data_dir/cluster/state.json).
@@ -90,6 +91,7 @@ type Status struct {
 	Seen     string   `json:"seen,omitempty"`
 	Error    string   `json:"error,omitempty"`
 	Capacity Capacity `json:"capacity"`
+	Tunnel   string   `json:"tunnel,omitempty"` // last WireGuard handshake (empty: tunnel never came up)
 }
 
 // Capacity is what a node has and what its VMs already take.
@@ -115,11 +117,13 @@ type Manager struct {
 	// LocalCapacity describes this server (for placement and the dashboard).
 	LocalCapacity func(ctx context.Context) Capacity
 	TestURL       string // tests: this server's API URL (no tunnel)
+	DiscoverPort  int    // UDP port for finding servers; 0 = 51821
 
 	mu     sync.Mutex
 	st     State
 	loaded bool
 	status map[string]*Status
+	inv    inviteBox
 }
 
 func (m *Manager) now() time.Time {
@@ -329,7 +333,7 @@ func (m *Manager) JoinCode(ctx context.Context, masterURL, endpoint string) (cod
 			keep = append(keep, j)
 		}
 	}
-	m.st.Joins = append(keep, joinCode{Hash: hashOf(secret), Expires: now.Add(joinValid).UTC().Format(time.RFC3339)})
+	m.st.Joins = append(keep, joinCode{Hash: hashOf(secret), Expires: now.Add(joinValid).UTC().Format(time.RFC3339), Endpoint: endpoint})
 	err = m.save()
 	m.mu.Unlock()
 	if err != nil {
@@ -396,6 +400,7 @@ func (m *Manager) Register(ctx context.Context, r RegisterRequest) (RegisterRepl
 		m.mu.Unlock()
 		return RegisterReply{}, fmt.Errorf("%w: the join code is wrong, used or expired (make a new one on the master)", ErrInvalid)
 	}
+	codeEndpoint := m.st.Joins[idx].Endpoint
 	m.st.Joins = append(m.st.Joins[:idx], m.st.Joins[idx+1:]...)
 	// next free id and address; the same machine joining again (same TLS
 	// certificate) replaces its old entry
@@ -438,6 +443,9 @@ func (m *Manager) Register(ctx context.Context, r RegisterRequest) (RegisterRepl
 	sort.Slice(m.st.Nodes, func(i, j int) bool { return m.st.Nodes[i].ID < m.st.Nodes[j].ID })
 	err := m.save()
 	self, ep := m.st.Self, m.st.Endpoint
+	if codeEndpoint != "" {
+		ep = codeEndpoint // same LAN, or over the internet: what the code was made for
+	}
 	m.mu.Unlock()
 	if err != nil {
 		return RegisterReply{}, err
