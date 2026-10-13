@@ -1,0 +1,33 @@
+[Plymouth Theme]
+Name=P8S OS
+Description=P8S OS boot splash: the logo on brand blue with a small spinner
+ModuleName=two-step
+
+[two-step]
+Font=DejaVu Sans Bold 15
+TitleFont=DejaVu Sans Mono Bold 30
+ImageDir=/usr/share/plymouth/themes/p8s
+DialogHorizontalAlignment=.5
+DialogVerticalAlignment=.62
+TitleHorizontalAlignment=.5
+TitleVerticalAlignment=.382
+HorizontalAlignment=.5
+VerticalAlignment=.72
+WatermarkHorizontalAlignment=.5
+WatermarkVerticalAlignment=.4
+Transition=none
+TransitionDuration=0.0
+BackgroundStartColor=0x013258
+BackgroundEndColor=0x011424
+ProgressBarBackgroundColor=0x0a3a5f
+ProgressBarForegroundColor=0x5aa7e0
+MessageBelowAnimation=true
+
+[boot-up]
+UseEndAnimation=false
+
+[shutdown]
+UseEndAnimation=false
+
+[reboot]
+UseEndAnimation=false

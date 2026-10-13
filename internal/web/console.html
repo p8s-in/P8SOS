@@ -4,8 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Console — P8S OS</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <style>
-:root{--bg:#0e1116;--panel:#161b22;--text:#e6edf3;--muted:#8b949e;--line:#262c36;--accent:#818cf8;--ok:#12b76a;--warn:#f79009;--bad:#f04438}
+:root{--bg:#0e1116;--panel:#161b22;--text:#e6edf3;--muted:#8b949e;--line:#262c36;--accent:#5aa7e0;--ok:#12b76a;--warn:#f79009;--bad:#f04438}
 *{box-sizing:border-box}
 html,body{height:100%;margin:0;background:#000;color:var(--text);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
 button,input,select{font:inherit;color:inherit}
@@ -36,7 +37,7 @@ textarea{min-height:80px;font-family:ui-monospace,Menlo,Consolas,monospace}
 </head>
 <body>
 <div class="bar" id="bar">
-  <span class="logo">P8S <b>OS</b></span>
+  <img src="/brand/icon.svg" alt="" width="22" height="22" style="border-radius:5px;vertical-align:middle;margin-right:6px"><span class="logo">P8S <b>OS</b></span>
   <span class="name" id="vmName"></span>
   <span class="st" id="st"><span class="dot"></span><span id="stText">Connecting…</span></span>
   <span class="spacer"></span>

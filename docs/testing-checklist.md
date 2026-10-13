@@ -165,6 +165,14 @@ hardware**. Work through it on the new machine; tick each line and note problems
 - [ ] Remove is refused while the VM is on it; after deleting the VM it disconnects
 - [ ] Reinstall test: remove, add again without Format → "taken over", the VM disk is still in `zfs list`
 
+## 16. Logo and boot screens
+
+- [ ] New ISO (`sudo bash iso/build-iso.sh`): BIOS boot menu shows the P8S logo with 3 entries; UEFI boot (laptop) shows the logo too, menu below it
+- [ ] Installed server, after `sudo bash update.sh` and a reboot: GRUB menu on the blue P8S background, then the logo splash while it boots (Esc shows the messages)
+- [ ] Console login screen and SSH login show the ASCII P8S OS logo and the dashboard address
+- [ ] Dashboard: P8S tab icon, logo on the sign-in page (blue in light mode, white in dark), icon in the top bar; "Add to home screen" on a phone uses the P8S icon
+- [ ] `sudo touch /etc/p8s/no-splash && sudo bash update.sh` + reboot → plain boot messages again
+
 ## Add new features here as they are built
 
 (Every new feature adds its own lines above before it counts as done.)

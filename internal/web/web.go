@@ -37,6 +37,20 @@ var (
 	haJS []byte
 	//go:embed security.js
 	securityJS []byte
+	//go:embed brand/favicon.svg
+	brandFavicon []byte
+	//go:embed brand/favicon-32.png
+	brandFavicon32 []byte
+	//go:embed brand/icon.svg
+	brandIcon []byte
+	//go:embed brand/icon-512.png
+	brandIcon512 []byte
+	//go:embed brand/apple-touch-icon.png
+	brandApple []byte
+	//go:embed brand/logo-blue.svg
+	brandLogoBlue []byte
+	//go:embed brand/logo-white.svg
+	brandLogoWhite []byte
 	//go:embed storages.js
 	storagesJS []byte
 	//go:embed disks.js
@@ -62,28 +76,43 @@ type asset struct {
 }
 
 var assets = map[string]asset{
-	"/":                  {page, "text/html; charset=utf-8", "no-cache"},
-	"/console":           {consolePage, "text/html; charset=utf-8", "no-cache"},
-	"/novnc.min.js":      {novncJS, "text/javascript; charset=utf-8", "public, max-age=86400"},
-	"/cloud.js":          {cloudJS, "text/javascript; charset=utf-8", "no-cache"},
-	"/license.js":        {licenseJS, "text/javascript; charset=utf-8", "no-cache"},
-	"/node.js":           {nodeJS, "text/javascript; charset=utf-8", "no-cache"},
-	"/containers.js":     {containersJS, "text/javascript; charset=utf-8", "no-cache"},
-	"/offsite.js":        {offsiteJS, "text/javascript; charset=utf-8", "no-cache"},
-	"/pages.js":          {pagesJS, "text/javascript; charset=utf-8", "no-cache"},
-	"/imports.js":        {importsJS, "text/javascript; charset=utf-8", "no-cache"},
-	"/cluster.js":        {clusterJS, "text/javascript; charset=utf-8", "no-cache"},
-	"/ha.js":             {haJS, "text/javascript; charset=utf-8", "no-cache"},
-	"/security.js":       {securityJS, "text/javascript; charset=utf-8", "no-cache"},
-	"/remote.js":         {remoteJS, "text/javascript; charset=utf-8", "no-cache"},
-	"/disks.js":          {disksJS, "text/javascript; charset=utf-8", "no-cache"},
-	"/storages.js":       {storagesJS, "text/javascript; charset=utf-8", "no-cache"},
-	"/terminal":          {terminalPage, "text/html; charset=utf-8", "no-cache"},
-	"/xterm.min.js":      {xtermJS, "text/javascript; charset=utf-8", "public, max-age=86400"},
-	"/xterm-fit.min.js":  {xtermFitJS, "text/javascript; charset=utf-8", "public, max-age=86400"},
-	"/xterm-LICENSE.txt": {xtermLicense, "text/plain; charset=utf-8", "public, max-age=86400"},
-	"/novnc-LICENSE.txt": {novncLicense, "text/plain; charset=utf-8", "public, max-age=86400"},
+	"/":              {page, "text/html; charset=utf-8", "no-cache"},
+	"/console":       {consolePage, "text/html; charset=utf-8", "no-cache"},
+	"/novnc.min.js":  {novncJS, "text/javascript; charset=utf-8", "public, max-age=86400"},
+	"/cloud.js":      {cloudJS, "text/javascript; charset=utf-8", "no-cache"},
+	"/license.js":    {licenseJS, "text/javascript; charset=utf-8", "no-cache"},
+	"/node.js":       {nodeJS, "text/javascript; charset=utf-8", "no-cache"},
+	"/containers.js": {containersJS, "text/javascript; charset=utf-8", "no-cache"},
+	"/offsite.js":    {offsiteJS, "text/javascript; charset=utf-8", "no-cache"},
+	"/pages.js":      {pagesJS, "text/javascript; charset=utf-8", "no-cache"},
+	"/imports.js":    {importsJS, "text/javascript; charset=utf-8", "no-cache"},
+	"/cluster.js":    {clusterJS, "text/javascript; charset=utf-8", "no-cache"},
+	"/ha.js":         {haJS, "text/javascript; charset=utf-8", "no-cache"},
+	"/security.js":   {securityJS, "text/javascript; charset=utf-8", "no-cache"},
+	"/remote.js":     {remoteJS, "text/javascript; charset=utf-8", "no-cache"},
+	"/disks.js":      {disksJS, "text/javascript; charset=utf-8", "no-cache"},
+	"/storages.js":   {storagesJS, "text/javascript; charset=utf-8", "no-cache"},
+	// P8S logo (assets/brand): tab icon, phone home screen, header, sign-in page
+	"/favicon.svg":          {brandFavicon, "image/svg+xml", "public, max-age=86400"},
+	"/favicon.ico":          {brandFavicon32, "image/png", "public, max-age=86400"},
+	"/favicon-32.png":       {brandFavicon32, "image/png", "public, max-age=86400"},
+	"/apple-touch-icon.png": {brandApple, "image/png", "public, max-age=86400"},
+	"/brand/icon.svg":       {brandIcon, "image/svg+xml", "public, max-age=86400"},
+	"/brand/icon-512.png":   {brandIcon512, "image/png", "public, max-age=86400"},
+	"/brand/logo-blue.svg":  {brandLogoBlue, "image/svg+xml", "public, max-age=86400"},
+	"/brand/logo-white.svg": {brandLogoWhite, "image/svg+xml", "public, max-age=86400"},
+	"/manifest.webmanifest": {manifest, "application/manifest+json", "no-cache"},
+	"/terminal":             {terminalPage, "text/html; charset=utf-8", "no-cache"},
+	"/xterm.min.js":         {xtermJS, "text/javascript; charset=utf-8", "public, max-age=86400"},
+	"/xterm-fit.min.js":     {xtermFitJS, "text/javascript; charset=utf-8", "public, max-age=86400"},
+	"/xterm-LICENSE.txt":    {xtermLicense, "text/plain; charset=utf-8", "public, max-age=86400"},
+	"/novnc-LICENSE.txt":    {novncLicense, "text/plain; charset=utf-8", "public, max-age=86400"},
 }
+
+// manifest lets phones add the dashboard to the home screen with the P8S icon.
+var manifest = []byte(`{"name":"P8S OS","short_name":"P8S OS","start_url":"/","display":"standalone",` +
+	`"background_color":"#012a4a","theme_color":"#014578",` +
+	`"icons":[{"src":"/apple-touch-icon.png","sizes":"180x180","type":"image/png"},{"src":"/brand/icon-512.png","sizes":"512x512","type":"image/png"}]}`)
 
 // Handler serves the embedded pages and 404s everything else.
 func Handler() http.Handler {

@@ -66,6 +66,45 @@ cp "$WORK/p8sos/iso/preseed.cfg" "$WORK/preseed.cfg"
 echo "$(find "$WORK/p8sos" -type f | wc -l) files"
 
 say "4/5 Boot menus (BIOS + UEFI)"
+BRAND=$REPO/assets/brand/iso
+has() { xorriso -indev "$CACHE/$ISO" -find "$1" 2>/dev/null | grep -q .; }
+if [[ -f $BRAND/splash.png ]] && has /isolinux/vesamenu.c32; then
+  # graphical menu with the P8S logo (BIOS); /isolinux/splash.png is replaced below
+  cat > "$WORK/isolinux.cfg" <<EOF
+ui vesamenu.c32
+menu title
+menu background splash.png
+menu vshift 12
+menu rows 5
+menu margin 8
+menu tabmsg Press Tab to edit, Enter to start
+menu color screen 37;40 #00000000 #00000000 none
+menu color border 30;44 #00000000 #00000000 none
+menu color title 1;36;44 #00000000 #00000000 none
+menu color unsel 37;44 #ffc8d3de #00000000 none
+menu color sel 7;37;40 #ffffffff #c0185f9e all
+menu color hotkey 1;37;44 #ffffffff #00000000 none
+menu color hotsel 1;7;37;40 #ffffffff #c0185f9e all
+menu color tabmsg 31;40 #ff8aa0b5 #00000000 none
+menu color timeout_msg 37;40 #ff8aa0b5 #00000000 none
+menu color timeout 1;37;40 #ffffffff #00000000 none
+timeout 50
+default p8s
+label p8s
+  menu label ^Install P8S OS (alpha)
+  kernel /install.amd/vmlinuz
+  append vga=788 initrd=/install.amd/initrd.gz $KARGS --- quiet
+label p8senc
+  menu label Install P8S OS (alpha), ^encrypted VM storage
+  kernel /install.amd/vmlinuz
+  append vga=788 initrd=/install.amd/initrd.gz $KARGS p8s.encrypt=1 --- quiet
+label debian
+  menu label Plain ^Debian 13 installer
+  kernel /install.amd/vmlinuz
+  append vga=788 initrd=/install.amd/initrd.gz --- quiet
+EOF
+  echo "BIOS menu: graphical, with the P8S logo"
+else
 cat > "$WORK/isolinux.cfg" <<EOF
 default p8s
 prompt 1
@@ -83,6 +122,15 @@ label debian
   kernel /install.amd/vmlinuz
   append vga=788 initrd=/install.amd/initrd.gz --- quiet
 EOF
+fi
+# logo on both menus: the BIOS splash, and the UEFI GRUB theme(s) of the Debian ISO
+BRANDMAP=()
+if [[ -f $BRAND/splash.png ]]; then
+  BRANDMAP+=(-map "$BRAND/splash.png" /isolinux/splash.png)
+  for t in $(xorriso -indev "$CACHE/$ISO" -find /boot/grub/theme -type f 2>/dev/null | tr -d "'" | grep -v -e '[.]pf2$' -e '[.]png$'); do
+    BRANDMAP+=(-map "$BRAND/grub-theme.txt" "$t")
+  done
+fi
 xorriso -osirrox on -indev "$CACHE/$ISO" -extract /boot/grub/grub.cfg "$WORK/grub.orig.cfg" >/dev/null 2>&1
 chmod u+w "$WORK/grub.orig.cfg"
 {
@@ -112,6 +160,7 @@ xorriso -indev "$CACHE/$ISO" -outdev "$OUT" \
   -map "$WORK/p8sos" /p8sos \
   -map "$WORK/isolinux.cfg" /isolinux/isolinux.cfg \
   -map "$WORK/grub.cfg" /boot/grub/grub.cfg \
+  "${BRANDMAP[@]}" \
   -boot_image any replay 2>&1 | grep -E 'Writing to|Written to medium|FAILURE|SORRY' || true
 [[ -s $OUT ]] || { echo "ISO build failed"; exit 1; }
 SUM=$(sha256sum "$OUT" | awk '{print $1}')

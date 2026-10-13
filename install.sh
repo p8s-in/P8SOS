@@ -262,7 +262,7 @@ bash /usr/local/share/p8s/netcheck.sh --repair | sed 's/^/  /' || true
 bash "$REPO/scripts/tune.sh" | sed 's/^/  /' || echo "  note: tuning not applied"
 
 # P8S OS name on the boot menu, login screen and SSH welcome (Debian stays underneath)
-bash "$REPO/scripts/branding.sh" >/dev/null 2>&1 || echo "  note: branding not applied"
+bash "$REPO/scripts/branding.sh" >/dev/null 2>&1 && ok "P8S logo on the boot menu, boot screen and login" || echo "  note: branding not applied"
 
 # Installed from the ISO? Mark first-boot setup as done (also when it was finished by hand).
 if [[ -f /etc/systemd/system/p8s-firstboot.service ]]; then

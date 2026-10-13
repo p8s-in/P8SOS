@@ -4,16 +4,21 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>P8S OS</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#014578">
 <style>
 :root{
   --bg:#f5f6f8; --panel:#fff; --text:#16181d; --muted:#667085; --line:#e4e7ec;
-  --accent:#4f46e5; --accent-ink:#fff; --ok:#12b76a; --warn:#f79009; --bad:#f04438; --idle:#98a2b3;
+  --accent:#014578; --accent-ink:#fff; --ok:#12b76a; --warn:#f79009; --bad:#f04438; --idle:#98a2b3;
   --bar:#eef0f4; --shadow:0 1px 2px rgba(16,24,40,.06),0 1px 3px rgba(16,24,40,.08);
   --series-1:#2a78d6; --series-2:#eb6834; --series-3:#1f9e74; --series-4:#a9b4c2; --grid:#eceef2;
 }
 @media (prefers-color-scheme:dark){:root{
   --bg:#0e1116; --panel:#161b22; --text:#e6edf3; --muted:#8b949e; --line:#262c36;
-  --accent:#818cf8; --accent-ink:#0e1116; --bar:#21262d; --shadow:none;
+  --accent:#5aa7e0; --accent-ink:#0e1116; --bar:#21262d; --shadow:none;
   --series-1:#3987e5; --series-2:#d95926; --series-3:#2fb386; --series-4:#5b6676; --grid:#232933;
 }}
 *{box-sizing:border-box}
@@ -22,6 +27,10 @@ body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-a
 button,input,select,textarea{font:inherit;color:inherit}
 header{display:flex;align-items:center;gap:12px;padding:12px 20px;background:var(--panel);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
 .logo{font-weight:700;letter-spacing:.3px}.logo b{color:var(--accent)}
+.hicon{width:26px;height:26px;border-radius:6px;display:block}
+.brandmark{text-align:center;margin:4px 0 6px}.brandmark img{height:68px;max-width:100%}
+.brandmark .dk{display:none}
+@media (prefers-color-scheme:dark){.brandmark .lt{display:none}.brandmark .dk{display:inline}}
 .sub{color:var(--muted);font-size:13px}
 .spacer{flex:1}
 main{max-width:1180px;margin:0 auto;padding:20px}
@@ -597,6 +606,8 @@ function sshLine(name, user){
   return `<div class="sub"><span class="mono copy" data-copy="${esc(cmd)}" title="Click to copy: ${esc(cmd)} (works from any computer)">SSH port ${p}</span></div>`;
 }
 // "P8S Cloud" -> P8S <b>Cloud</b>: the last word in the accent colour, like the original logo.
+// the P8S logo shows unless the server is rebranded for someone else (P8S Cloud resellers)
+const isP8S = () => /^P8S\b/i.test(brandName);
 function brandHTML(){ const w = esc(brandName).split(" "); return w.length > 1 ? w.slice(0, -1).join(" ") + " <b>" + w[w.length - 1] + "</b>" : "<b>" + w[0] + "</b>"; }
 const isAdmin = () => ["admin", "operator", "auditor"].includes(me?.role); // staff: sees every VM
 const isFullAdmin = () => me?.role === "admin"; // accounts, settings, the server itself
@@ -641,6 +652,7 @@ function renderLogin(){
   for (const d of document.querySelectorAll("dialog[open]")) d.close();
   $("#app").innerHTML = `
   <div class="panel login">
+    <div class="brandmark" id="lMark"><img class="lt" src="/brand/logo-blue.svg" alt="P8S"><img class="dk" src="/brand/logo-white.svg" alt="P8S"></div>
     <h1><span class="logo" id="lBrand">P8S <b>OS</b></span></h1>
     <form id="fLogin" hidden>
       <div class="sub">Sign in to manage your servers.</div>
@@ -716,6 +728,7 @@ function renderLogin(){
   fetch(API + "/auth").then(r => r.json()).then(async a => {
     accounts = !!a.accounts; $("#lUserLink").hidden = !accounts;
     brandName = a.brand || "P8S OS"; document.title = brandName; $("#lBrand").innerHTML = brandHTML();
+    $("#lMark").hidden = !isP8S();
     $("#lSignupLink").hidden = !a.signup; $("#lForgotLink").hidden = !a.reset;
     if (a.sso) { $("#lSSO").hidden = false; $("#lSSOGo").textContent = "Sign in with " + a.sso; }
     if (hash.get("sso")) return enter(hash.get("sso"));
@@ -815,6 +828,7 @@ function renderShell(){
   <div class="shell" id="shell">
   <header>
     <button class="btn" id="bSideToggle" aria-label="Menu"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">${IC.menu}</svg></button>
+    <img class="hicon" id="hIcon" src="/brand/icon.svg" alt="">
     <span class="logo" id="hBrand"></span>
     <span class="sub" id="hVer"></span>
     <span class="spacer"></span>
@@ -877,6 +891,7 @@ function renderShell(){
   $("#bUsers").onclick = openUsers;
   $("#bSettings").onclick = openSettings;
   $("#hBrand").innerHTML = brandHTML();
+  $("#hIcon").hidden = !isP8S();
   cloudShell();
   licLoaded = false; // license.js: Subscription button + notice once we know who's signed in
   $("#bAudit").onclick = openAudit;

@@ -1,0 +1,55 @@
+# P8S OS boot menu (GRUB theme). Installed to /boot/grub/themes/p8s by
+# scripts/branding.sh. Fonts: dejavu_*.pf2 made there with grub-mkfont; GRUB
+# falls back to its built-in font if they are missing.
+title-text: ""
+desktop-image: "background.png"
+desktop-image-scale-method: "crop"
+desktop-color: "#012a4a"
+terminal-font: "DejaVu Sans Mono Regular 16"
+terminal-left: "10%"
+terminal-top: "10%"
+terminal-width: "80%"
+terminal-height: "80%"
+terminal-box: ""
+
++ boot_menu {
+  left = 30%
+  top = 52%
+  width = 40%
+  height = 30%
+  item_font = "DejaVu Sans Regular 20"
+  item_color = "#c8d3de"
+  selected_item_font = "DejaVu Sans Regular 20"
+  selected_item_color = "#ffffff"
+  selected_item_pixmap_style = "select_*.png"
+  item_height = 34
+  item_padding = 12
+  item_spacing = 6
+  icon_width = 0
+  icon_height = 0
+  item_icon_space = 0
+  scrollbar = false
+}
+
++ label {
+  id = "__timeout__"
+  left = 0
+  top = 86%
+  width = 100%
+  height = 24
+  align = "center"
+  color = "#8aa0b5"
+  font = "DejaVu Sans Regular 16"
+  text = "@TIMEOUT_NOTIFY_LONG@"
+}
+
++ label {
+  left = 0
+  top = 92%
+  width = 100%
+  height = 24
+  align = "center"
+  color = "#6f8aa3"
+  font = "DejaVu Sans Regular 16"
+  text = "Enter: start   e: edit   c: command line"
+}
