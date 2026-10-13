@@ -138,6 +138,12 @@ func (v *Virsh) List(ctx context.Context) ([]string, error) {
 	return names, nil
 }
 
+// SendKey presses keys on the VM's keyboard (Linux key names, e.g. KEY_ENTER).
+func (v *Virsh) SendKey(ctx context.Context, name string, keys ...string) error {
+	_, err := v.virsh(ctx, append([]string{"send-key", name}, keys...)...)
+	return err
+}
+
 func (v *Virsh) Reboot(ctx context.Context, name string) error {
 	_, err := v.virsh(ctx, "reboot", name, "--mode", "acpi")
 	return err

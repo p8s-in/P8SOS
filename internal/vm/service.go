@@ -485,6 +485,7 @@ func (s *Service) Start(ctx context.Context, name string) (VM, error) {
 // afterStart re-applies firewall rules that depend on the VM's host port
 // (public-address pinning); the port name changes on every start.
 func (s *Service) afterStart(ctx context.Context, name string) {
+	s.pressBootKey(context.WithoutCancel(ctx), Prefix+name)
 	if s.Pools == nil {
 		return
 	}

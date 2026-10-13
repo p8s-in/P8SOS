@@ -21,7 +21,7 @@ stimer, reset, frequencies, tlbflush, ipi, hypervclock), so Windows runs fast on
 2. **+ Create VM** → Operating system: the Windows ISO → Kind of system: **Windows 11 / Server 2022, 2025**
    (picked automatically when the ISO name has "win") → Drivers CD: **virtio-win.iso**.
    At least 2 CPUs, 4 GB RAM and 64 GB disk (the Windows 11 installer refuses less).
-3. **Console** → press a key when it says "Press any key to boot from CD" → install as usual.
+3. **Console** → install as usual. While the disk is still empty, P8S presses Enter for the "Press any key to boot from CD" prompt during the first 15 seconds after each start, so the installer always starts (once Windows is on the disk nothing is pressed). If you still land on a boot error or the UEFI boot page, click **Ctrl+Alt+Del** in the console and press a key when the prompt shows.
    The disk is SATA, so the installer sees it without extra drivers.
 4. After installing: open the drivers CD in Windows and run `virtio-win-guest-tools.exe`
    (guest agent, memory balloon, better display).
