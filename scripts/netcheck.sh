@@ -123,6 +123,58 @@ else
   fi
 fi
 
+say "==> DNS for guests"
+# Home routers often answer some queries wrongly (NXDOMAIN for IPv6/AAAA or
+# EDNS queries). dnsmasq then caches "this name doesn't exist" for every
+# record type and guests randomly get "DNS address could not be found".
+# P8S gives the NAT network's dnsmasq upstream servers that answer correctly
+# (public DNS when reachable, else the router) and turns off negative caching.
+answers() { local r; r=$(dnsq "$1" "$2"); [[ ${r%% *} == 0 && ${r##* } -gt 0 ]]; }
+good_dns=()
+for c in 8.8.8.8 1.1.1.1 9.9.9.9; do
+  answers "$c" www.google.com && answers "$c" www.msftconnecttest.com && good_dns+=("$c")
+  ((${#good_dns[@]} >= 2)) && break
+done
+if ((${#good_dns[@]} == 0)); then # public DNS blocked: use the router(s) the server uses
+  for c in $(awk '/^nameserver/{print $2}' /etc/resolv.conf /run/systemd/resolve/resolv.conf 2>/dev/null | grep -v '^127\.' | sort -u); do
+    answers "$c" www.google.com && good_dns+=("$c")
+  done
+fi
+if command -v virsh >/dev/null && virsh net-info default >/dev/null 2>&1; then
+  cur=$(virsh net-dumpxml --inactive default 2>/dev/null | sed -n "s/.*<forwarder addr=['\"]\([0-9.]*\)['\"].*/\1/p" | paste -sd' ')
+  want=${good_dns[*]}
+  negoff=$(virsh net-dumpxml --inactive default 2>/dev/null | grep -c "no-negcache")
+  if ((${#good_dns[@]} == 0)); then
+    no "no DNS server answered from this server (public DNS and the router) — guests can't resolve names"
+  elif [[ -n $cur && $negoff -gt 0 ]] && curok=true && for c in $cur; do answers "$c" www.google.com || curok=false; done && $curok; then
+    ok "guests' DNS goes to $cur (no caching of failed lookups)"
+  else
+    no "guests' DNS goes ${cur:+to $cur }through the server's default resolver and caches failed lookups — names fail now and then"
+    if $repair; then
+      x=$(virsh net-dumpxml --inactive default)
+      x=$(sed -e '/<dns[ >]/,/<\/dns>/d' -e '/<dns\/>/d' -e '/<dnsmasq:options>/,/<\/dnsmasq:options>/d' <<<"$x")
+      fw=""; for d in "${good_dns[@]}"; do fw+="    <forwarder addr='$d'/>\n"; done
+      ins="  <dns>\n$fw  </dns>\n  <dnsmasq:options>\n    <dnsmasq:option value='no-negcache'/>\n    <dnsmasq:option value='dns-forward-max=500'/>\n  </dnsmasq:options>"
+      x=$(sed "s#</network>#$ins\n</network>#" <<<"$x")
+      grep -q "xmlns:dnsmasq" <<<"$x" || x=$(sed "0,/<network/s#<network#<network xmlns:dnsmasq='http://libvirt.org/schemas/network/dnsmasq/1.0'#" <<<"$x")
+      tmp=$(mktemp)
+      printf '%s\n' "$x" >"$tmp"
+      if virsh net-define "$tmp" >/dev/null; then
+        # restart the network; guests' cables (tap/veth) are plugged back in at once
+        ports=$(ls /sys/class/net/virbr0/brif 2>/dev/null | grep -v -e '^virbr0' || true)
+        virsh net-destroy default >/dev/null 2>&1
+        virsh net-start default >/dev/null
+        for p in $ports; do ip link set dev "$p" master virbr0 2>/dev/null; ip link set dev "$p" up 2>/dev/null; done
+        systemctl is-active -q p8sd && systemctl restart p8sd # its firewall rules name the guests' ports
+        fix "guests' DNS now goes to $want without caching failures (guests stayed connected)"
+      else
+        hint "libvirt didn't accept the new network settings; left unchanged"
+      fi
+      rm -f "$tmp"
+    fi
+  fi
+fi
+
 say "==> Firewall"
 fwd_drop=false
 if nft list chain ip filter FORWARD 2>/dev/null | grep -q "policy drop"; then fwd_drop=true; fi

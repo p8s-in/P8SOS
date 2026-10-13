@@ -79,7 +79,11 @@ server's own internet and DNS, IP forwarding, libvirt's NAT network (rule + dnsm
 a FORWARD policy of DROP (Docker), br_netfilter and the P8S firewall table. **Repair** (`--repair`)
 fixes what it finds while guests keep running: it re-enables forwarding, restarts libvirt's network
 daemon (which puts its NAT rules back and restarts dnsmasq), allows virbr0/br0 through a DROP policy
-and restarts p8sd if its firewall table was wiped. `p8s-net.service` runs the repair at every boot,
+and restarts p8sd if its firewall table was wiped. Guests' DNS: many home routers answer some
+queries wrongly, and dnsmasq then caches "name doesn't exist", so guests get "DNS address could not
+be found" now and then. Repair points the NAT network's dnsmasq at upstream servers that answer
+correctly (8.8.8.8 / 1.1.1.1 / 9.9.9.9 when reachable, otherwise the router) with `no-negcache`, and
+plugs the guests' network cables straight back in after restarting the network. `p8s-net.service` runs the repair at every boot,
 after every `nftables` start/reload (a reload of `/etc/nftables.conf` runs `flush ruleset`) and after
 Debian updates.
 
