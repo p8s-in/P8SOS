@@ -244,9 +244,23 @@ Force-stops if running, undefines the domain, destroys the disk and seed ISO.
 (`409` otherwise). Disks only grow (`400` on shrink); the guest's root filesystem grows
 to the new size on its next boot (cloud-init growpart). `200` + VM object.
 
+### Extra disks
+A VM has its system disk (`disk_gb`) and up to 8 data disks, listed in the VM object as
+`"disks":[{"index":1,"size_gb":50,"device":"vdb"}]`. `index` stays the same while the disk
+exists, so it keeps its device name inside the guest (`vdb`…`vdi` on virtio, `sdf`…`sdm` on
+SATA/SCSI) when another disk is removed. They count toward a customer's disk quota.
+
+- `POST /vms/{name}/disks` `{"size_gb":50}` → `201` VM object plus `"note"` (what to do next).
+  A running virtio/SCSI VM gets the disk at once; SATA (Windows default) after a shut down and start.
+- `PATCH /vms/{name}/disks/{index}` `{"size_gb":80}` → grow it; VM stopped (`409`), only grows (`400`).
+- `DELETE /vms/{name}/disks/{index}` → remove it and its data; VM stopped.
+
+Snapshots, rollbacks, backups and restores cover every disk. Moves and high availability
+refuse VMs with extra disks for now (`409` / a reason in the HA list).
+
 ### Snapshots
-A snapshot is a ZFS snapshot of the VM's disk (instant, copy-on-write). Only the disk
-is saved — CPU/RAM settings are not. At most 30 per VM.
+A snapshot is a ZFS snapshot of the VM's disks (instant, copy-on-write; all disks at the
+same moment). Only the disks are saved — CPU/RAM settings are not. At most 30 per VM.
 
 `GET /vms/{name}/snapshots` → `200 {"snapshots":[{"name":"before-upgrade","created_at":"2026-10-12T10:00:00Z","used_bytes":1048576}]}`
 (oldest first; `used_bytes` = space only that snapshot holds).

@@ -383,3 +383,53 @@ func TestSSHTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestDataDiskFiles(t *testing.T) {
+	ctx := context.Background()
+	m, dir := newMgr(t)
+	usb := filepath.Join(dir, "usb")
+	os.MkdirAll(usb, 0o700)
+	if _, err := m.Save(Target{Name: "usb", Type: "dir", Path: usb, Keep: 1, Enabled: true, Passphrase: "a long passphrase"}); err != nil {
+		t.Fatal(err)
+	}
+	s := &backup.Store{Dir: m.BackupDir}
+	bm := backup.Meta{ID: "20261005-023000", VM: "db1", Compression: "zstd", CreatedAt: "x", Bytes: 7,
+		Extra: []backup.ExtraDisk{{Index: 2, SizeGB: 5, Bytes: 9}}}
+	data, meta := s.Files(bm)
+	os.MkdirAll(filepath.Dir(data), 0o700)
+	os.WriteFile(data, []byte("disk0.."), 0o600)
+	os.WriteFile(s.ExtraFile(bm, 2), []byte("disk2...."), 0o600)
+	j, _ := json.Marshal(bm)
+	os.WriteFile(meta, j, 0o600)
+
+	m.StartSync("usb")
+	m.Jobs.Wait()
+	k := strings.Join(keys(t, usb), ",")
+	if !strings.Contains(k, "vm/db1/db1-20261005-023000-d2.zfs.zst.p8senc") || !strings.Contains(k, "vm/db1/db1-20261005-023000.json") {
+		t.Fatalf("uploaded %s", k)
+	}
+	l, err := m.RemoteBackups(ctx, "usb")
+	if err != nil || len(l) != 1 || l[0].Bytes < 16 {
+		t.Fatalf("remote %+v %v", l, err)
+	}
+	// the server loses it; bring both disks back
+	os.RemoveAll(filepath.Join(m.BackupDir, "db1"))
+	jb, _ := m.StartFetch("usb", "vm", "db1", bm.ID)
+	m.Jobs.Wait()
+	if jb, _ = m.Jobs.Get(jb.ID); jb.State != jobs.Done {
+		t.Fatalf("fetch %+v", jb)
+	}
+	if b, _ := os.ReadFile(s.ExtraFile(bm, 2)); string(b) != "disk2...." {
+		t.Fatalf("disk 2 came back as %q", b)
+	}
+	if b, _ := os.ReadFile(data); string(b) != "disk0.." {
+		t.Fatalf("disk 0 came back as %q", b)
+	}
+	// deleting the local backup removes its data disk file too
+	if err := s.Delete("db1", bm.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(s.ExtraFile(bm, 2)); err == nil {
+		t.Fatal("disk 2 file left")
+	}
+}

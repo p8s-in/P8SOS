@@ -71,46 +71,30 @@ func (z *ZFS) CreateDisk(ctx context.Context, vm string, sizeGB int) (string, er
 // WaitDevice waits for udev to create /dev/zvol/... for the VM's disk, so
 // libvirt can open it, and returns that path.
 func (z *ZFS) WaitDevice(ctx context.Context, vm string) (string, error) {
-	dev := z.DevicePath(vm)
-	limit := z.Wait
-	if limit == 0 {
-		limit = 30 * time.Second
-	}
-	for deadline := time.Now().Add(limit); !z.exists(dev); {
-		if time.Now().After(deadline) || ctx.Err() != nil {
-			return "", fmt.Errorf("disk device %s did not appear (udev)", dev)
-		}
-		_, _ = z.Run.Run(ctx, "udevadm", "trigger", "--subsystem-match=block", "--action=add")
-		_, _ = z.Run.Run(ctx, "udevadm", "settle", "--timeout=5")
-		time.Sleep(300 * time.Millisecond)
-	}
-	return dev, nil
+	return z.waitPath(ctx, z.DevicePath(vm))
 }
 
 // DestroyDisk removes the VM's disk and its snapshots. Missing disks are not an error.
 // Right after a VM is powered off, QEMU or udev can still hold the device open for
 // a moment ("dataset is busy"), so that case is retried for a few seconds.
 func (z *ZFS) DestroyDisk(ctx context.Context, vm string) error {
-	pause := z.BusyRetry
-	if pause == 0 {
-		pause = time.Second
-	}
-	for attempt := 1; ; attempt++ {
-		_, err := z.Run.Run(ctx, "zfs", "destroy", "-r", z.diskDataset(vm))
-		var ee *execx.Error
-		if !errors.As(err, &ee) {
+	for _, i := range z.Extras(ctx, vm) { // data disks go with the VM
+		if err := z.DestroyExtra(ctx, vm, i); err != nil {
 			return err
 		}
-		if strings.Contains(ee.Stderr, "does not exist") {
-			return nil
-		}
-		if !strings.Contains(ee.Stderr, "busy") || attempt == 15 || ctx.Err() != nil {
-			return err
-		}
-		_, _ = z.Run.Run(ctx, "udevadm", "settle", "--timeout=5")
-		time.Sleep(pause)
 	}
+	return z.destroy(ctx, z.diskDataset(vm))
 }
+
+func errStderr(err error) string {
+	var ee *execx.Error
+	if errors.As(err, &ee) {
+		return ee.Stderr
+	}
+	return ""
+}
+
+func asExec(err error, ee **execx.Error) bool { return errors.As(err, ee) }
 
 // SnapshotExists checks that a template snapshot is present.
 func (z *ZFS) SnapshotExists(ctx context.Context, snapshot string) bool {
@@ -128,15 +112,7 @@ func (z *ZFS) ResizeDisk(ctx context.Context, vm string, sizeGB int) error {
 
 // DiskSizeGB reports the disk's current size (it changes on rollback).
 func (z *ZFS) DiskSizeGB(ctx context.Context, vm string) (int, error) {
-	out, err := z.Run.Run(ctx, "zfs", "get", "-H", "-p", "-o", "value", "volsize", z.diskDataset(vm))
-	if err != nil {
-		return 0, err
-	}
-	b, err := strconv.ParseInt(strings.TrimSpace(string(out)), 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("volsize %q: %w", out, err)
-	}
-	return int(b >> 30), nil
+	return z.volsizeGB(ctx, z.diskDataset(vm))
 }
 
 // Snapshot is a point-in-time copy of a VM's disk.
@@ -146,9 +122,14 @@ type Snapshot struct {
 	UsedBytes int64  `json:"used_bytes"` // space only this snapshot holds
 }
 
-// Snapshot takes a ZFS snapshot of the VM's disk (instant, copy-on-write).
+// Snapshot takes a ZFS snapshot of the VM's disks (instant, copy-on-write).
+// All disks are in one command, so ZFS takes them at the same moment.
 func (z *ZFS) Snapshot(ctx context.Context, vm, name string) error {
-	if _, err := z.Run.Run(ctx, "zfs", "snapshot", z.diskDataset(vm)+"@"+name); err != nil {
+	args := []string{"snapshot"}
+	for _, ds := range z.all(ctx, vm) {
+		args = append(args, ds+"@"+name)
+	}
+	if _, err := z.Run.Run(ctx, "zfs", args...); err != nil {
 		return fmt.Errorf("snapshot: %w", err)
 	}
 	return nil
@@ -200,6 +181,17 @@ func (z *ZFS) Rollback(ctx context.Context, vm, name string, destroyNewer bool) 
 	if _, err := z.Run.Run(ctx, "zfs", append(args, z.diskDataset(vm)+"@"+name)...); err != nil {
 		return fmt.Errorf("rollback: %w", err)
 	}
+	// data disks: those that existed at the snapshot have it too (one added
+	// later has not, and keeps its data)
+	for _, i := range z.Extras(ctx, vm) {
+		ds := z.extraDataset(vm, i)
+		if _, err := z.Run.Run(ctx, "zfs", "list", "-H", "-o", "name", "-t", "snapshot", ds+"@"+name); err != nil {
+			continue
+		}
+		if _, err := z.Run.Run(ctx, "zfs", append(args, ds+"@"+name)...); err != nil {
+			return fmt.Errorf("rollback disk %d: %w", i, err)
+		}
+	}
 	return nil
 }
 
@@ -207,6 +199,12 @@ func (z *ZFS) Rollback(ctx context.Context, vm, name string, destroyNewer bool) 
 func (z *ZFS) DestroySnapshot(ctx context.Context, vm, name string) error {
 	if _, err := z.Run.Run(ctx, "zfs", "destroy", z.diskDataset(vm)+"@"+name); err != nil {
 		return fmt.Errorf("delete snapshot: %w", err)
+	}
+	for _, i := range z.Extras(ctx, vm) {
+		if _, err := z.Run.Run(ctx, "zfs", "destroy", z.extraDataset(vm, i)+"@"+name); err != nil &&
+			!strings.Contains(errStderr(err), "does not exist") && !strings.Contains(errStderr(err), "could not find") {
+			return fmt.Errorf("delete snapshot of disk %d: %w", i, err)
+		}
 	}
 	return nil
 }

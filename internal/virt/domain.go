@@ -5,6 +5,8 @@ import (
 	"crypto/rand"
 	"encoding/xml"
 	"fmt"
+	"strconv"
+	"strings"
 )
 
 // MetaNS is the XML namespace for P8S metadata stored inside each domain, so
@@ -49,7 +51,20 @@ type Spec struct {
 	DiskBus  string
 	NICModel string
 	Firmware string
+	// Extra are data disks after the root disk (at most MaxExtraDisks).
+	Extra []ExtraDisk
 }
+
+// ExtraDisk is a data disk. Index 1-8 stays the same for the disk's life, so
+// it keeps its place (vdb, vdc, ...) inside the guest when others are removed.
+type ExtraDisk struct {
+	Index  int
+	Path   string // block device
+	SizeGB int
+}
+
+// MaxExtraDisks is how many data disks a VM can have next to its root disk.
+const MaxExtraDisks = 8
 
 var (
 	DiskBuses = map[string]bool{"virtio": true, "scsi": true, "sata": true}
@@ -160,15 +175,29 @@ type clockXML struct {
 }
 
 type metaXML struct {
-	DefVersion int    `xml:"def_version,omitempty"`
-	OSType     string `xml:"os_type,omitempty"`
-	Template   string `xml:"template"`
-	DiskGB     int    `xml:"disk_gb"`
-	CreatedAt  string `xml:"created_at"`
-	Owner      string `xml:"owner,omitempty"`
-	DiskBus    string `xml:"disk_bus,omitempty"`
-	NICModel   string `xml:"nic_model,omitempty"`
-	Firmware   string `xml:"firmware,omitempty"`
+	DefVersion int        `xml:"def_version,omitempty"`
+	OSType     string     `xml:"os_type,omitempty"`
+	Template   string     `xml:"template"`
+	DiskGB     int        `xml:"disk_gb"`
+	CreatedAt  string     `xml:"created_at"`
+	Owner      string     `xml:"owner,omitempty"`
+	DiskBus    string     `xml:"disk_bus,omitempty"`
+	NICModel   string     `xml:"nic_model,omitempty"`
+	Firmware   string     `xml:"firmware,omitempty"`
+	Disks      []metaDisk `xml:"disk,omitempty"`
+}
+
+type metaDisk struct {
+	Index  int `xml:"index,attr"`
+	SizeGB int `xml:"gb,attr"`
+}
+
+func metaDisks(ex []ExtraDisk) []metaDisk {
+	var out []metaDisk
+	for _, e := range ex {
+		out = append(out, metaDisk{e.Index, e.SizeGB})
+	}
+	return out
 }
 
 type controllerXML struct {
@@ -290,7 +319,7 @@ type ifaceXML struct {
 // domain in place (virsh metadata --live).
 func MetadataXML(s Spec) (string, error) {
 	m := metaXML{OSType: s.OSType, Template: s.Template, DiskGB: s.DiskGB, CreatedAt: s.CreatedAt, Owner: s.Owner,
-		DiskBus: s.DiskBus, NICModel: s.NICModel, Firmware: s.Firmware}
+		DiskBus: s.DiskBus, NICModel: s.NICModel, Firmware: s.Firmware, Disks: metaDisks(s.Extra)}
 	b, err := xml.Marshal(struct {
 		XMLName xml.Name `xml:"vm"`
 		metaXML
@@ -309,7 +338,7 @@ func DomainXML(s Spec) ([]byte, error) {
 	d.Name = s.Name
 	d.UUID = s.UUID
 	d.Metadata.VM = metaXML{DefVersion: DefVersion, OSType: s.OSType, Template: s.Template, DiskGB: s.DiskGB, CreatedAt: s.CreatedAt, Owner: s.Owner,
-		DiskBus: s.DiskBus, NICModel: s.NICModel, Firmware: s.Firmware}
+		DiskBus: s.DiskBus, NICModel: s.NICModel, Firmware: s.Firmware, Disks: metaDisks(s.Extra)}
 	win := s.OSType == "windows" || s.OSType == "windows11"
 	secure := s.OSType == "windows11"
 	uefi := secure || s.Firmware == "uefi"
@@ -398,6 +427,13 @@ func DomainXML(s Spec) ([]byte, error) {
 		root.Driver.IO, root.Driver.IOThread, root.Driver.Queues = "native", 1, queues
 	}
 	d.Devices.Disks = append(d.Devices.Disks, root)
+	for _, e := range s.Extra {
+		x, err := extraDisk(root, e)
+		if err != nil {
+			return nil, err
+		}
+		d.Devices.Disks = append(d.Devices.Disks, x)
+	}
 
 	if s.SeedISO != "" {
 		seed := diskXML{Type: "file", Device: "cdrom", ReadOnly: &struct{}{}}
@@ -486,6 +522,59 @@ func DomainXML(s Spec) ([]byte, error) {
 	return xml.MarshalIndent(d, "", "  ")
 }
 
+// extraDisk is a data disk with the root disk's driver settings on the same bus.
+// virtio: vdb..vdi; SATA / SCSI: sdf..sdm (sda-sde are the CDs and root disks).
+func extraDisk(root diskXML, e ExtraDisk) (diskXML, error) {
+	if e.Index < 1 || e.Index > MaxExtraDisks || e.Path == "" {
+		return diskXML{}, fmt.Errorf("extra disk %d: bad index or path", e.Index)
+	}
+	x := root
+	x.Source.Dev = e.Path
+	if root.Target.Bus == "virtio" {
+		x.Target.Dev = "vd" + string(rune('a'+e.Index))
+	} else {
+		x.Target.Dev = "sd" + string(rune('e'+e.Index))
+	}
+	return x, nil
+}
+
+// ExtraTarget is data disk i's device name inside the guest's view (vdb, sdf, ...).
+func ExtraTarget(s Spec, i int) string {
+	bus := s.DiskBus
+	if bus == "" && (s.OSType == "windows" || s.OSType == "windows11") {
+		bus = "sata"
+	}
+	if bus == "sata" || bus == "scsi" {
+		return "sd" + string(rune('e'+i))
+	}
+	return "vd" + string(rune('a'+i))
+}
+
+// HotPlug says whether disks can be added to the running VM (SATA can't).
+func HotPlug(s Spec) bool { return ExtraTarget(s, 1) == "vdb" || s.DiskBus == "scsi" }
+
+// ExtraDiskXML is the <disk> element of a data disk, for attaching it to a
+// running VM (virsh attach-device).
+func ExtraDiskXML(s Spec, e ExtraDisk) ([]byte, error) {
+	full, err := DomainXML(Spec{Name: s.Name, DiskPath: "/dev/null", Bridge: "x", MAC: "x", VCPUs: s.VCPUs,
+		OSType: s.OSType, DiskBus: s.DiskBus})
+	if err != nil {
+		return nil, err
+	}
+	var d domainXML
+	if err := xml.Unmarshal(full, &d); err != nil {
+		return nil, err
+	}
+	x, err := extraDisk(d.Devices.Disks[0], e)
+	if err != nil {
+		return nil, err
+	}
+	return xml.MarshalIndent(struct {
+		XMLName xml.Name `xml:"disk"`
+		diskXML
+	}{diskXML: x}, "", "  ")
+}
+
 // ParseDomainXML reads back a domain (e.g. from `virsh dumpxml`).
 func ParseDomainXML(b []byte) (Spec, error) {
 	var d domainXML
@@ -515,6 +604,14 @@ func ParseDomainXML(b []byte) (Spec, error) {
 		case "disk":
 			if s.DiskPath == "" {
 				s.DiskPath = disk.Source.Dev
+			} else if i := extraIndex(disk.Source.Dev); i > 0 {
+				e := ExtraDisk{Index: i, Path: disk.Source.Dev}
+				for _, m := range d.Metadata.VM.Disks {
+					if m.Index == i {
+						e.SizeGB = m.SizeGB
+					}
+				}
+				s.Extra = append(s.Extra, e)
 			}
 		case "cdrom":
 			if disk.Target.Dev == "sdb" {
@@ -531,6 +628,19 @@ func ParseDomainXML(b []byte) (Spec, error) {
 		s.Bridge = d.Devices.Interfaces[0].Source.Bridge
 	}
 	return s, nil
+}
+
+// extraIndex reads N from a data disk's device ".../<vm>-diskN" (0 = not one).
+func extraIndex(dev string) int {
+	j := strings.LastIndex(dev, "-disk")
+	if j < 0 {
+		return 0
+	}
+	n, err := strconv.Atoi(dev[j+5:])
+	if err != nil || n < 1 || n > MaxExtraDisks {
+		return 0
+	}
+	return n
 }
 
 func toMiB(v int, unit string) int {

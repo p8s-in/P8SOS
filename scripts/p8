@@ -37,6 +37,10 @@ p8 — manage P8S OS virtual machines
   p8 delete NAME                   remove VM and its disk (asks first; -y to skip)
   p8 resize NAME cpus=N ram=MB disk=GB
                                    change size (any of the three; disk only grows)
+  p8 disks NAME                    list a VM's extra disks
+  p8 disk-add NAME GB              give a VM another (empty) disk
+  p8 disk-grow NAME N GB           grow extra disk N (stops the VM, starts it again)
+  p8 disk-rm NAME N                remove extra disk N and everything on it
   p8 snap NAME [SNAPNAME]          take a snapshot of the VM's disk (instant)
   p8 snaps NAME                    list snapshots
   p8 rollback NAME SNAPNAME        undo everything since that snapshot (asks first)
@@ -293,6 +297,33 @@ case $cmd in
     body=$(call PATCH "/vms/$n" "$req") || { start_again "$n"; exit 1; }
     green "✔ $n is now $(jq -r '"\(.vcpus) CPU, \(.memory_mib) MB, \(.disk_gb) GB"' <<<"$body")"
     start_again "$n" ;;
+
+  disks)
+    need "${1:-}"; body=$(call GET "/vms/$1") || exit 1
+    echo "system disk: $(jq -r .disk_gb <<<"$body") GB"
+    [[ $(jq '.disks // [] | length' <<<"$body") == 0 ]] && { echo "No extra disks. Add one: p8 disk-add $1 50"; exit 0; }
+    printf '%-6s %-8s %s\n' DISK DEVICE SIZE
+    jq -r '.disks[] | "\(.index)\t\(.device)\t\(.size_gb) GB"' <<<"$body" | while IFS=$'\t' read -r i d g; do printf '%-6s %-8s %s\n' "$i" "$d" "$g"; done ;;
+
+  disk-add)
+    need "${1:-}"; [[ ${2:-} =~ ^[0-9]+$ ]] || { red "usage: p8 disk-add NAME GB"; exit 1; }
+    body=$(call POST "/vms/$1/disks" "{\"size_gb\":$2}") || exit 1
+    green "✔ disk added to $1"; echo "  $(jq -r .note <<<"$body")" ;;
+
+  disk-grow)
+    need "${1:-}"; [[ ${2:-} =~ ^[0-9]+$ && ${3:-} =~ ^[0-9]+$ ]] || { red "usage: p8 disk-grow NAME N GB"; exit 1; }
+    stop_for "$1" "grow disk $2"
+    body=$(call PATCH "/vms/$1/disks/$2" "{\"size_gb\":$3}") || { start_again "$1"; exit 1; }
+    green "✔ disk $2 of $1 is now $3 GB (grow its partition inside the VM)"
+    start_again "$1" ;;
+
+  disk-rm)
+    need "${1:-}"; [[ ${2:-} =~ ^[0-9]+$ ]] || { red "usage: p8 disk-rm NAME N"; exit 1; }
+    if [[ ${YES:-0} != 1 ]]; then read -r -p "Delete disk $2 of $1 and everything on it? [y/N] " a; [[ $a == [yY]* ]] || exit 0; fi
+    stop_for "$1" "remove disk $2"
+    call DELETE "/vms/$1/disks/$2" >/dev/null || { start_again "$1"; exit 1; }
+    green "✔ disk $2 of $1 removed"
+    start_again "$1" ;;
 
   snap|snapshot)
     need "${1:-}"

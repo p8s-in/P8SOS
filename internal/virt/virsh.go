@@ -64,6 +64,23 @@ type Virsh struct {
 	URI string // e.g. qemu:///system
 }
 
+// AttachDisk plugs a disk into a running domain (its saved definition is
+// updated separately with Define).
+func (v *Virsh) AttachDisk(ctx context.Context, name string, diskXML []byte) error {
+	f, err := os.CreateTemp("", "p8s-disk-*.xml")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	if _, err := f.Write(diskXML); err != nil {
+		f.Close()
+		return err
+	}
+	f.Close()
+	_, err = v.virsh(ctx, "attach-device", name, f.Name(), "--live")
+	return err
+}
+
 func (v *Virsh) virsh(ctx context.Context, args ...string) ([]byte, error) {
 	out, err := v.Run.Run(ctx, "virsh", append([]string{"-c", v.URI, "-q"}, args...)...)
 	var ee *execx.Error

@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"p8sos/internal/jobs"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -788,4 +789,54 @@ func (c *VMs) SetAutostart(ctx context.Context, name string, on bool) (vm.VM, er
 		}
 		return a.SetAutostart(ctx, name, on)
 	}, "PUT", vpath(name, "/autostart"), map[string]bool{"autostart": on})
+}
+
+// diskLocal is the data-disk part of the local VM service.
+type diskLocal interface {
+	AddDisk(ctx context.Context, name string, sizeGB int) (vm.VM, string, error)
+	ResizeDisk(ctx context.Context, name string, index, sizeGB int) (vm.VM, error)
+	RemoveDisk(ctx context.Context, name string, index int) (vm.VM, error)
+}
+
+var errNoDisks = fmt.Errorf("%w: extra disks aren't available on this server", vm.ErrInvalid)
+
+// AddDisk gives a VM another disk, on whichever server has it.
+func (c *VMs) AddDisk(ctx context.Context, name string, sizeGB int) (vm.VM, string, error) {
+	n, ok := c.locate(ctx, name)
+	if !ok {
+		d, ok := c.Local.(diskLocal)
+		if !ok {
+			return vm.VM{}, "", errNoDisks
+		}
+		v, note, err := d.AddDisk(ctx, name, sizeGB)
+		return c.selfTag(v), note, err
+	}
+	var out struct {
+		vm.VM
+		Note string `json:"note"`
+	}
+	if err := c.call(ctx, n, "POST", vpath(name, "/disks"), map[string]int{"size_gb": sizeGB}, &out); err != nil {
+		return vm.VM{}, "", err
+	}
+	return c.tag(out.VM, n), out.Note, nil
+}
+
+func (c *VMs) ResizeDisk(ctx context.Context, name string, index, sizeGB int) (vm.VM, error) {
+	return c.remoteVM(ctx, name, func() (vm.VM, error) {
+		d, ok := c.Local.(diskLocal)
+		if !ok {
+			return vm.VM{}, errNoDisks
+		}
+		return d.ResizeDisk(ctx, name, index, sizeGB)
+	}, "PATCH", vpath(name, "/disks/", strconv.Itoa(index)), map[string]int{"size_gb": sizeGB})
+}
+
+func (c *VMs) RemoveDisk(ctx context.Context, name string, index int) (vm.VM, error) {
+	return c.remoteVM(ctx, name, func() (vm.VM, error) {
+		d, ok := c.Local.(diskLocal)
+		if !ok {
+			return vm.VM{}, errNoDisks
+		}
+		return d.RemoveDisk(ctx, name, index)
+	}, "DELETE", vpath(name, "/disks/", strconv.Itoa(index)), nil)
 }

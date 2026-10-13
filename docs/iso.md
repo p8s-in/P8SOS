@@ -82,6 +82,8 @@ Ethernet cable in, then `sudo p8 lan-setup` once, then `p8 create web2 --lan` (o
 p8 snap web1 before-upgrade        # instant copy of the disk
 p8 rollback web1 before-upgrade    # undo everything since (asks first)
 p8 resize web1 cpus=4 ram=4096 disk=40
+p8 disk-add web1 100               # a second (empty) disk for data: vdb in the VM
+p8 disk-grow web1 1 200            # grow it later
 ```
 In the dashboard: **Manage** on a VM. Resizing and rolling back need the VM stopped;
 `p8` stops and restarts it for you after asking.

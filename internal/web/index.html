@@ -329,6 +329,12 @@ dialog.as-page #mClose,dialog.as-page #cmClose{display:none}
   </div>
   <div class="hint">Disks can only grow. The VM's filesystem grows to the new size when it boots.</div>
   <div class="inline"><span class="spacer"></span><button class="btn primary" id="mRzGo">Apply</button></div>
+  <h3>Extra disks</h3>
+  <div class="sub" id="mDkSub"></div>
+  <table class="snaps"><tbody id="mDisks"></tbody></table>
+  <div class="inline"><input id="mDkSize" type="number" min="1" value="50" style="flex:0 0 100px" aria-label="New disk size (GB)"><span class="sub">GB</span>
+    <span class="spacer"></span><button class="btn" id="mDkAdd">Add disk</button></div>
+  <div class="hint">A new disk is empty: partition and format it inside the VM (Linux: <span class="mono">lsblk</span>, Windows: Disk Management). Snapshots and backups include all disks.</div>
   </div>
 
   <div data-tab="network">
@@ -978,7 +984,7 @@ function renderVMs(){
       <td data-k="State"><span class="state ${esc(v.state)}"><span class="dot"></span>${b ? "working…" : esc(v.state)}</span></td>
       <td data-k="Name"><b>${esc(v.name)}</b><div class="sub">${esc(templates.find(t => t.name === v.template)?.label || v.template.replace(/^iso:/, "from "))}${v.os_type === "windows11" ? " · Windows (UEFI, TPM)" : v.os_type === "windows" ? " · Windows" : ""}${v.network === "lan" ? (v.vlan ? " · VLAN " + v.vlan : " · home network") : ""}${v.public ? " · public IP" : ""}${v.iso ? " · CD in drive" : ""}${v.node_id && v.node_id !== "n1" ? " · on " + esc(v.node) : ""}${isAdmin() && v.owner ? ` · <b>${esc(v.owner)}</b>` : ""}</div></td>
       <td data-k="IP">${ip}${sshLine(v.name, v.user)}</td>
-      <td data-k="CPU">${v.vcpus}</td><td data-k="RAM">${ramCell(v.mem_used_mib, v.memory_mib)}</td><td data-k="Disk">${v.disk_gb} GB</td>
+      <td data-k="CPU">${v.vcpus}</td><td data-k="RAM">${ramCell(v.mem_used_mib, v.memory_mib)}</td><td data-k="Disk">${v.disk_gb}${(v.disks || []).length ? " + " + v.disks.reduce((n, d) => n + d.size_gb, 0) : ""} GB</td>
       <td data-k="Autostart">${v.autostart ? "yes" : "no"}</td>
       <td><div class="actions">${main}<button class="btn" data-a="manage" ${dis} title="Settings, snapshots, backups, firewall">Manage</button>${more}</div></td></tr>`;
   }).join("");
@@ -1259,11 +1265,12 @@ function renderManage(){
   const v = vms.find(x => x.name === mName);
   if (!v) { $("#dlgManage").close(); return; }
   const stopped = v.state === "stopped";
-  $("#mSub").textContent = `${v.state} · ${v.vcpus} CPU · ${gb(v.memory_mib)} RAM · ${v.disk_gb} GB disk`;
+  $("#mSub").textContent = `${v.state} · ${v.vcpus} CPU · ${gb(v.memory_mib)} RAM · ${v.disk_gb} GB disk` + ((v.disks || []).length ? ` + ${v.disks.length} extra` : "");
   if ($("#mRzHint").dataset.st !== v.state + mName) $("#mRzHint").innerHTML = stopped ? "Change CPUs, memory or disk size. Takes effect when you start the VM."
     : `Stop the VM first to resize it. <button class="btn" data-m="stop">Stop ${esc(v.name)}</button>`;
   $("#mRzHint").dataset.st = v.state + mName;
   $("#mPwGo").disabled = !(v.state === "running");
+  if (typeof renderDisks === "function") renderDisks(v);
   $("#mPubBox").hidden = !v.public;
   if (v.public) {
     const p = v.public;
@@ -1621,7 +1628,7 @@ function backupRow(b, opts){
   const restore = opts.restore === "hide" ? "" :
     `<button class="btn" data-b="restore" ${opts.restore === "off" ? 'disabled title="Stop the VM first"' : ""}>${opts.restoreLabel || "Restore"}</button>`;
   return `<tr data-vm="${esc(b.vm)}" data-id="${esc(b.id)}">
-    <td><b>${esc(fmtTime(b.created_at))}</b><div class="sub">${opts.showVM ? esc(b.vm) + " · " : ""}${fmtBytes(b.bytes || 0)} · ${b.consistent ? "clean" : "crash-consistent"} · ${b.vcpus} CPU, ${gb(b.memory_mib)}</div>
+    <td><b>${esc(fmtTime(b.created_at))}</b><div class="sub">${opts.showVM ? esc(b.vm) + " · " : ""}${fmtBytes((b.bytes || 0) + (b.extra_disks || []).reduce((n, d) => n + (d.bytes || 0), 0))}${(b.extra_disks || []).length ? ` · ${1 + b.extra_disks.length} disks` : ""} · ${b.consistent ? "clean" : "crash-consistent"} · ${b.vcpus} CPU, ${gb(b.memory_mib)}</div>
       <div class="inline" data-copyrow hidden><input data-copyname placeholder="name of the new VM" autocomplete="off"><button class="btn primary" data-b="copygo">Create copy</button></div></td>
     <td>${restore}<button class="btn" data-b="copy" title="Make a new VM from this backup">Copy</button><button class="btn danger" data-b="del">Delete</button></td></tr>`;
 }
@@ -2018,5 +2025,6 @@ document.addEventListener("DOMContentLoaded", render); // after cloud.js has loa
 <script src="/ha.js"></script>
 <script src="/security.js"></script>
 <script src="/remote.js"></script>
+<script src="/disks.js"></script>
 </body>
 </html>

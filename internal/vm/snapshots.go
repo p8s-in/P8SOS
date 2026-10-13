@@ -145,7 +145,20 @@ func (s *Service) Rollback(ctx context.Context, name, snap string, destroyNewer 
 	}
 	// The disk size comes back with the snapshot; keep the VM's record in step.
 	if gb, err := sd.DiskSizeGB(ctx, dom); err == nil {
-		if err := s.redefine(ctx, dom, func(sp *virt.Spec) { sp.DiskGB = gb }); err != nil {
+		es, _ := s.Disks.(interface {
+			ExtraSizeGB(ctx context.Context, vm string, i int) (int, error)
+		})
+		if err := s.redefine(ctx, dom, func(sp *virt.Spec) {
+			sp.DiskGB = gb
+			for i, e := range sp.Extra {
+				if es == nil {
+					break
+				}
+				if g, err := es.ExtraSizeGB(ctx, dom, e.Index); err == nil {
+					sp.Extra[i].SizeGB = g
+				}
+			}
+		}); err != nil {
 			return VM{}, err
 		}
 	}

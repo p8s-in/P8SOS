@@ -88,6 +88,9 @@ func (s *Service) HACheck(ctx context.Context, name string) (string, error) {
 	if v.Public != nil {
 		return "it has a public IP from this server's pool (it can't follow the VM to another server)", nil
 	}
+	if len(v.Disks) > 0 {
+		return "it has extra disks; high availability copies only VMs with one disk for now", nil
+	}
 	return "", nil
 }
 

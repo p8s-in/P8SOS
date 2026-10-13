@@ -1,6 +1,7 @@
 package virt
 
 import (
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -32,7 +33,7 @@ func TestDomainXMLRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out != in {
+	if !reflect.DeepEqual(out, in) {
 		t.Fatalf("round trip mismatch\n in=%+v\nout=%+v", in, out)
 	}
 }
@@ -104,7 +105,7 @@ func TestDomainXMLInstallISO(t *testing.T) {
 			}
 		}
 		out, err := ParseDomainXML(b)
-		if err != nil || out != in {
+		if err != nil || !reflect.DeepEqual(out, in) {
 			t.Fatalf("%s round trip\n in=%+v\nout=%+v (%v)", os, in, out, err)
 		}
 	}
@@ -220,5 +221,35 @@ func TestImportOverrides(t *testing.T) {
 	x, _ = DomainXML(s)
 	if !strings.Contains(string(x), `bus="sata"`) || strings.Contains(string(x), "iothread=") {
 		t.Fatalf("linux sata:\n%s", x)
+	}
+}
+
+func TestExtraDisks(t *testing.T) {
+	for _, c := range []struct{ bus, os, want1, want3 string }{
+		{"", "", "vdb", "vdd"}, {"", "windows", "sdf", "sdh"}, {"scsi", "", "sdf", "sdh"},
+	} {
+		s := Spec{Name: "p8s-a", DiskPath: "/dev/zvol/t/p8s-a-disk0", Bridge: "virbr0", MAC: "52:54:00:00:00:01",
+			VCPUs: 2, MemoryMiB: 1024, DiskBus: c.bus, OSType: c.os,
+			Extra: []ExtraDisk{{1, "/dev/zvol/t/p8s-a-disk1", 50}, {3, "/dev/zvol/t/p8s-a-disk3", 200}}}
+		b, err := DomainXML(s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		x := string(b)
+		if !strings.Contains(x, `<target dev="`+c.want1+`"`) || !strings.Contains(x, `<target dev="`+c.want3+`"`) {
+			t.Fatalf("%s/%s: targets missing\n%s", c.bus, c.os, x)
+		}
+		back, err := ParseDomainXML(b)
+		if err != nil || back.DiskPath != s.DiskPath || len(back.Extra) != 2 || back.Extra[1] != s.Extra[1] || back.Extra[0] != s.Extra[0] {
+			t.Fatalf("round trip %v %+v", err, back.Extra)
+		}
+		one, err := ExtraDiskXML(s, s.Extra[0])
+		if err != nil || !strings.HasPrefix(string(one), "<disk ") || !strings.Contains(string(one), "p8s-a-disk1") ||
+			!strings.Contains(string(one), c.want1) {
+			t.Fatalf("attach xml %v\n%s", err, one)
+		}
+	}
+	if _, err := DomainXML(Spec{Name: "a", DiskPath: "/d", Bridge: "b", MAC: "m", Extra: []ExtraDisk{{9, "/x", 1}}}); err == nil {
+		t.Fatal("index 9 must be refused")
 	}
 }

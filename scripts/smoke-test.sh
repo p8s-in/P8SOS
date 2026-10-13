@@ -269,6 +269,23 @@ else
 fi
 api DELETE "/vms/$NAME/snapshots/nope"; expect "delete missing snapshot" 404
 
+step "6b2. extra disks"
+api POST "/vms/$NAME/disks" '{"size_gb":1}'; expect "add a 1 GB disk" 201
+[[ $(jq -r '.disks[0].device // empty' <<<"$BODY") =~ ^(vdb|sdf)$ ]] && ok "disk 1 is $(jq -r '.disks[0].device' <<<"$BODY")" || bad "disks: $BODY"
+sudo zfs list -H "$DATASET/$DOM-disk1" >/dev/null 2>&1 && ok "zfs: $DOM-disk1 exists" || bad "zfs: $DOM-disk1 missing"
+sudo virsh dumpxml --inactive "$DOM" 2>/dev/null | grep -q "$DOM-disk1" && ok "libvirt: disk 1 in the VM's settings" || bad "libvirt: disk 1 not in the VM's settings"
+api POST "/vms/$NAME/disks" '{"size_gb":0}'; expect "disk of 0 GB is refused" 400
+api POST "/vms/$NAME/snapshots" '{"name":"smoke3"}'; expect "snapshot with two disks" 201
+sudo zfs list -H -t snapshot "$DATASET/$DOM-disk1@smoke3" >/dev/null 2>&1 && ok "zfs: the snapshot covers disk 1" || bad "zfs: disk1@smoke3 missing"
+api DELETE "/vms/$NAME/snapshots/smoke3"; expect "delete that snapshot" 204
+sudo zfs list -H -t snapshot "$DATASET/$DOM-disk1@smoke3" >/dev/null 2>&1 && bad "zfs: disk1@smoke3 left behind" || ok "zfs: snapshot gone from disk 1 too"
+api POST "/vms/$NAME/stop" '{"force":true}'; wait_state stopped "$STOP_TIMEOUT" >/dev/null
+api PATCH "/vms/$NAME/disks/1" '{"size_gb":2}'; expect "grow disk 1" 200
+vs=$(sudo zfs get -H -o value volsize "$DATASET/$DOM-disk1" 2>/dev/null)
+[[ $vs == 2G ]] && ok "zfs: disk 1 grew to 2G" || bad "zfs: disk 1 volsize $vs, want 2G"
+api PATCH "/vms/$NAME/disks/1" '{"size_gb":1}'; expect "shrink disk 1 is refused" 400
+api PATCH "/vms/$NAME/disks/5" '{"size_gb":9}'; expect "missing disk" 404
+
 step "6c. backup and restore"
 # wait_job ID TIMEOUT -> sets JOB (final job JSON)
 wait_job() {
@@ -286,6 +303,7 @@ jid=$(jq -r .id <<<"$BODY")
 api POST "/vms/$NAME/backups"; [[ $CODE == 409 || $CODE == 202 ]] && ok "second backup while one runs -> $CODE" || bad "second backup -> $CODE"
 if wait_job "$jid" "$BACKUP_TIMEOUT" && [[ $(jq -r .state <<<"$JOB") == done ]]; then
   ok "backup finished: $(jq -r .message <<<"$JOB")"
+  [[ $(jq -r .message <<<"$JOB") == *"2 disks"* ]] && ok "backup has both disks" || bad "backup should have 2 disks: $(jq -r .message <<<"$JOB")"
 else
   bad "backup job: $JOB"
 fi
@@ -304,6 +322,8 @@ if [[ -n $bid ]]; then
   fi
   api GET "/vms/$COPY"
   [[ $(jq -r .state <<<"$BODY") == running ]] && ok "restored copy $COPY is running" || bad "copy: $BODY"
+  [[ $(jq -r '.disks[0].size_gb // 0' <<<"$BODY") == 2 ]] && ok "copy has the 2 GB extra disk" || bad "copy disks: $(jq -c .disks <<<"$BODY")"
+  sudo zfs list -H "$DATASET/p8s-$COPY-disk1" >/dev/null 2>&1 && ok "zfs: copy's disk 1 exists" || bad "zfs: p8s-$COPY-disk1 missing"
   if [[ ${MARKER:-0} == 1 ]]; then
     cip=""
     for ((i = 0; i < IP_TIMEOUT; i += 5)); do api GET "/vms/$COPY"; cip=$(jq -r '.ip // empty' <<<"$BODY"); [[ -n $cip ]] && break; sleep 5; done
@@ -315,6 +335,7 @@ if [[ -n $bid ]]; then
     [[ $(tail -1 <<<"$m") == "$COPY" ]] && ok "copy got its own hostname ($COPY)" || bad "copy hostname: '$(tail -1 <<<"$m")'"
   fi
   api DELETE "/vms/$COPY"; expect "delete restored copy" 204
+  sudo zfs list -H "$DATASET/p8s-$COPY-disk1" >/dev/null 2>&1 && bad "zfs: copy's disk 1 left behind" || ok "zfs: copy's disk 1 deleted with it"
   api DELETE "/backups/$NAME/$bid"; expect "delete backup" 204
   api DELETE "/backups/$NAME/$bid"; expect "delete backup again" 404
 fi
@@ -441,6 +462,7 @@ else
   api GET "/vms/$NAME";    expect "get after delete" 404
   sudo virsh -q domstate "$DOM" >/dev/null 2>&1 && bad "libvirt domain still defined" || ok "libvirt domain gone"
   sudo zfs list -H "$DATASET/$DOM-disk0" >/dev/null 2>&1 && bad "zfs disk still exists" || ok "zfs disk destroyed"
+  sudo zfs list -H "$DATASET/$DOM-disk1" >/dev/null 2>&1 && bad "zfs extra disk still exists" || ok "zfs extra disk destroyed"
   sudo test -f "$SEED_DIR/$DOM-seed.iso" && bad "seed ISO still exists" || ok "seed ISO removed"
   sudo zfs list -H "${origin%@*}" >/dev/null 2>&1 && ok "template survived" || bad "template dataset missing!"
 fi

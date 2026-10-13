@@ -157,6 +157,8 @@ func (s *Service) MoveCheck(ctx context.Context, name string) (string, error) {
 		return "it has a public IP from this server's pool; release it first", nil
 	case v.ISO != "" || v.Drivers != "":
 		return "eject its CDs first (Manage → Installer CD)", nil
+	case len(v.Disks) > 0:
+		return "it has extra disks; moving those isn't supported yet (back it up and restore it on the other server instead)", nil
 	}
 	return "", nil
 }

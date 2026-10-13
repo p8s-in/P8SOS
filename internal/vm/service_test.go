@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -36,7 +37,10 @@ func (h *fakeHV) Define(_ context.Context, x []byte) error {
 	if err != nil {
 		return err
 	}
-	h.doms[s.Name], h.state[s.Name] = x, virt.Stopped
+	if _, ok := h.doms[s.Name]; !ok { // redefining keeps a running domain running (like libvirt)
+		h.state[s.Name] = virt.Stopped
+	}
+	h.doms[s.Name] = x
 	return nil
 }
 func (h *fakeHV) set(n string, st virt.State) error {
@@ -154,6 +158,32 @@ type fakeDisks struct {
 	live  map[string]bool
 	snaps map[string][]Snapshot // vm -> oldest first
 	size  map[string]int
+	extra map[string]map[int]int // vm -> data disk -> GB
+}
+
+func (d *fakeDisks) CreateExtra(_ context.Context, vm string, i, gb int) (string, error) {
+	if d.extra == nil {
+		d.extra = map[string]map[int]int{}
+	}
+	if d.extra[vm] == nil {
+		d.extra[vm] = map[int]int{}
+	}
+	if _, ok := d.extra[vm][i]; ok {
+		return "", errors.New("zfs create: dataset already exists")
+	}
+	d.extra[vm][i] = gb
+	return fmt.Sprintf("/dev/zvol/tank/vms/%s-disk%d", vm, i), nil
+}
+func (d *fakeDisks) DestroyExtra(_ context.Context, vm string, i int) error {
+	delete(d.extra[vm], i)
+	return nil
+}
+func (d *fakeDisks) ResizeExtra(_ context.Context, vm string, i, gb int) error {
+	d.extra[vm][i] = gb
+	return nil
+}
+func (d *fakeDisks) ExtraSizeGB(_ context.Context, vm string, i int) (int, error) {
+	return d.extra[vm][i], nil
 }
 
 func (d *fakeDisks) Snapshot(_ context.Context, vm, name string) error {
@@ -216,6 +246,7 @@ func (d *fakeDisks) CloneDisk(_ context.Context, _, vm string, sizeGB int) (stri
 }
 func (d *fakeDisks) DestroyDisk(_ context.Context, vm string) error {
 	delete(d.live, vm)
+	delete(d.extra, vm)
 	delete(d.snaps, vm)
 	return nil
 }

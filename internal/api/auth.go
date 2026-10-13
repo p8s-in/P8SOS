@@ -210,7 +210,7 @@ func usageOf(vms []vm.VM, owner string) Usage {
 			u.VMs++
 			u.VCPUs += v.VCPUs
 			u.MemoryMiB += v.MemoryMiB
-			u.DiskGB += v.DiskGB
+			u.DiskGB += v.DiskGB + v.ExtraGB()
 			if v.Public != nil {
 				u.PublicIPs++
 			}

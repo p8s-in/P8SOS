@@ -88,7 +88,11 @@ type Remote struct {
 	Local     bool   `json:"local"` // also on this server
 	data      string
 	meta      string
+	extra     []string // data disks' files
 }
+
+// prefix is the folder of a remote backup's files.
+func (r Remote) prefix(root string) string { return join(root, r.Kind, r.Guest) }
 
 var (
 	ErrInvalid = errors.New("invalid")
@@ -469,32 +473,25 @@ func (m *Manager) note(name string, f func(s *Status)) {
 	_ = m.save()
 }
 
-// upload copies one local backup to t (skipped when already there).
+// upload copies one local backup to t (skipped when already there). The
+// description goes last: a copy without it is incomplete and is ignored.
 func (m *Manager) upload(ctx context.Context, t Target, b Backend, prefix, kind string, bm backup.Meta, have map[string]bool) (int64, error) {
-	data, meta := m.store(kind).Files(bm)
+	st := m.store(kind)
+	data, meta := st.Files(bm)
 	base := bm.VM + "-" + bm.ID
 	metaKey := join(prefix, kind, bm.VM, base+".json")
 	if have[metaKey] {
 		return 0, nil
 	}
-	dataKey := join(prefix, kind, bm.VM, filepath.Base(data))
-	f, err := os.Open(data)
-	if err != nil {
-		return 0, err
-	}
-	defer f.Close()
-	cr := &countReader{r: f}
-	var r io.Reader = cr
-	if t.Passphrase != "" {
-		dataKey += encExt
-		if r, err = Encrypt(cr, t.Passphrase); err != nil {
-			return 0, err
-		}
-	}
 	m.note(t.Name, func(s *Status) { s.Running = kind + " " + bm.VM + " " + bm.ID })
 	defer m.note(t.Name, func(s *Status) { s.Running = "" })
-	if err := b.Put(ctx, dataKey, r); err != nil {
-		return 0, err
+	total := int64(0)
+	for _, file := range append(st.ExtraFiles(bm), data) {
+		n, err := m.put(ctx, t, b, join(prefix, kind, bm.VM, filepath.Base(file)), file)
+		if err != nil {
+			return 0, err
+		}
+		total += n
 	}
 	mb, err := os.ReadFile(meta)
 	if err != nil {
@@ -503,7 +500,58 @@ func (m *Manager) upload(ctx context.Context, t Target, b Backend, prefix, kind 
 	if err := b.Put(ctx, metaKey, bytes.NewReader(mb)); err != nil {
 		return 0, err
 	}
+	return total, nil
+}
+
+// put uploads one file (encrypted when the target has a passphrase).
+func (m *Manager) put(ctx context.Context, t Target, b Backend, key, file string) (int64, error) {
+	f, err := os.Open(file)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+	cr := &countReader{r: f}
+	var r io.Reader = cr
+	if t.Passphrase != "" {
+		key += encExt
+		if r, err = Encrypt(cr, t.Passphrase); err != nil {
+			return 0, err
+		}
+	}
+	if err := b.Put(ctx, key, r); err != nil {
+		return 0, err
+	}
 	return cr.n, nil
+}
+
+// get downloads one object to file (via .partial), decrypting it when needed.
+func (m *Manager) get(ctx context.Context, b Backend, key string, encrypted bool, pass, file string) error {
+	tmp := file + ".partial"
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	if encrypted {
+		pr, pw := io.Pipe()
+		go func() { pw.CloseWithError(b.Get(ctx, key, pw)) }()
+		err = Decrypt(f, pr, pass)
+		pr.CloseWithError(err)
+	} else {
+		err = b.Get(ctx, key, f)
+	}
+	if err == nil {
+		err = f.Sync()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp, file)
+	}
+	if err != nil {
+		os.Remove(tmp)
+	}
+	return err
 }
 
 type countReader struct {
@@ -551,6 +599,14 @@ func (m *Manager) remote(ctx context.Context, b Backend, prefix string) ([]Remot
 		if r.data == "" {
 			continue // metadata without data: an interrupted copy
 		}
+		dp := join(prefix, parts[0], guest, guest+"-"+id+"-d")
+		for k, o := range files {
+			if strings.HasPrefix(k, dp) {
+				r.extra = append(r.extra, k)
+				r.Bytes += o.Size
+			}
+		}
+		sort.Strings(r.extra)
 		out = append(out, r)
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -581,6 +637,11 @@ func (m *Manager) prune(ctx context.Context, t Target, b Backend, prefix string)
 		}
 		if err := b.Delete(ctx, r.data); err != nil {
 			return n, err
+		}
+		for _, k := range r.extra {
+			if err := b.Delete(ctx, k); err != nil {
+				return n, err
+			}
 		}
 		n++
 	}
@@ -812,37 +873,33 @@ func (m *Manager) StartFetch(name, kind, guest, id string) (jobs.Job, error) {
 		if err := os.MkdirAll(filepath.Dir(data), 0o700); err != nil {
 			return "", err
 		}
-		tmp := data + ".partial"
-		f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
-		if err != nil {
-			return "", err
-		}
 		p("downloading")
-		if r.Encrypted {
-			pr, pw := io.Pipe()
-			go func() { pw.CloseWithError(b.Get(ctx, r.data, pw)) }()
-			err = Decrypt(f, pr, t.Passphrase)
-			pr.CloseWithError(err)
-		} else {
-			err = b.Get(ctx, r.data, f)
+		st := m.store(kind)
+		var done []string
+		undo := func() {
+			for _, f := range done {
+				os.Remove(f)
+			}
 		}
-		if err == nil {
-			err = f.Sync()
+		for _, e := range bm.Extra {
+			file := st.ExtraFile(bm, e.Index)
+			key := join(r.prefix(prefix), filepath.Base(file))
+			if r.Encrypted {
+				key += encExt
+			}
+			if err := m.get(ctx, b, key, r.Encrypted, t.Passphrase, file); err != nil {
+				undo()
+				return "", fmt.Errorf("disk %d: %w", e.Index, err)
+			}
+			done = append(done, file)
 		}
-		if cerr := f.Close(); err == nil {
-			err = cerr
-		}
-		if err != nil {
-			os.Remove(tmp)
+		if err := m.get(ctx, b, r.data, r.Encrypted, t.Passphrase, data); err != nil {
+			undo()
 			return "", err
 		}
+		done = append(done, data)
 		if err := os.WriteFile(metaPath, meta.Bytes(), 0o600); err != nil {
-			os.Remove(tmp)
-			return "", err
-		}
-		if err := os.Rename(tmp, data); err != nil {
-			os.Remove(tmp)
-			os.Remove(metaPath)
+			undo()
 			return "", err
 		}
 		what := "VM"

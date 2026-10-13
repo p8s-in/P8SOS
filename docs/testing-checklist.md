@@ -142,6 +142,17 @@ hardware**. Work through it on the new machine; tick each line and note problems
 - [ ] With IPv6 from the ISP: Turn on IPv6 for the private network → in a NAT VM `ip -6 addr` has fdXX:…, `ping -6 google.com` works
 - [ ] `p8 ipv6 off` → back to IPv4 only, VMs stay connected
 
+## 14. Extra disks
+
+- [ ] `p8 test` section 6b2 passes, and 6c says "backup has both disks"
+- [ ] Linux VM running: Manage → Resources → Add disk 20 GB → `lsblk` in the VM shows vdb at once; `mkfs.ext4 /dev/vdb`, mount, write a file
+- [ ] Windows VM (SATA): Add disk while running → note says it appears after a shut down and start; it does, Disk Management sees it
+- [ ] Snapshot, delete the file on vdb, roll back: the file is back on vdb too
+- [ ] Backup with two disks, restore as a copy: the copy has both disks and the file
+- [ ] Grow disk 1 (VM stopped) → `growpart`/`resize2fs` inside sees the new size; shrinking is refused
+- [ ] Remove disk 1 (two clicks) → gone in the VM, `zfs list` has no …-disk1
+- [ ] HA on a VM with an extra disk is refused with a clear message; Move too
+
 ## Add new features here as they are built
 
 (Every new feature adds its own lines above before it counts as done.)

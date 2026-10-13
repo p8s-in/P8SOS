@@ -128,6 +128,8 @@ type VM struct {
 	Owner      string `json:"owner,omitempty"` // P8S user it belongs to; empty = admins only
 	// Public is the VM's address from an IP pool (network "public").
 	Public *ippool.Lease `json:"public,omitempty"`
+	// Disks are the data disks next to the root disk (DiskGB).
+	Disks []Disk `json:"disks,omitempty"`
 }
 
 type CreateRequest struct {
@@ -473,6 +475,9 @@ func (s *Service) get(ctx context.Context, dom string) (VM, error) {
 		v.Drivers = filepath.Base(spec.DriversISO)
 	}
 	v.OSType = spec.OSType
+	for _, e := range spec.Extra {
+		v.Disks = append(v.Disks, Disk{Index: e.Index, SizeGB: e.SizeGB, Device: virt.ExtraTarget(spec, e.Index)})
+	}
 	// Best effort: these must never make GET/list fail.
 	v.Autostart, _ = s.HV.Autostart(ctx, dom)
 	if st == virt.Running {

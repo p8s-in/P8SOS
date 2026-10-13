@@ -102,7 +102,8 @@ func TestSnapshots(t *testing.T) {
 	}
 	var got []string
 	for _, c := range r.Calls[2:] {
-		if !strings.HasPrefix(c, "zfs list -H -t snapshot -o name ") { // replica snapshots looked up before a rollback
+		if !strings.HasPrefix(c, "zfs list -H -t snapshot -o name ") && // replica snapshots looked up before a rollback
+			!strings.HasPrefix(c, "zfs list -H -o name -t volume") { // data disks
 			got = append(got, c)
 		}
 	}
@@ -140,5 +141,39 @@ func TestDestroyDiskRetriesWhileBusy(t *testing.T) {
 	z.Run = r
 	if err := z.DestroyDisk(context.Background(), "p8s-a1"); err == nil || !strings.Contains(err.Error(), "busy") {
 		t.Fatalf("should give up eventually: %v", err)
+	}
+}
+
+func TestExtraDisks(t *testing.T) {
+	r := &testfake.Runner{Out: map[string]string{
+		"zfs list -H -o name -t volume -d 1 tank/vms": "tank/vms/p8s-a1-disk0\ntank/vms/p8s-a1-disk2\ntank/vms/p8s-a1-disk1\n" +
+			"tank/vms/p8s-a1-disk1-disk0\ntank/vms/p8s-a1-disk01\ntank/vms/p8s-b-disk1\n",
+	}, Fail: map[string]string{"zfs list -H -o name -t snapshot tank/vms/p8s-a1-disk2@s1": "does not exist"}}
+	z := &ZFS{Run: r, Dataset: "tank/vms", Exists: func(string) bool { return true }}
+	ctx := context.Background()
+	if got := z.Extras(ctx, "p8s-a1"); len(got) != 2 || got[0] != 1 || got[1] != 2 {
+		t.Fatalf("extras %v", got)
+	}
+	if dev, err := z.CreateExtra(ctx, "p8s-a1", 3, 50); err != nil || dev != "/dev/zvol/tank/vms/p8s-a1-disk3" {
+		t.Fatalf("create %q %v", dev, err)
+	}
+	r.Calls = nil
+	_ = z.Snapshot(ctx, "p8s-a1", "s1")
+	_ = z.Rollback(ctx, "p8s-a1", "s1", false)
+	_ = z.DestroyDisk(ctx, "p8s-a1")
+	all := strings.Join(r.Calls, "\n") + "\n"
+	for _, w := range []string{
+		"zfs snapshot tank/vms/p8s-a1-disk0@s1 tank/vms/p8s-a1-disk1@s1 tank/vms/p8s-a1-disk2@s1",
+		"zfs rollback tank/vms/p8s-a1-disk1@s1",
+		"zfs destroy -r tank/vms/p8s-a1-disk1",
+		"zfs destroy -r tank/vms/p8s-a1-disk2",
+		"zfs destroy -r tank/vms/p8s-a1-disk0",
+	} {
+		if !strings.Contains(all, w+"\n") {
+			t.Errorf("missing %q in\n%s", w, all)
+		}
+	}
+	if strings.Contains(all, "rollback tank/vms/p8s-a1-disk2@s1") {
+		t.Error("disk 2 has no such snapshot; it must be left alone")
 	}
 }

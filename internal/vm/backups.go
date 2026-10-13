@@ -88,6 +88,11 @@ func (s *Service) runBackup(ctx context.Context, name string, keep int, p jobs.P
 		unlock()
 		return "", err
 	}
+	sp, err := s.spec(ctx, dom)
+	if err != nil {
+		unlock()
+		return "", err
+	}
 	consistent := v.State == virt.Stopped
 	if v.State == virt.Running {
 		consistent = s.HV.FSFreeze(ctx, dom) == nil // thawed right after the snapshot below
@@ -107,11 +112,15 @@ func (s *Service) runBackup(ctx context.Context, name string, keep int, p jobs.P
 		ID: id, VM: name, Template: v.Template, User: v.User, Network: v.Network, VLAN: v.VLAN, OSType: v.OSType,
 		VCPUs: v.VCPUs, MemoryMiB: v.MemoryMiB, DiskGB: v.DiskGB, Consistent: consistent, Owner: v.Owner,
 		Pool: poolOf(v), PublicIP: publicIPOf(v),
+		DiskBus: sp.DiskBus, NICModel: sp.NICModel, Firmware: sp.Firmware, Extra: backupExtras(sp),
 	})
 	if err != nil {
 		return "", err
 	}
-	msg := fmt.Sprintf("backup %s of %s saved (%s)", m.ID, name, humanBytes(m.Bytes))
+	msg := fmt.Sprintf("backup %s of %s saved (%s)", m.ID, name, humanBytes(m.TotalBytes()))
+	if len(m.Extra) > 0 {
+		msg = fmt.Sprintf("backup %s of %s saved: %d disks, %s", m.ID, name, 1+len(m.Extra), humanBytes(m.TotalBytes()))
+	}
 	if keep > 0 {
 		if n, err := s.Backups.Prune(name, keep); err != nil {
 			s.logErr("prune backups", err)
@@ -123,6 +132,36 @@ func (s *Service) runBackup(ctx context.Context, name string, keep int, p jobs.P
 		s.AfterBackup("vm", name, m.ID)
 	}
 	return msg, nil
+}
+
+func backupExtras(sp virt.Spec) []backup.ExtraDisk {
+	var l []backup.ExtraDisk
+	for _, e := range sp.Extra {
+		l = append(l, backup.ExtraDisk{Index: e.Index, SizeGB: e.SizeGB})
+	}
+	return l
+}
+
+type extraWaiter interface {
+	WaitExtra(ctx context.Context, vm string, i int) (string, error)
+}
+
+// restoredExtras are the data disks of a backup once received for dom.
+func (s *Service) restoredExtras(ctx context.Context, dom string, m Backup) ([]virt.ExtraDisk, error) {
+	var l []virt.ExtraDisk
+	for _, e := range m.Extra {
+		x := virt.ExtraDisk{Index: e.Index, SizeGB: e.SizeGB,
+			Path: fmt.Sprintf("/dev/zvol/%s/%s-disk%d", s.Backups.Dataset, dom, e.Index)}
+		if w, ok := s.Disks.(extraWaiter); ok {
+			d, err := w.WaitExtra(ctx, dom, e.Index)
+			if err != nil {
+				return nil, err
+			}
+			x.Path = d
+		}
+		l = append(l, x)
+	}
+	return l, nil
 }
 
 func humanBytes(b int64) string {
@@ -221,12 +260,39 @@ func (s *Service) restoreInPlace(ctx context.Context, name string, m Backup, p j
 			return "", err
 		}
 	}
-	if sd, err := s.snapDisks(); err == nil {
-		if gb, err := sd.DiskSizeGB(ctx, dom); err == nil {
-			s.logErr("record disk size", s.redefine(ctx, dom, func(sp *virt.Spec) { sp.DiskGB = gb }))
-		}
+	extra, err := s.restoredExtras(ctx, dom, m)
+	if err != nil {
+		return "", err
 	}
-	return fmt.Sprintf("%s is back at backup %s (snapshots taken after it are gone)", name, m.ID), nil
+	kept := []string{}
+	err = s.redefine(ctx, dom, func(sp *virt.Spec) {
+		if sd, err := s.snapDisks(); err == nil {
+			if gb, err := sd.DiskSizeGB(ctx, dom); err == nil {
+				sp.DiskGB = gb
+			}
+		}
+		// the backup's data disks; ones added after it stay as they are
+		for _, e := range sp.Extra {
+			found := false
+			for _, x := range extra {
+				found = found || x.Index == e.Index
+			}
+			if !found {
+				extra = append(extra, e)
+				kept = append(kept, fmt.Sprint(e.Index))
+			}
+		}
+		sort.Slice(extra, func(i, j int) bool { return extra[i].Index < extra[j].Index })
+		sp.Extra = extra
+	})
+	if err != nil {
+		return "", err
+	}
+	msg := fmt.Sprintf("%s is back at backup %s (snapshots taken after it are gone)", name, m.ID)
+	if len(kept) > 0 {
+		msg += fmt.Sprintf("; disk %s is newer than the backup and was left as it is", strings.Join(kept, ", "))
+	}
+	return msg, nil
 }
 
 func (s *Service) restoreAsNew(ctx context.Context, name string, m Backup, p jobs.Progress) (string, error) {
@@ -255,6 +321,18 @@ func (s *Service) restoreAsNew(ctx context.Context, name string, m Backup, p job
 			return fail(err)
 		}
 		disk = d
+	}
+	for _, e := range m.Extra {
+		i := e.Index
+		undo = append(undo, func() {
+			if ed, ok := s.Disks.(extraDisks); ok {
+				s.logErr("rollback restored disk", ed.DestroyExtra(bg, dom, i))
+			}
+		})
+	}
+	extra, err := s.restoredExtras(ctx, dom, m)
+	if err != nil {
+		return fail(err)
 	}
 	diskGB := m.DiskGB
 	if sd, err := s.snapDisks(); err == nil {
@@ -297,6 +375,7 @@ func (s *Service) restoreAsNew(ctx context.Context, name string, m Backup, p job
 		Name: dom, UUID: uuid, VCPUs: max(m.VCPUs, 1), MemoryMiB: max(m.MemoryMiB, 256), DiskGB: diskGB,
 		DiskPath: disk, SeedISO: seed, Bridge: bridge, MAC: mac,
 		Template: m.Template, OSType: m.OSType, CreatedAt: time.Now().UTC().Format(time.RFC3339), Owner: m.Owner,
+		DiskBus: m.DiskBus, NICModel: m.NICModel, Firmware: m.Firmware, Extra: extra,
 	}
 	x, err := virt.DomainXML(spec)
 	if err != nil {
