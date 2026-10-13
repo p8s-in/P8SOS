@@ -32,6 +32,8 @@ type principal struct {
 	ViaToken bool   // a personal API token (scripts): no account changes
 	Cluster  bool   // the cluster master acting on this server (users live on the master)
 	Role     string // users.Admin, Operator, Auditor or Customer (API tokens: admin)
+	HasTOTP  bool   // two-factor sign-in is on
+	ExtMFA   bool   // signs in with the company login (its 2FA is the provider's)
 }
 
 type ctxKey struct{}
@@ -51,7 +53,8 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 			if s.Sessions != nil && s.Users != nil {
 				if name, found := s.Sessions.User(tok); found {
 					if u, err := s.Users.Get(name); err == nil && !u.Disabled {
-						p = principal{Name: u.Name, Admin: users.Staff(u.Role), Role: u.Role, Quota: u.Quota, Session: tok, User: true}
+						p = principal{Name: u.Name, Admin: users.Staff(u.Role), Role: u.Role, Quota: u.Quota, Session: tok, User: true,
+							HasTOTP: u.TOTPSecret != "", ExtMFA: u.SSO != "" && !strings.HasPrefix(u.SSO, "ldap|")}
 					}
 				}
 			}
@@ -289,6 +292,10 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		s.audit(r, name, http.StatusTooManyRequests, "sign-in blocked")
 		return
 	}
+	if s.useDirectory(name) {
+		s.ldapLogin(w, r, name, body.Password, body.OTP, keys)
+		return
+	}
 	u, err := s.Users.Authenticate(name, body.Password, body.OTP)
 	switch {
 	case errors.Is(err, users.ErrOTPRequired):
@@ -335,7 +342,7 @@ func (s *Server) authInfo(w http.ResponseWriter, r *http.Request) {
 	if s.Users != nil {
 		n = s.Users.Count()
 	}
-	out := map[string]any{"accounts": s.Users != nil && s.Sessions != nil && n > 0, "brand": "P8S OS"}
+	out := map[string]any{"accounts": s.Users != nil && s.Sessions != nil && n > 0 || s.LDAP != nil && s.LDAP.On(), "brand": "P8S OS"}
 	if s.SSO != nil {
 		if on, name := s.SSO.On(); on {
 			out["sso"] = name
@@ -368,6 +375,7 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 	}
 	out["ssh_keys"] = []string{}
 	out["via_token"] = p.ViaToken
+	out["need_2fa"] = s.need2FA(p)
 	if p.User {
 		if u, err := s.Users.Get(p.Name); err == nil {
 			out["email"], out["verified"], out["full_name"], out["phone"] = u.Email, u.Verified, u.FullName, u.Phone

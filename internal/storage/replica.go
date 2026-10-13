@@ -186,3 +186,41 @@ func (z *ZFS) dropRepSnaps(ctx context.Context, vm string) {
 func (z *ZFS) DiskRepSnaps(ctx context.Context, vm string) ([]string, error) {
 	return z.repSnaps(ctx, z.diskDataset(vm))
 }
+
+// Encryption is how the VM storage is encrypted at rest.
+type Encryption struct {
+	On        bool   `json:"on"`
+	Algorithm string `json:"algorithm,omitempty"` // aes-256-gcm
+	Root      string `json:"root,omitempty"`      // dataset that holds the key
+	KeyStatus string `json:"key_status,omitempty"`
+	KeyFile   string `json:"key_file,omitempty"`
+}
+
+// Encryption reads the encryption of the VM disks' dataset.
+func (z *ZFS) Encryption(ctx context.Context) (Encryption, error) {
+	out, err := z.Run.Run(ctx, "zfs", "get", "-H", "-o", "property,value", "encryption,encryptionroot,keystatus,keylocation", z.Dataset)
+	if err != nil {
+		return Encryption{}, err
+	}
+	e := Encryption{}
+	for _, l := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		k, v, _ := strings.Cut(l, "\t")
+		switch k {
+		case "encryption":
+			e.Algorithm, e.On = v, v != "off" && v != "-" && v != ""
+		case "encryptionroot":
+			e.Root = v
+		case "keystatus":
+			e.KeyStatus = v
+		}
+	}
+	if e.On && e.Root != "" && e.Root != "-" {
+		if b, err := z.Run.Run(ctx, "zfs", "get", "-H", "-o", "value", "keylocation", e.Root); err == nil {
+			e.KeyFile = strings.TrimPrefix(strings.TrimSpace(string(b)), "file://")
+		}
+	}
+	if !e.On {
+		e.Algorithm, e.Root = "", ""
+	}
+	return e, nil
+}

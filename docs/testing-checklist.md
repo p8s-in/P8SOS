@@ -115,6 +115,11 @@ hardware**. Work through it on the new machine; tick each line and note problems
 - [ ] Activity → Download CSV for a date range opens in Excel
 - [ ] `journalctl --disk-usage` grows over days; logs survive a reboot
 - [ ] `timedatectl` shows NTP synced; Health & alerts has "Clock (NTP)"
+- [ ] Company directory against a real AD / OpenLDAP / FreeIPA (a Samba AD VM is fine): Test ✔, a directory user signs in, role from the group, wrong password refused
+- [ ] Security → allowed networks = your LAN only: the dashboard from a phone on mobile data gets "may not use this server"; empty the list again
+- [ ] Password policy 12 + letters/digits: "password1234" and "abcdefghijkl" refused
+- [ ] Two-factor for staff on: an operator without 2FA lands in My account and can't do anything else until it is set up
+- [ ] Fresh install with "encrypted VM storage" (boot menu): `zfs get encryption tank/p8s` = aes-256-gcm; VMs work after a reboot (key loaded); Server → Storage → Show the key
 
 ## Add new features here as they are built
 

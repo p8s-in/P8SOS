@@ -27,11 +27,14 @@ import (
 	"p8sos/internal/ct"
 	"p8sos/internal/firewall"
 	"p8sos/internal/ippool"
+	"p8sos/internal/ldap"
 	"p8sos/internal/license"
 	"p8sos/internal/mail"
 	"p8sos/internal/metrics"
 	"p8sos/internal/offsite"
+	"p8sos/internal/secpol"
 	"p8sos/internal/sso"
+	"p8sos/internal/storage"
 	"p8sos/internal/support"
 	"p8sos/internal/tasks"
 	"p8sos/internal/tunnel"
@@ -142,6 +145,12 @@ type Server struct {
 	LocalHA cluster.LocalHA
 	// SSO is the company login (OpenID Connect); nil = off.
 	SSO *sso.Manager
+	// LDAP is sign-in with the company directory (Active Directory, OpenLDAP); nil = off.
+	LDAP *ldap.Manager
+	// Encryption reports the VM storage's encryption at rest (storage.ZFS); nil = unknown.
+	Encryption func(ctx context.Context) (storage.Encryption, error)
+	// Security: allowed networks, password policy, 2FA for staff; nil = defaults.
+	Security *secpol.Store
 	// Monitor watches the server's health and sends alerts; nil = off.
 	Monitor *monitor.Monitor
 	// Imports brings VMs in from Proxmox backups / disk images; nil = off.
@@ -297,6 +306,13 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("DELETE /api/v1/sites/{host}", s.deleteSite)
 	auth.HandleFunc("GET /api/v1/vms/{name}/firewall", s.getFirewall)
 	auth.HandleFunc("PUT /api/v1/vms/{name}/firewall", s.putFirewall)
+	auth.HandleFunc("GET /api/v1/node/encryption", s.getEncryption)
+	auth.HandleFunc("POST /api/v1/node/encryption-key", s.encryptionKey)
+	auth.HandleFunc("GET /api/v1/security", s.getSecurity)
+	auth.HandleFunc("PUT /api/v1/security", s.putSecurity)
+	auth.HandleFunc("GET /api/v1/ldap", s.getLDAP)
+	auth.HandleFunc("PUT /api/v1/ldap", s.putLDAP)
+	auth.HandleFunc("POST /api/v1/ldap/test", s.testLDAP)
 	auth.HandleFunc("GET /api/v1/sso", s.getSSO)
 	auth.HandleFunc("PUT /api/v1/sso", s.putSSO)
 	auth.HandleFunc("GET /api/v1/audit", s.auditLog)
@@ -367,7 +383,7 @@ func (s *Server) Handler() http.Handler {
 		mux.Handle("/", s.UI) // the page itself is public; every API call it makes needs the token
 	}
 
-	return s.logRequests(mux)
+	return s.logRequests(s.ipAllow(mux))
 }
 
 // --- handlers ---

@@ -3,6 +3,7 @@
 #
 #   sudo bash install.sh /dev/sdb     # use an empty disk for VM storage (it gets WIPED)
 #   sudo bash install.sh              # no spare disk: 64 GB test pool in a file
+#   sudo bash install.sh --encrypt /dev/sdb   # VM storage encrypted at rest (new pools only)
 #
 # Safe to run again: finished steps are skipped, your token and config are kept.
 # Options (env): BRIDGE=vmbr0 to put VMs on your LAN instead of libvirt NAT (default virbr0)
@@ -11,6 +12,7 @@ set -euo pipefail
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH  # admin tools even under plain "su"
 
 REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+if [[ ${1:-} == --encrypt ]]; then export P8S_ENCRYPT=1; shift; fi
 DEV=${1:-}
 BRIDGE=${BRIDGE:-virbr0}
 POOL=${POOL:-tank}

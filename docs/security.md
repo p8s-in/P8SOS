@@ -1,4 +1,4 @@
-# Security: roles, company login, activity log
+# Security: roles, sign-in, encryption, activity log
 
 ## Roles
 
@@ -36,6 +36,58 @@ signature (provider keys), issuer, audience and expiry are checked; a
 sign-in must finish within 10 minutes. Sign-ins and refusals are in the
 Activity log. Two-factor is then the provider's job.
 
+## Company directory (LDAP / Active Directory)
+
+Settings → **Company directory**. People sign in on the normal sign-in page
+with their directory user name (Windows name, uid, user@domain or email) and
+password. P8S OS binds with a service account, finds the person, checks the
+password by binding as them, and maps their groups (memberOf, or a group
+filter for OpenLDAP without memberOf) to a role. Groups can be written as the
+full DN or just the CN ("P8S Admins").
+
+- Only `ldaps://` or `ldap://` + StartTLS: passwords never cross the network in the clear.
+- An empty password is always refused (it would be an anonymous bind).
+- Local accounts (made in Users) keep signing in locally; the directory is
+  asked only for names without a local account or accounts the directory made.
+  So keep local names different from directory names.
+- Two-factor for directory accounts is set up in P8S (My account).
+- **Test** checks the address, certificate, service account and base DN.
+- If the directory is down, directory people get "can't be reached" and local
+  admins can still sign in — keep one local admin.
+
+## Who may connect, passwords, two-factor
+
+Settings → **Security**:
+
+- **Who may open this dashboard:** addresses or networks (CIDR). Everything else
+  gets "403" before sign-in. The server itself (SSH tunnel) and the cluster
+  tunnel are always allowed; so are joining servers, the payment webhook and
+  `/api/v1/health`. A list without your own address is refused. Locked out:
+  `sudo rm /var/lib/p8s/security.json && sudo systemctl restart p8sd`.
+- **Passwords:** shortest length (10-64), letters + digits, and the most
+  common passwords are refused. Applies to new passwords.
+- **Two-factor for staff:** admins, operators and auditors without 2FA can only
+  set it up (and change their password) until they do. API tokens and
+  company-login accounts are not affected.
+
+## Encryption at rest
+
+Chosen at install: boot menu **"Install P8S OS, encrypted VM storage"**, or
+`sudo bash install.sh --encrypt /dev/sdX`. Everything under `tank/p8s` (VM
+disks, containers, templates) is ZFS AES-256-GCM. The key is a file on the
+system disk (`/etc/p8s/keys/p8s.key`), unlocked at boot by
+`p8s-zfs-keys.service`.
+
+- Protects VM data on **disks that leave the server** (stolen, returned for
+  warranty, sold). With the file pool on the system disk it protects little.
+- **Back up the key**: Server → Storage → **Show the key…** (asks for your
+  password; only admins; logged). Without the key, the VM disks can't be read
+  — for example if the system disk dies.
+- Backups written to the backup folder are not encrypted (ZFS decrypts when it
+  copies); turn on encryption for off-site copies.
+- An existing server can't be switched on in place: reinstall, or move its VMs
+  to a new encrypted server (cluster → Move).
+
 ## Activity log (audit)
 
 - Every change and sign-in, with user and IP. Kept **180 days** by default
@@ -54,4 +106,8 @@ Activity log. Two-factor is then the provider's job.
 | GET | `/api/v1/audit/export?from=YYYY-MM-DD&to=YYYY-MM-DD` | CSV (staff) |
 | GET | `/api/v1/audit/verify` | `{"ok","entries","oldest","problem"}` |
 | GET / PUT | `/api/v1/sso` | company login settings (secret never shown; empty keeps it) |
+| GET / PUT | `/api/v1/ldap` · POST `/api/v1/ldap/test` | company directory settings / try them |
+| GET / PUT | `/api/v1/security` | `{"allow_nets":[], "staff_2fa":bool, "password":{"min_length":10,"mix":bool}}` + `your_ip` |
+| GET | `/api/v1/node/encryption` | `{"on","algorithm","root","key_status","key_file"}` |
+| POST | `/api/v1/node/encryption-key` | `{"password"}` (or `{"otp"}`) → `{"key_hex","restore"}` (admins) |
 | GET | `/api/v1/sso/start` · `/api/v1/sso/callback` | the browser flow (no login) |

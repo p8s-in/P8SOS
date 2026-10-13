@@ -45,11 +45,13 @@ import (
 	"p8sos/internal/ippool"
 	"p8sos/internal/isos"
 	"p8sos/internal/jobs"
+	"p8sos/internal/ldap"
 	"p8sos/internal/license"
 	"p8sos/internal/mail"
 	"p8sos/internal/metrics"
 	"p8sos/internal/offsite"
 	"p8sos/internal/portfwd"
+	"p8sos/internal/secpol"
 	"p8sos/internal/sso"
 	"p8sos/internal/storage"
 	"p8sos/internal/support"
@@ -473,6 +475,10 @@ func serve(args []string) error {
 		Notify: func(sev, title, detail string) { mon.Notice("ha", sev, title, detail) }}
 	apiSrv.HA, apiSrv.LocalHA = ha, svc                                              // high availability
 	apiSrv.SSO = &sso.Manager{Dir: cfg.DataDir, HTTP: netx.Client(15 * time.Second)} // company login
+	apiSrv.LDAP = &ldap.Manager{Dir: cfg.DataDir}                                    // company directory (AD / LDAP)
+	apiSrv.Security = &secpol.Store{Dir: cfg.DataDir}                                // allowed networks, password policy, staff 2FA
+	apiSrv.Security.Load()
+	apiSrv.Encryption = disks.Encryption // encryption at rest (Server page → Storage)
 	go ha.Loop(ctx, 15*time.Second)
 	if cfg.HostShellOn() {
 		apiSrv.HostShell = ct.HostShell // Server → Shell (admins), like Proxmox

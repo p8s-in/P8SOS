@@ -49,7 +49,7 @@ var (
 		"POST /updates/check", "POST /updates/install", "PUT /updates/channel",
 		"PUT /alerts/settings", "PUT /ha/settings",
 		"PUT /offsite/targets/[^/]+", "DELETE /offsite/targets/[^/]+",
-		"PUT /sso", "PUT /audit/settings",
+		"PUT /sso", "PUT /audit/settings", "PUT /security", "PUT /ldap", "POST /ldap/test",
 		// server-to-server calls of the cluster (the master's token is an admin)
 		"* /cluster/(vm-export|replica|replica-send)/.+", "* /cluster/(vm-import|replica-recv|ha-sync)",
 	)
@@ -76,6 +76,10 @@ func matches(rs []rule, r *http.Request) bool {
 func (s *Server) roleGuard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := who(r)
+		if s.need2FA(p) && !matches(setup2FAPaths, r) {
+			writeErr(w, http.StatusForbidden, "2fa_required", "turn on two-factor sign-in first (your name, top right): this server requires it for staff")
+			return
+		}
 		switch p.Role {
 		case users.Operator:
 			if matches(operatorDeny, r) {

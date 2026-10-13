@@ -65,3 +65,19 @@ func TestReplicaCommands(t *testing.T) {
 		t.Fatalf("retire %v", r.Calls)
 	}
 }
+
+func TestEncryption(t *testing.T) {
+	r := &testfake.Runner{Out: map[string]string{
+		"zfs get -H -o property,value encryption,encryptionroot,keystatus,keylocation tank/p8s/vms": "encryption\taes-256-gcm\nencryptionroot\ttank/p8s\nkeystatus\tavailable\nkeylocation\tnone\n",
+		"zfs get -H -o value keylocation tank/p8s":                                                  "file:///etc/p8s/keys/p8s.key\n",
+	}}
+	z := &ZFS{Run: r, Dataset: "tank/p8s/vms"}
+	e, err := z.Encryption(context.Background())
+	if err != nil || !e.On || e.Root != "tank/p8s" || e.KeyFile != "/etc/p8s/keys/p8s.key" || e.KeyStatus != "available" {
+		t.Fatalf("%+v %v", e, err)
+	}
+	r.Out["zfs get -H -o property,value encryption,encryptionroot,keystatus,keylocation tank/p8s/vms"] = "encryption\toff\nencryptionroot\t-\nkeystatus\t-\n"
+	if e, _ := z.Encryption(context.Background()); e.On || e.Root != "" {
+		t.Fatalf("%+v", e)
+	}
+}

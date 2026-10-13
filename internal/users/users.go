@@ -129,10 +129,65 @@ var reName = regexp.MustCompile(`^[a-z][a-z0-9._-]{1,31}$`)
 // ValidName reports whether s can be a user name.
 func ValidName(s string) bool { return reName.MatchString(s) && !strings.HasPrefix(s, "token") }
 
+// Policy is the password policy (Settings → Security). Set it with SetPolicy.
+type Policy struct {
+	MinLength int  `json:"min_length"` // 10..64
+	Mix       bool `json:"mix"`        // letters and digits (or symbols) both
+}
+
+var (
+	polMu  sync.RWMutex
+	policy = Policy{MinLength: 10}
+)
+
+// SetPolicy changes the password policy for new passwords.
+func SetPolicy(p Policy) {
+	if p.MinLength < 10 {
+		p.MinLength = 10
+	}
+	if p.MinLength > 64 {
+		p.MinLength = 64
+	}
+	polMu.Lock()
+	policy = p
+	polMu.Unlock()
+}
+
+// CurrentPolicy returns the password policy.
+func CurrentPolicy() Policy {
+	polMu.RLock()
+	defer polMu.RUnlock()
+	return policy
+}
+
+// common passwords that pass the length rule but are guessed first
+var common = map[string]bool{"1234567890": true, "12345678910": true, "123456789012": true, "qwertyuiop": true, "password12": true,
+	"password123": true, "password1234": true, "passwordpassword": true, "administrator": true, "adminadmin": true,
+	"admin12345": true, "admin@1234": true, "admin@123": true, "welcome123": true, "welcome@123": true, "iloveyou12": true,
+	"qwerty12345": true, "1q2w3e4r5t": true, "abcdefghij": true, "abcd@12345": true, "india@1234": true, "p@ssw0rd123": true,
+	"changeme123": true, "letmein1234": true, "proxmox123": true, "p8s@123456": true, "0987654321": true, "1111111111": true}
+
 // CheckPassword enforces the password rules.
 func CheckPassword(pw string) error {
-	if len(pw) < 10 || len(pw) > 128 {
-		return fmt.Errorf("%w: password must be 10-128 characters", ErrInvalid)
+	p := CurrentPolicy()
+	if len(pw) < p.MinLength || len(pw) > 128 {
+		return fmt.Errorf("%w: password must be %d-128 characters", ErrInvalid, p.MinLength)
+	}
+	if common[strings.ToLower(pw)] {
+		return fmt.Errorf("%w: that password is too common; pick another", ErrInvalid)
+	}
+	if p.Mix {
+		var letter, other bool
+		for _, r := range pw {
+			if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' {
+				letter = true
+			} else {
+				other = true
+			}
+		}
+		if !letter || !other {
+			return fmt.Errorf("%w: the password needs letters and digits or symbols", ErrInvalid)
+		}
 	}
 	return nil
 }
@@ -387,6 +442,22 @@ func (s *Store) Authenticate(name, password, otp string) (Public, error) {
 		return Public{}, err
 	}
 	return c.Public(), nil
+}
+
+// CheckOTP is the second step after a sign-in checked elsewhere (directory):
+// nil when the user has no 2FA or the code is right.
+func (s *Store) CheckOTP(name, otp string) error {
+	u, err := s.Get(name)
+	if err != nil {
+		return err
+	}
+	if u.TOTPSecret == "" {
+		return nil
+	}
+	if strings.TrimSpace(otp) == "" {
+		return ErrOTPRequired
+	}
+	return s.useCode(name, func(u *User) string { return u.TOTPSecret }, otp)
 }
 
 // useCode checks a TOTP code against the secret picked by sel and records its

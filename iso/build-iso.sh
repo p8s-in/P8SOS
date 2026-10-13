@@ -71,11 +71,14 @@ default p8s
 prompt 1
 timeout 50
 say
-say   P8S OS alpha installer  -  starting in 5 seconds (type 'debian' for the plain Debian installer)
+say   P8S OS alpha installer  -  starting in 5 seconds (type 'p8senc' for encrypted VM storage, 'debian' for plain Debian)
 say
 label p8s
   kernel /install.amd/vmlinuz
   append vga=788 initrd=/install.amd/initrd.gz $KARGS --- quiet
+label p8senc
+  kernel /install.amd/vmlinuz
+  append vga=788 initrd=/install.amd/initrd.gz $KARGS p8s.encrypt=1 --- quiet
 label debian
   kernel /install.amd/vmlinuz
   append vga=788 initrd=/install.amd/initrd.gz --- quiet
@@ -88,6 +91,10 @@ set default=0
 set timeout=5
 menuentry 'Install P8S OS (alpha)' {
     linux  /install.amd/vmlinuz $KARGS --- quiet
+    initrd /install.amd/initrd.gz
+}
+menuentry 'Install P8S OS (alpha), encrypted VM storage' {
+    linux  /install.amd/vmlinuz $KARGS p8s.encrypt=1 --- quiet
     initrd /install.amd/initrd.gz
 }
 EOF

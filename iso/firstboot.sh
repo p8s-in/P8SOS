@@ -36,7 +36,9 @@ else
 fi
 
 # 4. Install everything
-if SUDO_USER=$USER_NAME P8S_YES=1 bash /opt/p8sos/install.sh $DEV; then
+ENC=""
+[[ -f /etc/p8s/encrypt-storage ]] && { ENC=--encrypt; say "VM storage will be encrypted (key in /etc/p8s/keys — back it up!)"; }
+if SUDO_USER=$USER_NAME P8S_YES=1 bash /opt/p8sos/install.sh $ENC $DEV; then
   touch /var/lib/p8s/.firstboot-done
   systemctl disable p8s-firstboot.service >/dev/null 2>&1
   cat > /etc/issue <<EOF

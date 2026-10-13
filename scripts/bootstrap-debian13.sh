@@ -60,9 +60,38 @@ if ! zpool list -H "$POOL" >/dev/null 2>&1; then
     zpool create -o ashift=12 -O compression=lz4 -O atime=off "$POOL" /var/lib/p8s/"$POOL".img
   fi
 fi
+install -d -m 0750 /etc/p8s
+if [[ ${P8S_ENCRYPT:-0} == 1 ]] && ! zfs list -H "$POOL/p8s" >/dev/null 2>&1; then
+  # Encryption at rest: everything under $POOL/p8s (VM disks, containers,
+  # templates) is AES-256-GCM. The key is on the system disk, so the VM disks
+  # alone (stolen, sent back for warranty, sold) can't be read. BACK UP THE KEY:
+  # Server page → Storage → Download the key. Without it the data is gone.
+  echo "==> encrypting VM storage (key: /etc/p8s/keys/p8s.key)"
+  install -d -m 0700 /etc/p8s/keys
+  [[ -s /etc/p8s/keys/p8s.key ]] || { head -c 32 /dev/urandom >/etc/p8s/keys/p8s.key; chmod 0400 /etc/p8s/keys/p8s.key; }
+  zfs create -o encryption=aes-256-gcm -o keyformat=raw -o keylocation=file:///etc/p8s/keys/p8s.key "$POOL/p8s"
+fi
 zfs create -p "$POOL/p8s/vms"
 zfs create -p "$POOL/p8s/templates"
-install -d -m 0750 /etc/p8s
+if [[ $(zfs get -H -o value encryption "$POOL/p8s" 2>/dev/null) != off ]]; then
+  # load the key at boot before the VM disks are needed
+  cat >/etc/systemd/system/p8s-zfs-keys.service <<UNIT
+[Unit]
+Description=P8S OS: unlock encrypted VM storage
+DefaultDependencies=no
+After=zfs-import.target
+Before=zfs-mount.service zfs-volumes.target libvirtd.service p8sd.service
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'zfs get -H -o value keystatus $POOL/p8s | grep -q available || zfs load-key $POOL/p8s'
+ExecStartPost=-/bin/sh -c 'zfs mount -a; udevadm trigger --subsystem-match=block --action=add'
+[Install]
+WantedBy=zfs.target
+UNIT
+  systemctl daemon-reload
+  systemctl enable p8s-zfs-keys.service >/dev/null 2>&1 || true
+fi
 install -d -m 0755 /var/lib/p8s /var/lib/p8s/seeds   # QEMU must be able to read seed ISOs
 
 if [[ ${P8S_BRIDGE:-vmbr0} != virbr0 ]] && ! ip link show vmbr0 >/dev/null 2>&1; then

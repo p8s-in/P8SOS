@@ -35,6 +35,8 @@ var (
 	clusterJS []byte
 	//go:embed ha.js
 	haJS []byte
+	//go:embed security.js
+	securityJS []byte
 	//go:embed terminal.html
 	terminalPage []byte
 	//go:embed xterm.min.js
@@ -66,6 +68,7 @@ var assets = map[string]asset{
 	"/imports.js":        {importsJS, "text/javascript; charset=utf-8", "no-cache"},
 	"/cluster.js":        {clusterJS, "text/javascript; charset=utf-8", "no-cache"},
 	"/ha.js":             {haJS, "text/javascript; charset=utf-8", "no-cache"},
+	"/security.js":       {securityJS, "text/javascript; charset=utf-8", "no-cache"},
 	"/terminal":          {terminalPage, "text/html; charset=utf-8", "no-cache"},
 	"/xterm.min.js":      {xtermJS, "text/javascript; charset=utf-8", "public, max-age=86400"},
 	"/xterm-fit.min.js":  {xtermFitJS, "text/javascript; charset=utf-8", "public, max-age=86400"},

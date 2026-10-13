@@ -610,7 +610,10 @@ async function call(method, path, body){
   }
   if (r.status === 204) return null;
   const data = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(data?.error?.message || ("HTTP " + r.status));
+  if (!r.ok) {
+    if (data?.error?.code === "2fa_required" && !window._asked2fa && typeof check2FA === "function") { window._asked2fa = true; me = {...(me || {}), need_2fa: true}; check2FA(); }
+    throw new Error(data?.error?.message || ("HTTP " + r.status));
+  }
   return data;
 }
 
@@ -916,6 +919,7 @@ function renderHost(){
     $("#bSettings").hidden = !isFullAdmin();
     document.body.classList.toggle("ro", isAuditor());
     if (isAuditor()) $("#bNew").hidden = $("#bNewCT").hidden = true; // read-only
+    if (me.need_2fa && !window._asked2fa && typeof check2FA === "function") { window._asked2fa = true; check2FA(); }
     if (isAdmin() && !licLoaded) { licLoaded = true; licenseShell(); nodeShell(); }
     $("#bNodeLabel").hidden = isAdmin();
     sideGroups();
@@ -2008,5 +2012,6 @@ document.addEventListener("DOMContentLoaded", render); // after cloud.js has loa
 <script src="/imports.js"></script>
 <script src="/cluster.js"></script>
 <script src="/ha.js"></script>
+<script src="/security.js"></script>
 </body>
 </html>
