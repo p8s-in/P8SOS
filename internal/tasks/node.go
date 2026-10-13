@@ -23,6 +23,29 @@ type Node struct {
 	// CTTemplates lists installed container templates; nil = containers off.
 	CTTemplates func() []string
 	LAN         func() bool // home-network bridge is up
+	LANBridge   string      // e.g. br0
+	SysNet      string      // /sys/class/net (tests)
+	ProcBonding string      // /proc/net/bonding (tests)
+}
+
+// Port is a physical network port.
+type Port struct {
+	Name    string `json:"name"`
+	Carrier bool   `json:"carrier"`          // cable plugged in, link up
+	Speed   int    `json:"speed,omitempty"`  // Mbit/s
+	In      string `json:"in,omitempty"`     // bridge or bond it is part of
+	Active  bool   `json:"active,omitempty"` // bond: carries the traffic now
+	Wifi    bool   `json:"wifi,omitempty"`
+}
+
+// Network is the Server page's network part.
+type Network struct {
+	Bridge   string `json:"bridge,omitempty"`    // home-network bridge
+	Uplink   string `json:"uplink,omitempty"`    // what the bridge sits on (a port or bond0)
+	BondMode string `json:"bond_mode,omitempty"` // when the uplink is a bond
+	Ports    []Port `json:"ports"`
+	IPv6NAT  string `json:"ipv6_nat,omitempty"` // the private network's IPv6 range when on
+	HostIPv6 bool   `json:"host_ipv6"`          // the server has IPv6 internet
 }
 
 // Storage is the VM pool.
@@ -61,6 +84,7 @@ type Overview struct {
 	CTCatalog  []CatalogEntry `json:"ct_catalog"` // empty when containers are off
 	Containers bool           `json:"containers"` // LXC installed
 	LAN        bool           `json:"lan"`
+	Network    Network        `json:"network"`
 	OS         OSUpdates      `json:"os"`
 	Running    *Task          `json:"running,omitempty"`
 	Tasks      []Task         `json:"tasks"`
@@ -138,6 +162,7 @@ func (n *Node) Overview(ctx context.Context) Overview {
 	if n.LAN != nil {
 		o.LAN = n.LAN()
 	}
+	o.Network = n.network()
 	if b, err := os.ReadFile(filepath.Join(n.DataDir, "os-updates.json")); err == nil {
 		_ = json.Unmarshal(b, &o.OS)
 	}
@@ -156,4 +181,78 @@ func (n *Node) Overview(ctx context.Context) Overview {
 	}
 	o.Hostname, _ = os.Hostname()
 	return o
+}
+
+func (n *Node) sysNet() string {
+	if n.SysNet != "" {
+		return n.SysNet
+	}
+	return "/sys/class/net"
+}
+
+func readStr(p string) string { b, _ := os.ReadFile(p); return strings.TrimSpace(string(b)) }
+
+// network reads the ports, the bridge's uplink and the bond from sysfs.
+func (n *Node) network() Network {
+	net := Network{Bridge: n.LANBridge, Ports: []Port{}}
+	sys := n.sysNet()
+	if n.LANBridge != "" {
+		if ents, err := os.ReadDir(filepath.Join(sys, n.LANBridge, "brif")); err == nil {
+			for _, e := range ents {
+				nm := e.Name()
+				if !strings.HasPrefix(nm, "vnet") && !strings.HasPrefix(nm, "tap") && !strings.HasPrefix(nm, "veth") && !strings.HasPrefix(nm, "vc") {
+					net.Uplink = nm
+					break
+				}
+			}
+		}
+	}
+	active := ""
+	if net.Uplink != "" {
+		pb := n.ProcBonding
+		if pb == "" {
+			pb = "/proc/net/bonding"
+		}
+		if b, err := os.ReadFile(filepath.Join(pb, net.Uplink)); err == nil {
+			for _, l := range strings.Split(string(b), "\n") {
+				if v, ok := strings.CutPrefix(l, "Bonding Mode: "); ok {
+					net.BondMode = strings.TrimSpace(v)
+				}
+				if v, ok := strings.CutPrefix(l, "Currently Active Slave: "); ok {
+					active = strings.TrimSpace(v)
+				}
+			}
+		}
+	}
+	ents, _ := os.ReadDir(sys)
+	for _, e := range ents {
+		nm := e.Name()
+		if _, err := os.Stat(filepath.Join(sys, nm, "device")); err != nil {
+			continue // virtual
+		}
+		p := Port{Name: nm, Carrier: readStr(filepath.Join(sys, nm, "carrier")) == "1", Active: nm == active}
+		if s, err := strconv.Atoi(readStr(filepath.Join(sys, nm, "speed"))); err == nil && s > 0 {
+			p.Speed = s
+		}
+		if _, err := os.Stat(filepath.Join(sys, nm, "wireless")); err == nil {
+			p.Wifi = true
+		}
+		if l, err := os.Readlink(filepath.Join(sys, nm, "master")); err == nil {
+			p.In = filepath.Base(l)
+		}
+		net.Ports = append(net.Ports, p)
+	}
+	if b, err := os.ReadFile(filepath.Join(n.DataDir, "ipv6-nat")); err == nil {
+		net.IPv6NAT = strings.TrimSpace(string(b))
+	}
+	if b, err := os.ReadFile("/proc/net/ipv6_route"); err == nil {
+		for _, l := range strings.Split(string(b), "\n") {
+			f := strings.Fields(l)
+			// default route: destination ::/0 with a next hop
+			if len(f) >= 10 && f[0] == "00000000000000000000000000000000" && f[1] == "00" && f[4] != "00000000000000000000000000000000" && f[9] != "lo" {
+				net.HostIPv6 = true
+			}
+		}
+	}
+	return net
 }

@@ -135,6 +135,13 @@ hardware**. Work through it on the new machine; tick each line and note problems
 - [ ] Switch port = trunk with VLAN 20 tagged; VM on VLAN 20 gets an address from VLAN 20's DHCP and reaches its gateway
 - [ ] Reboot the server: the VLAN VM comes back on VLAN 20 (p8s-vlans.service ran before libvirt)
 
+## 13. Bonding and IPv6
+
+- [ ] (needs a USB Ethernet adapter or a 2-port PC) Server → Home network: Add as second cable → bond0 active-backup; pull the active cable: ping to a LAN VM keeps going
+- [ ] Server page shows the ports, cable state, speed and which one is active
+- [ ] With IPv6 from the ISP: Turn on IPv6 for the private network → in a NAT VM `ip -6 addr` has fdXX:…, `ping -6 google.com` works
+- [ ] `p8 ipv6 off` → back to IPv4 only, VMs stay connected
+
 ## Add new features here as they are built
 
 (Every new feature adds its own lines above before it counts as done.)

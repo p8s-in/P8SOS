@@ -170,6 +170,8 @@ install -m 0755 "$REPO/scripts/tune.sh" /usr/local/share/p8s/tune.sh
 install -m 0755 "$REPO/scripts/netcheck.sh" /usr/local/share/p8s/netcheck.sh
 install -m 0755 "$REPO/scripts/tailscale.sh" /usr/local/share/p8s/tailscale.sh
 install -m 0755 "$REPO/scripts/vlans.sh" /usr/local/share/p8s/vlans.sh
+install -m 0755 "$REPO/scripts/setup-bond.sh" /usr/local/share/p8s/setup-bond.sh
+install -m 0755 "$REPO/scripts/ipv6.sh" /usr/local/share/p8s/ipv6.sh
 install -m 0644 "$REPO/deploy/p8s-vlans.service" /etc/systemd/system/p8s-vlans.service
 # guest internet: repair at boot and after every firewall reload (which can wipe libvirt's NAT rules)
 install -m 0644 "$REPO/deploy/p8s-net.service" /etc/systemd/system/p8s-net.service

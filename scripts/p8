@@ -92,6 +92,8 @@ p8 — manage P8S OS virtual machines
   p8 storage                       pool size and what each VM disk uses
   p8 storage grow                  use the system disk's free space for VMs (file pool)
   p8 lan-setup                     let VMs join your home network (Ethernet only, once)
+  p8 bond-setup PORT [--mode M]    add a second cable to the home network (failover; M: active-backup, 802.3ad)
+  p8 ipv6 on|off|status            IPv6 for VMs on the private network
   p8 cluster                       servers in this cluster (master + workers) and their room
   p8 cluster find                  P8S OS servers on this network (and whether they can join)
   p8 cluster invite NAME|IP        on the master: invite one of them (accepted on that server)
@@ -771,6 +773,16 @@ TXT
     [[ -f $T ]] || T=$(dirname "$(readlink -f "$0")")/setup-bridge.sh
     exec sudo bash "$T" ;;
 
+  bond-setup|bond)
+    T=/usr/local/share/p8s/setup-bond.sh
+    [[ -f $T ]] || T=$(dirname "$(readlink -f "$0")")/setup-bond.sh
+    exec sudo bash "$T" "$@" ;;
+
+  ipv6)
+    T=/usr/local/share/p8s/ipv6.sh
+    [[ -f $T ]] || T=$(dirname "$(readlink -f "$0")")/ipv6.sh
+    exec sudo bash "$T" "${1:-status}" ;;
+
   test)
     T=/usr/local/share/p8s/smoke-test.sh
     [[ -f $T ]] || T=$(dirname "$(readlink -f "$0")")/smoke-test.sh
@@ -784,7 +796,8 @@ TXT
       echo "== service";   systemctl --no-pager status p8sd | head -5
       echo "== logs";      sudo journalctl -u p8sd -n 80 --no-pager
       echo "== libvirt";   sudo virsh list --all; sudo virsh net-list --all
-      echo "== network";   ip -br addr; ip route; cat /etc/network/interfaces; cat /var/lib/p8s/bridge/apply.log 2>/dev/null
+      echo "== network";   ip -br addr; ip route; ip -6 route; cat /etc/network/interfaces; cat /var/lib/p8s/bridge/apply.log 2>/dev/null
+      cat /proc/net/bonding/bond0 2>/dev/null; cat /var/lib/p8s/bond/apply.log 2>/dev/null; cat /var/lib/p8s/vlans.list 2>/dev/null
       echo "== zfs";       sudo zpool status -x; sudo zfs list -t all -r tank/p8s
       echo "== seeds";     ls -la /var/lib/p8s/seeds
       echo "== kvm";       ls -l /dev/kvm; grep -cE 'vmx|svm' /proc/cpuinfo

@@ -369,7 +369,7 @@ func serve(args []string) error {
 		ImportFolder:  filepath.Join(cfg.DataDir, "import"),
 		Node: &tasks.Node{
 			Tasks: &tasks.Manager{Dir: filepath.Join(cfg.DataDir, "tasks"), Scripts: scriptsDir(), Run: run},
-			Run:   run, Pool: strings.SplitN(cfg.VMDataset, "/", 2)[0], DataDir: cfg.DataDir,
+			Run:   run, Pool: strings.SplitN(cfg.VMDataset, "/", 2)[0], DataDir: cfg.DataDir, LANBridge: cfg.LANBridge,
 			Templates: func() []string {
 				var l []string
 				for _, t := range cfg.Templates {

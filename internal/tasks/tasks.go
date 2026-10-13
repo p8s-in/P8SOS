@@ -35,6 +35,9 @@ const (
 	NetRepair    = "net-repair"   // fix it (VMs keep running)
 	TailscaleUp  = "tailscale"    // arg: "" or "lan" (also offer the home network)
 	TailscaleOff = "tailscale-off"
+	BondSetup    = "bond-setup" // arg: the extra network port, e.g. enp4s0 (failover)
+	IPv6On       = "ipv6-on"    // IPv6 for the private (NAT) network
+	IPv6Off      = "ipv6-off"
 )
 
 // Titles for the task log.
@@ -43,6 +46,7 @@ var Titles = map[string]string{
 	OSCheck: "Check for Debian updates", OSUpgrade: "Install Debian updates", Reboot: "Reboot the server",
 	ZFSCache: "Set the ZFS cache limit", NetCheck: "Check the guest network", NetRepair: "Repair the guest network",
 	TailscaleUp: "Connect Tailscale (remote access)", TailscaleOff: "Disconnect Tailscale",
+	BondSetup: "Add a second network cable (bond)", IPv6On: "Turn on IPv6 for the private network", IPv6Off: "Turn off IPv6 for the private network",
 }
 
 // Task is one run.
@@ -149,6 +153,15 @@ func (m *Manager) command(kind, arg string) ([]string, error) {
 		return sh("tailscale.sh", "up"), nil
 	case TailscaleOff:
 		return sh("tailscale.sh", "down"), nil
+	case BondSetup:
+		if !reArg.MatchString(arg) || len(arg) > 15 {
+			return nil, fmt.Errorf("%w: network port name", ErrInvalid)
+		}
+		return sh("setup-bond.sh", arg), nil
+	case IPv6On:
+		return sh("ipv6.sh", "on"), nil
+	case IPv6Off:
+		return sh("ipv6.sh", "off"), nil
 	case ZFSCache:
 		if n, err := strconv.Atoi(arg); arg != "auto" && (err != nil || n < 256 || n > 1<<20) {
 			return nil, fmt.Errorf("%w: ZFS cache limit must be 256 MiB or more, or auto", ErrInvalid)

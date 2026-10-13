@@ -61,7 +61,8 @@ table inet %[1]s {
 	chain input {
 		type filter hook input priority -5; policy accept;
 		iifname %[2]q ct state established,related accept
-		iifname %[2]q udp dport { 53, 67 } accept
+		iifname %[2]q udp dport { 53, 67, 547 } accept
+		iifname %[2]q meta l4proto ipv6-icmp accept comment "IPv6 neighbor discovery (IPv6 on the private network)"
 		iifname %[2]q tcp dport 53 accept
 		iifname %[2]q icmp type echo-request accept
 		iifname %[2]q counter drop comment "VMs may not use the P8S server"

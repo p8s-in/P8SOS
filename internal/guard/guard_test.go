@@ -15,7 +15,7 @@ func TestRules(t *testing.T) {
 	}
 	for _, want := range []string{
 		"delete table inet p8s_guard",
-		`iifname "virbr0" udp dport { 53, 67 } accept`,
+		`iifname "virbr0" udp dport { 53, 67, 547 } accept`,
 		`iifname "virbr0" counter drop`,
 		`iifname "virbr0" ip daddr { 192.168.0.50, 10.9.0.0/16 } accept`,
 		`iifname "virbr0" ip daddr @private4 counter drop`,

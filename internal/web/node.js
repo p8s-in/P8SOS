@@ -184,6 +184,23 @@ function renderNode(){
     ? `<div class="sub">✔ VMs can join your home network (choose "Home network" when creating a VM).</div>`
     : `<div class="inline"><button class="btn" id="ndLanGo" ${dis}>Set up</button><span class="sub">Lets VMs get addresses from your router, like other devices. Needs an Ethernet cable;
        the network drops for a few seconds and the old settings come back by themselves if anything goes wrong.</span></div>`;
+  const nw = n.network || {ports: []};
+  const portRow = p => `<tr><td><b class="mono">${esc(p.name)}</b>${p.wifi ? ' <span class="sub">Wi-Fi</span>' : ""}</td>
+    <td class="sub">${p.carrier ? `<span style="color:var(--ok)">● cable in</span>${p.speed ? " · " + (p.speed >= 1000 ? p.speed / 1000 + " Gbit/s" : p.speed + " Mbit/s") : ""}` : "○ no cable"}
+      ${p.in ? " · part of " + esc(p.in) : ""}${p.active ? " · <b>active</b>" : ""}</td></tr>`;
+  const free = nw.ports.filter(p => !p.wifi && !p.in && p.name !== nw.uplink);
+  $("#ndLan").insertAdjacentHTML("beforeend", (nw.ports.length ? `<table class="snaps" style="margin-top:6px"><tbody>${nw.ports.map(portRow).join("")}</tbody></table>` : "") +
+    (n.lan && nw.bond_mode ? `<div class="sub">The home network runs on <b>${esc(nw.uplink)}</b> (${esc(nw.bond_mode)}): if one cable fails, the other takes over.</div>` : "") +
+    (n.lan && !nw.bond_mode && free.length ? `<div class="inline" style="margin-top:6px"><select id="ndBondPort" style="width:auto">${free.map(p => `<option>${esc(p.name)}</option>`).join("")}</select>
+      <button class="btn" id="ndBondGo" ${dis}>Add as second cable</button><span class="sub">Failover: the server and VMs stay online if one cable or switch port dies (both cables to the same network).</span></div>` : "") +
+    `<div class="inline" style="margin-top:6px">${nw.ipv6_nat
+      ? `<span class="sub">IPv6 on the private network: <b class="mono">${esc(nw.ipv6_nat)}</b></span><button class="btn" id="ndV6Off" ${dis}>Turn off</button>`
+      : `<button class="btn" id="ndV6On" ${dis || (nw.host_ipv6 ? "" : "disabled")}>Turn on IPv6 for the private network</button>
+         <span class="sub">${nw.host_ipv6 ? "VMs on the private network get IPv6 internet too (home-network VMs get it from the router already)." : "This server has no IPv6 internet."}</span>`}</div>`);
+  if ($("#ndBondGo")) $("#ndBondGo").onclick = () => runTask("bond-setup", $("#ndBondPort").value,
+    `Add ${$("#ndBondPort").value} as a second cable? The network drops for a few seconds; if it doesn't come back within 60 s the old settings are restored.`);
+  if ($("#ndV6On")) $("#ndV6On").onclick = () => runTask("ipv6-on", "", "Turn on IPv6 for the private network? Its network restarts for a moment; VMs stay connected.");
+  if ($("#ndV6Off")) $("#ndV6Off").onclick = () => runTask("ipv6-off", "", "Turn off IPv6 for the private network?");
   $("#ndNetCheck").disabled = $("#ndNetFix").disabled = busy;
   $("#ndNetCheck").onclick = () => runTask("net-check", "");
   $("#ndNetFix").onclick = () => runTask("net-repair", "", "Repair the guest network now? Running VMs and containers keep running; the dashboard may restart for a moment.");
