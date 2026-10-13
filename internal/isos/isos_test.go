@@ -93,3 +93,28 @@ func TestDownload(t *testing.T) {
 		t.Fatalf("no name: %v", err)
 	}
 }
+
+func TestPresetMirrors(t *testing.T) {
+	body := fakeISO("CD001")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/old/virtio-win.iso" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Write(body)
+	}))
+	defer srv.Close()
+	Presets["test"] = []string{srv.URL + "/old/virtio-win.iso", srv.URL + "/new/virtio-win.iso"}
+	defer delete(Presets, "test")
+	l := &Library{Dir: t.TempDir()}
+	iso, err := l.Download(context.Background(), "preset:test", "virtio-win.iso", "", nil)
+	if err != nil || iso.Name != "virtio-win.iso" {
+		t.Fatalf("mirror fallback: %v %+v", err, iso)
+	}
+	if _, err := l.Download(context.Background(), "preset:nope", "x.iso", "", nil); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("unknown preset: %v", err)
+	}
+	if len(Presets["virtio-win"]) < 2 {
+		t.Fatal("virtio-win needs a fallback")
+	}
+}

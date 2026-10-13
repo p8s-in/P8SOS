@@ -49,23 +49,74 @@ type Library struct {
 }
 
 // ipv4First downloads over IPv4 first: many home and office networks hand out
-// IPv6 addresses without a working IPv6 route ("network is unreachable").
+// IPv6 addresses without a working IPv6 route ("network is unreachable"). If
+// the network's DNS gives no IPv4 address, public resolvers are asked too
+// (some routers' DNS drop answers).
 var ipv4First = &http.Client{Transport: func() *http.Transport {
 	t := http.DefaultTransport.(*http.Transport).Clone()
-	d := &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}
-	t.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-		c, err4 := d.DialContext(ctx, "tcp4", addr)
-		if err4 == nil {
-			return c, nil
-		}
-		c, err := d.DialContext(ctx, network, addr)
-		if err != nil {
-			return nil, fmt.Errorf("%v (IPv4: %v)", err, err4)
-		}
-		return c, nil
-	}
+	t.DialContext = dialIPv4First
 	return t
 }()}
+
+var publicDNS = []string{"1.1.1.1:53", "8.8.8.8:53", "9.9.9.9:53"}
+
+func dialIPv4First(ctx context.Context, network, addr string) (net.Conn, error) {
+	d := &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}
+	c, err4 := d.DialContext(ctx, "tcp4", addr)
+	if err4 == nil {
+		return c, nil
+	}
+	host, port, _ := net.SplitHostPort(addr)
+	var dnsErr *net.DNSError
+	if errors.As(err4, &dnsErr) && net.ParseIP(host) == nil {
+		for _, srv := range publicDNS {
+			r := &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, "udp", srv)
+			}}
+			lctx, cancel := context.WithTimeout(ctx, 6*time.Second)
+			ips, err := r.LookupIP(lctx, "ip4", host)
+			cancel()
+			if err != nil {
+				continue
+			}
+			for _, ip := range ips {
+				if c, err := d.DialContext(ctx, "tcp4", net.JoinHostPort(ip.String(), port)); err == nil {
+					return c, nil
+				} else {
+					err4 = err
+				}
+			}
+			break // the name has IPv4 addresses, but none answered
+		}
+	}
+	c, err := d.DialContext(ctx, network, addr)
+	if err != nil {
+		if strings.Contains(err.Error(), "network is unreachable") && errors.As(err4, &dnsErr) {
+			return nil, fmt.Errorf("%w: %s can only be reached over IPv6, and this network has no IPv6 internet "+
+				"(IPv4: %v)", ErrNoRoute, host, err4)
+		}
+		return nil, fmt.Errorf("%v (IPv4: %v)", err, err4)
+	}
+	return c, nil
+}
+
+// ErrNoRoute means the download site can't be reached from this network.
+var ErrNoRoute = errors.New("can't reach the download site")
+
+// Presets are well-known downloads with mirrors, tried in order
+// ("preset:virtio-win" as the URL).
+var Presets = map[string][]string{
+	// 0.1.271 is the version Proxmox recommends for production; "stable" may point to a newer test build.
+	"virtio-win": {
+		"https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/archive-virtio/virtio-win-0.1.271-1/virtio-win.iso",
+		"https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win.iso",
+	},
+}
+
+// PresetPage is where a person can get a preset by hand (shown when the server can't).
+var PresetPage = map[string]string{
+	"virtio-win": "https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/archive-virtio/virtio-win-0.1.271-1/virtio-win.iso",
+}
 
 // Path returns the file of an existing ISO.
 func (l *Library) Path(name string) (string, error) {
@@ -180,6 +231,25 @@ func NameFromURL(raw string) string {
 // Download fetches an ISO over HTTP(S) into the library. If sha256hex is
 // given, the file is checked against it before it is kept.
 func (l *Library) Download(ctx context.Context, rawURL, name, sha256hex string, progress func(done, total int64)) (ISO, error) {
+	if key, ok := strings.CutPrefix(rawURL, "preset:"); ok {
+		urls := Presets[key]
+		if len(urls) == 0 {
+			return ISO{}, fmt.Errorf("%w: unknown download %q", ErrInvalid, key)
+		}
+		var last error
+		for _, u := range urls {
+			iso, err := l.Download(ctx, u, name, sha256hex, progress)
+			if err == nil || errors.Is(err, ErrExists) || errors.Is(err, ErrInvalid) || ctx.Err() != nil {
+				return iso, err
+			}
+			last = err
+		}
+		if errors.Is(last, ErrNoRoute) {
+			return ISO{}, fmt.Errorf("%v. Download it on your computer from %s and add it with ISO images → Upload, or turn on IPv6 on your router",
+				last, PresetPage[key])
+		}
+		return ISO{}, last
+	}
 	u, err := url.Parse(rawURL)
 	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
 		return ISO{}, fmt.Errorf("%w: url must be http(s)://...", ErrInvalid)

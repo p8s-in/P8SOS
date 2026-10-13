@@ -11,7 +11,13 @@ stimer, reset, frequencies, tlbflush, ipi, hypervclock), so Windows runs fast on
 ## Install Windows 11
 
 1. **ISO images**: upload the Windows ISO (from Microsoft) and click **Download virtio-win** (drivers and
-   guest tools, ~700 MB).
+   guest tools, ~700 MB; version 0.1.271, the one Proxmox recommends, with "stable" as fallback). It is
+   **optional**: Windows installs and runs without it.
+   - If the download fails with "can only be reached over IPv6": the Fedora site answered this network only
+     over IPv6 and the network has no IPv6 internet. Download
+     [virtio-win.iso](https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/archive-virtio/virtio-win-0.1.271-1/virtio-win.iso)
+     on your PC and add it with **ISO images → Upload**, or turn on IPv6 on your router. (The server also asks
+     public DNS servers for an IPv4 address when the router's DNS gives none.)
 2. **+ Create VM** → Operating system: the Windows ISO → Kind of system: **Windows 11 / Server 2022, 2025**
    (picked automatically when the ISO name has "win") → Drivers CD: **virtio-win.iso**.
    At least 2 CPUs, 4 GB RAM and 64 GB disk (the Windows 11 installer refuses less).

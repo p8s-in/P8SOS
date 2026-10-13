@@ -218,7 +218,8 @@ dialog.as-page #mClose,dialog.as-page #cmClose{display:none}
     <div class="hint" id="cOSHint"></div>
     <div id="cDrvBox" hidden>
       <label for="cDrv">Drivers CD</label><select id="cDrv"></select>
-      <div class="hint">virtio-win adds the guest tools and faster drivers after installing. Get it under <b>ISO images → Windows drivers</b>.</div>
+      <div class="hint">Optional: Windows installs and runs without it (SATA disk and Intel network built in). virtio-win adds the guest agent,
+        memory balloon and faster drivers afterwards. Get it under <b>ISO images → Windows drivers</b>.</div>
     </div>
   </div>
   <label for="cNet">Network</label>
@@ -367,8 +368,12 @@ dialog.as-page #mClose,dialog.as-page #cmClose{display:none}
   <div class="inline"><input id="iUrl" placeholder="https://…/something.iso" autocomplete="off"></div>
   <div class="inline"><input id="iSum" placeholder="SHA-256 checksum (optional, recommended)" autocomplete="off"><button class="btn" id="iDl">Download</button></div>
   <h3>Windows drivers</h3>
-  <div class="inline"><span class="sub" style="flex:1">virtio-win (Fedora project, ~700 MB): drivers and guest tools for Windows VMs. Add it as the drivers CD when you create a Windows VM.</span>
+  <div class="inline"><span class="sub" style="flex:1">virtio-win 0.1.271 (Fedora project, ~700 MB; the version Proxmox recommends): drivers and guest tools for Windows VMs.
+    Add it as the drivers CD when you create a Windows VM.</span>
     <button class="btn" id="iVirtio">Download virtio-win</button></div>
+  <div class="hint">If the server can't download it (some networks reach the Fedora site only over IPv6), get
+    <a href="https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/archive-virtio/virtio-win-0.1.271-1/virtio-win.iso" target="_blank" rel="noopener">virtio-win.iso</a>
+    on this computer and add it with <b>Upload</b> above.</div>
   <h3>On the server</h3>
   <table class="snaps"><tbody id="iList"></tbody></table>
   <div class="dlg-actions"><button class="btn" id="iClose">Close</button></div>
@@ -1421,7 +1426,7 @@ $("#iDl").onclick = async () => {
 };
 $("#iVirtio").onclick = async () => {
   try {
-    const j = await call("POST", "/isos/download", {url: "https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win.iso", name: "virtio-win.iso"});
+    const j = await call("POST", "/isos/download", {url: "preset:virtio-win", name: "virtio-win.iso"});
     trackJob(j, () => { if ($("#dlgIsos").open) loadIsos(); });
   } catch (err) { toast(err.message, true); }
 };
