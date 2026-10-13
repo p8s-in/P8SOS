@@ -462,8 +462,9 @@ func serve(args []string) error {
 	if err := clu.Apply(ctx); err != nil {
 		log.Error("cluster tunnel", "err", err)
 	}
-	cvms := &cluster.VMs{Local: svc, M: clu}
+	cvms := &cluster.VMs{Local: svc, M: clu, Jobs: svc.Jobs}
 	apiSrv.VMs, apiSrv.Cluster, apiSrv.ClusterVMs = cvms, clu, cvms
+	apiSrv.Migrate, apiSrv.LocalMoves = cvms, svc // moving VMs between servers
 	apiSrv.Dial, apiSrv.RemoteMetrics = cvms.Dial, cvms.RemoteMetrics
 	go clu.Loop(ctx, 15*time.Second)
 	if cfg.HostShellOn() {

@@ -132,6 +132,10 @@ type Server struct {
 	// AutoPasswords makes a root password for VMs/containers created without one.
 	Creds         *creds.Store
 	AutoPasswords bool
+	// Migrate moves VMs between cluster servers (cluster.VMs); LocalMoves is
+	// this server's side of a move (vm.Service). nil = off.
+	Migrate    Migrator
+	LocalMoves cluster.LocalMover
 	// Monitor watches the server's health and sends alerts; nil = off.
 	Monitor *monitor.Monitor
 	// Imports brings VMs in from Proxmox backups / disk images; nil = off.
@@ -200,6 +204,11 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("GET /api/v1/host/metrics", s.hostMetrics)
 	auth.HandleFunc("GET /api/v1/isos", s.listISOs)
 	auth.HandleFunc("PUT /api/v1/isos/{name}", s.uploadISO)
+	auth.HandleFunc("GET /api/v1/vms/{name}/move", s.moveInfo)
+	auth.HandleFunc("POST /api/v1/vms/{name}/move", s.startMove)
+	auth.HandleFunc("GET /api/v1/vms/{name}/move-check", s.moveCheck)
+	auth.HandleFunc("GET /api/v1/cluster/vm-export/{name}", s.vmExport)
+	auth.HandleFunc("POST /api/v1/cluster/vm-import", s.vmImport)
 	auth.HandleFunc("GET /api/v1/alerts", s.getAlerts)
 	auth.HandleFunc("PUT /api/v1/alerts/settings", s.putAlertSettings)
 	auth.HandleFunc("POST /api/v1/alerts/test", s.testAlert)

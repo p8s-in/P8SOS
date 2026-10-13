@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/url"
+	"p8sos/internal/jobs"
 	"sort"
 	"strings"
 	"sync"
@@ -56,7 +57,8 @@ type Local interface {
 // On a server that isn't a master it is just the local service.
 type VMs struct {
 	Local
-	M *Manager
+	M    *Manager
+	Jobs *jobs.Manager // runs moves (the local service's job list, so /jobs shows them)
 
 	mu    sync.Mutex
 	where map[string]string  // vm -> node id (workers only)

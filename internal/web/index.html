@@ -303,6 +303,10 @@ dialog.as-page #mClose,dialog.as-page #cmClose{display:none}
   <div id="mOwnerBox" hidden><h3>Owner</h3>
     <div class="inline"><select id="mOwner"></select><button class="btn" id="mOwnerGo">Give</button></div>
     <div class="hint">The owner sees and manages this VM. Admins always can.</div></div>
+  <div id="mMoveBox" hidden><h3>Move to another server</h3>
+    <div class="inline"><select id="mMoveTo"></select><button class="btn" id="mMoveGo">Move</button></div>
+    <label style="display:flex;gap:8px;align-items:center;font-weight:400"><input id="mMoveStart" type="checkbox" style="width:auto" checked> Start it there when the move is done</label>
+    <div class="hint" id="mMoveHint"></div></div>
   </div>
 
   <div data-tab="summary">
@@ -1170,8 +1174,35 @@ async function openManage(name){
   $("#mBackups").innerHTML = `<tr><td class="muted">Loading…</td></tr>`;
   $("#mCharts").innerHTML = "";
   $("#mSites").innerHTML = ""; $("#mSiteName").value = ""; $("#mSitePort").value = 80; $("#mSiteTLS").checked = false;
+  $("#mMoveBox").hidden = true; loadMove();
   await Promise.all([loadSnaps(), loadBackups(), loadVMCharts(), loadFirewall(), loadSites()]);
 }
+// Moving a VM to another cluster server (admins; shut-down VMs).
+async function loadMove(){
+  if (!isAdmin()) return;
+  const name = mName;
+  let info;
+  try { info = await call("GET", `/vms/${encodeURIComponent(name)}/move`); } catch { return; }
+  if (name !== mName) return;
+  const box = $("#mMoveBox");
+  if (!info.targets.length) { box.hidden = true; return; }
+  box.hidden = false;
+  const keep = $("#mMoveTo").value;
+  $("#mMoveTo").innerHTML = info.targets.map(t => `<option value="${esc(t.id)}" ${t.online ? "" : "disabled"}>${esc(t.name)}${t.online ? "" : " (offline)"}</option>`).join("");
+  if (keep && info.targets.some(t => t.id === keep && t.online)) $("#mMoveTo").value = keep;
+  $("#mMoveGo").disabled = !!info.why;
+  $("#mMoveHint").innerHTML = info.why ? esc("Can't move it now: " + info.why) :
+    "The VM is copied to the other server (disk, settings, login, firewall, backup schedule), then deleted here. Snapshots and old backups stay on this server. It keeps its name; its IP address can change.";
+}
+$("#mMoveGo").onclick = async () => {
+  const b = $("#mMoveGo"), to = $("#mMoveTo").selectedOptions[0];
+  if (!to) return;
+  if (!armed(b, `Move to ${to.textContent}?`)) return;
+  b.disabled = true;
+  try { trackJob(await call("POST", `/vms/${encodeURIComponent(mName)}/move`, {to: to.value, start: $("#mMoveStart").checked}), loadMove); }
+  catch (err) { toast(err.message, true); }
+  b.disabled = false;
+};
 async function loadSnaps(){
   try { snaps = (await call("GET", `/vms/${encodeURIComponent(mName)}/snapshots`)).snapshots; }
   catch (err) { toast(err.message, true); }
@@ -1201,7 +1232,7 @@ function renderManage(){
   $("#mPwHint").textContent = v.state === "running" ? "Sets a login password inside the VM (needs it fully booted)." : "Start the VM to change a password.";
   for (const id of ["#mCpu", "#mMem", "#mDisk", "#mRzGo"]) $(id).disabled = !stopped;
   if (mVM && mVM.disk_gb !== v.disk_gb) { $("#mDisk").value = v.disk_gb; $("#mDisk").min = v.disk_gb; }
-  if (mVM && mVM.state !== v.state) renderBackups();
+  if (mVM && mVM.state !== v.state) { renderBackups(); loadMove(); }
   mVM = v;
   const key = v.state + "|" + JSON.stringify(snaps);
   if ($("#mSnaps").dataset.key === key) return; // unchanged: keep half-confirmed buttons as they are

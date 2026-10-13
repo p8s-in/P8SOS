@@ -63,6 +63,10 @@ hardware**. Work through it on the new machine; tick each line and note problems
 - [ ] Worker VM: console, power, snapshots, backups work from the master
 - [ ] Worker offline: its VMs show "unknown"; back online: normal
 - [ ] Server → Cluster → **Shell** on the worker
+- [ ] Move a shut-down VM master → worker (VM → Manage → Options → Move): job finishes, VM starts there, has internet, same root password works on the new SSH port
+- [ ] Move it back worker → master; with 3 servers also worker → worker
+- [ ] A running VM / one with a CD in the drive: Move is greyed out with the reason
+- [ ] Pull the network cable halfway through a move: the job fails, the original is still there and starts
 - [ ] Remove the worker; leave the cluster
 
 ## 7. Admin and safety

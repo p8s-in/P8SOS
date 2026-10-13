@@ -177,3 +177,32 @@ func ReadShellFrame(r io.Reader) (kind byte, p []byte, err error) {
 	_, err = io.ReadFull(r, p)
 	return hdr[0], p, err
 }
+
+// stream does a request whose body or answer is a long data stream (VM
+// moves): no overall timeout, a long wait for the answer after the upload.
+func (m *Manager) stream(ctx context.Context, n Node, method, path string, body io.Reader) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(n.API, "/")+"/api/v1"+path, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+n.Token)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/octet-stream")
+	}
+	c := *m.client(n.CertSHA)
+	c.Timeout = 0
+	if t, ok := c.Transport.(*http.Transport); ok && m.HTTP == nil {
+		t = t.Clone()
+		t.ResponseHeaderTimeout = 10 * time.Minute
+		c.Transport = t
+	}
+	resp, err := c.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("server %s (%s) can't be reached: %w", n.Name, n.ID, err)
+	}
+	if resp.StatusCode >= 300 {
+		defer resp.Body.Close()
+		return nil, &APIError{Status: resp.StatusCode, Message: apiError(resp)}
+	}
+	return resp, nil
+}

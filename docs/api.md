@@ -405,6 +405,11 @@ VMs show `"os_type"` and `"drivers_iso"`. See [windows.md](windows.md).
 | GET | `/api/v1/cluster/public-ip` · POST `/api/v1/cluster/check` `{"host","port"}` | help for joining over the internet |
 | GET | `/api/v1/cluster/candidates` | `?memory_mib&disk_gb&network&iso&ip_pool` where a VM could go, best first |
 
+| GET | `/api/v1/vms/{name}/move` | `{"from","why","targets":[{"id","name","online"}]}` — `why` is set when it can't move now |
+| POST | `/api/v1/vms/{name}/move` | `{"to":"n2","start":true}` → 202 job (`kind` "move"); the VM must be shut down |
+| GET | `/api/v1/vms/{name}/move-check` | (server to server) `{"why"}` for a VM on this server |
+| GET | `/api/v1/cluster/vm-export/{name}` · POST `/api/v1/cluster/vm-import` | (server to server) the VM as a stream: a JSON line with its settings, then `zfs send` of the disk |
+
 `POST /api/v1/vms` takes `"node"` (server id or name; admins) and VMs carry `node` / `node_id`.
 
 ### Off-site backups (admins)

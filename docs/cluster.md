@@ -72,6 +72,30 @@ usage charts. Customers' quotas, plans and billing are handled on the master.
 If a worker is offline its VMs still show (state "unknown") and come back when
 it does. Server → Cluster shows each server's status, RAM in use and VM count.
 
+## Moving a VM to another server
+
+VM → Manage → Options → **Move to another server** (admins). Pick the server,
+leave "Start it there" ticked, press Move (twice, to confirm). The move runs as
+a job (shown like a backup), from any server to any other, also worker → worker.
+
+- The VM must be **shut down**. Not yet movable: VMs with a public IP from a pool
+  (release it first) and VMs with an installer CD in the drive (eject it first).
+- What happens: a ZFS snapshot of the disk is sent over the tunnel (compressed,
+  only the used blocks), the VM is defined on the new server with the same name,
+  UUID, CPU/RAM, firmware, disk/NIC type, MAC address, owner, network, firewall
+  rules and backup schedule, then the original is deleted. If anything fails
+  before that, the original stays untouched and the half copy is removed.
+- What changes: the IP address (each server has its own private network) and the
+  SSH / RDP port (shown in the VM's Login box). A "Home network" VM moved to a
+  server without one lands on the private network.
+- What stays behind: snapshots and old backups (they're on the old server).
+  Take a new backup after the move.
+- Time: about as long as copying the used part of the disk over your network
+  (1 Gbit/s ≈ 100 MB/s).
+
+API: `GET /api/v1/vms/{name}/move` (where it can go, or why not),
+`POST /api/v1/vms/{name}/move {"to":"n2","start":true}` → job.
+
 ## Security
 
 - Join codes are random, single use, expire after an hour, and carry the
@@ -101,7 +125,7 @@ Files: `/var/lib/p8s/cluster/state.json` (roles, keys, tokens; root only),
 
 ## Not yet
 
-- Moving a VM to another server (stop, copy the disk, start there)
+- Moving a running VM (live migration) and moving containers
 - High availability (restart VMs of a dead server elsewhere; needs shared or replicated storage)
 - Containers on workers (containers run on the master), ISO installs and public IPs on workers
 - One shared ISO library and template list
