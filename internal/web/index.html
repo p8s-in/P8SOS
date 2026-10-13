@@ -188,6 +188,20 @@ dialog.as-page #mClose,dialog.as-page #cmClose{display:none}
   .shell>header .lg{display:none}
   .shell>header{gap:6px;padding:8px 10px}
 }
+/* laptops (MacBook 1280-1512 px wide): compact the VM/container tables so nothing is cut off */
+@media (max-width:1500px) and (min-width:761px){
+  .panel th,.panel td{padding:9px 10px}
+  .panel td[data-k="Name"]{white-space:normal;max-width:220px;overflow-wrap:anywhere}
+  .panel td[data-k="RAM"],.panel td[data-k="Disk"]{white-space:normal}
+  .actions{gap:4px}
+  .actions .btn,.actions summary.btn{padding:5px 9px;font-size:13px}
+}
+@media (max-width:1360px) and (min-width:761px){
+  .panel th:nth-child(7),.panel td[data-k="Autostart"]{display:none}
+}
+@media (max-width:1100px) and (min-width:761px){
+  .panel td[data-k="IP"]{white-space:normal;overflow-wrap:anywhere}
+}
 @media (max-width:760px){
   header{padding:10px 16px} main{padding:16px} .panel-head{flex-wrap:wrap} #hVer{display:none}
   thead{display:none} table,tbody,tr,td{display:block;width:100%}

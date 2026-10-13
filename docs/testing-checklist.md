@@ -1,0 +1,93 @@
+# P8S OS: test checklist (new laptop / real server)
+
+Everything below is built and passes the automated tests, but has **not yet been tried on real
+hardware**. Work through it on the new machine; tick each line and note problems (screenshot +
+`journalctl -u p8sd -n 100`). Go top to bottom; each section says what it needs.
+
+## 0. Install
+
+- [ ] Install from the ISO (or Debian 13 + `sudo bash install.sh`); dashboard at `https://<ip>:8006`
+- [ ] `sudo bash update.sh` works from a git checkout
+- [ ] Server page → Memory shows a sensible split; **ZFS cache limit** Set / Auto works
+- [ ] Server page → **Check guest internet**: all ✔ (else **Repair**, then check again)
+- [ ] Reboot the server: autostart VMs/containers come back; guest internet still works (p8s-net.service)
+
+## 1. VMs (one server)
+
+- [ ] Create a Linux VM from a template: gets an IP, SSH port works, **Login details** box shows the root password, `ssh -p <port> root@<server>` works with it
+- [ ] Manage → Login → **New password** (VM running) works
+- [ ] RAM column shows "used of size" after a minute; the VM's Memory chart shows "Used inside the VM"
+- [ ] Shutdown → Start an old VM: 1 socket / N cores and the memory balloon are applied (`virsh dumpxml p8s-<name> | grep -E "topology|memballoon"`)
+- [ ] Snapshot, roll back, delete snapshot
+- [ ] Backup now, restore over, restore as new; the daily schedule runs
+- [ ] Firewall: enable with SSH only; other ports are blocked
+- [ ] Resize CPU / RAM / disk
+- [ ] Console: keyboard, **Keys…** menu (Shift+F10, Esc, F12), Ctrl+Alt+Del, Type text, Set password
+
+## 2. Windows
+
+- [ ] ISO library: a Windows ISO shows "boots on BIOS and UEFI"; virtio-win shows "not bootable" and is greyed out as install CD
+- [ ] Download virtio-win from the ISO page (DNS fallback works)
+- [ ] Windows 11 VM: the installer starts by itself (Enter pressed during "Press any key"), installs, reaches the desktop
+- [ ] Windows has internet; no "DNS address could not be found" after a while (guest DNS fix)
+- [ ] Task Manager in Windows shows all vCPUs
+- [ ] virtio-win-guest-tools installs; Remote Desktop to `<server>:3391` works (Windows Pro)
+
+## 3. Containers
+
+- [ ] Create from a template: **Login details** box; SSH as root with the password; console terminal
+- [ ] RAM column shows real use (tens of MB for an idle container)
+- [ ] Firewall, backup + restore, daily schedule, snapshot, resize
+- [ ] Public IP from a pool (if you have one)
+
+## 4. Import VMs (needs a Proxmox host; the `pve1` VM is fine)
+
+- [ ] Proxmox: back up a small Linux VM (`vzdump <id> --compress zstd --mode stop`), scp the `.vma.zst` to `/var/lib/p8s/import/`
+- [ ] Storage → Import VMs → Check: settings match the Proxmox VM; warnings make sense
+- [ ] Import: the VM boots and has network (fix the NIC name inside if it changed)
+- [ ] Same with a UEFI VM (bios: ovmf, 4M efidisk): boots without the EFI shell
+- [ ] A Windows VM from Proxmox (virtio-scsi + virtio drivers): boots
+- [ ] A `.vmdk` (VMware / VirtualBox) and a `.vhdx` (Hyper-V): import, set firmware/bus, boots
+- [ ] Upload in the browser (small file) works; big files via scp
+
+## 5. Backups off the server (needs a USB disk / NAS / S3 bucket / second Linux box)
+
+- [ ] Off-site target: folder (USB/NAS), S3 (real bucket), SSH; with and without encryption
+- [ ] Every new backup is copied; "keep N" deletes old copies; **Bring back** + restore works
+
+## 6. Two machines (cluster; needs the second laptop)
+
+- [ ] Same network: Add server → the new laptop is listed → invite → accept (6-digit numbers match)
+- [ ] Other network: join with the public address (router ports TCP 8006 + UDP 51820)
+- [ ] Create VM picks a server automatically; the "Server" select places it by hand
+- [ ] Worker VM: console, power, snapshots, backups work from the master
+- [ ] Worker offline: its VMs show "unknown"; back online: normal
+- [ ] Server → Cluster → **Shell** on the worker
+- [ ] Remove the worker; leave the cluster
+
+## 7. Admin and safety
+
+- [ ] Server → **>_ Shell** (root shell) opens and is logged in Activity
+- [ ] A customer account sees only its own VMs/containers and their login details
+- [ ] 2FA sign-in
+- [ ] Debian updates from the Server page; guest network still fine afterwards
+
+## 8. Browsers
+
+- [ ] Dashboard on a MacBook (1280–1512 px wide), Safari and Chrome: nothing cut off, no sideways scrolling
+- [ ] Phone: menu button, tables shown as cards
+
+## 9. Health & alerts
+
+- [ ] Server → Health & alerts lists the checks (pool, disks with SMART, space, memory, CPU temperature, power)
+- [ ] Enter an email (email set up under Settings), a webhook (e.g. a Discord channel webhook) and an ntfy topic; **Send a test** arrives everywhere
+- [ ] Fill a test pool / disk past the warning level (or lower the level): warning arrives, then RESOLVED after cleaning up
+- [ ] Laptop: unplug the charger → "power cut" warning; plug in → resolved
+- [ ] Laptop: set the battery level high (e.g. 95 %), unplug → VMs shut down cleanly and the laptop powers off (set it back to 10 % afterwards)
+- [ ] UPS with NUT (if you have one): `upsc` works, on-battery warning, low-battery shutdown
+- [ ] A crashed VM (e.g. `virsh destroy` doesn't count; kill its qemu process) shows a critical alert
+- [ ] The red/orange number on the server button in the sidebar
+
+## Add new features here as they are built
+
+(Every new feature adds its own lines above before it counts as done.)

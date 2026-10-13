@@ -22,6 +22,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"p8sos/internal/creds"
+	"p8sos/internal/monitor"
 	"p8sos/internal/netx"
 	"path/filepath"
 	"strings"
@@ -293,6 +294,40 @@ func serve(args []string) error {
 	go off.Run(ctx, 6*time.Hour)
 	go svc.RunSchedule(ctx, cfg.BackupTime, nil)
 
+	// Health & alerts: pools, disks (SMART), space, RAM, temperature, crashed
+	// VMs, failed backups, power (UPS / laptop battery) with clean shutdown.
+	mon := &monitor.Monitor{Dir: cfg.DataDir, Run: run, Log: log, HTTP: netx.Client(15 * time.Second),
+		Mail:       func(to, subject, body string) { mailer.Queue(to, subject, body, "alert") },
+		Paths:      watchPaths("/", cfg.DataDir, cfg.BackupDir),
+		MemUsedPct: func() int { m := hostinfo.ReadMem(); return m.UsedMiB * 100 / max(m.TotalMiB, 1) },
+		Guests: func(ctx context.Context) []monitor.Guest {
+			l, err := svc.List(ctx)
+			if err != nil {
+				return nil
+			}
+			var g []monitor.Guest
+			for _, v := range l {
+				g = append(g, monitor.Guest{Name: v.Name, State: string(v.State)})
+			}
+			return g
+		},
+		FailedJobs: func(since time.Time) []string {
+			var out []string
+			for _, j := range svc.ListJobs() {
+				if t, err := time.Parse(time.RFC3339, j.Finished); err == nil && t.After(since) && j.State == "failed" {
+					out = append(out, j.Kind+" of "+j.Target+": "+j.Error)
+				}
+			}
+			return out
+		},
+		StopGuests: func(ctx context.Context) error { return stopAllGuests(ctx, svc, cts) },
+		Poweroff: func() error {
+			_, err := run.Run(context.Background(), "systemctl", "poweroff")
+			return err
+		},
+	}
+	go mon.Loop(ctx)
+
 	apiSrv := &api.Server{
 		VMs: svc, Templates: cfg.Templates, Tokens: cfg.Tokens, Version: version, Log: log,
 		BackupKeep: cfg.BackupKeep, BackupTime: cfg.BackupTime, Metrics: mc,
@@ -316,6 +351,7 @@ func serve(args []string) error {
 		Updates:  upd,
 		CTs:      cts,
 		Offsite:  off,
+		Monitor:  mon,
 		// root passwords made for new VMs/containers, shown to their owners
 		Creds:         &creds.Store{File: filepath.Join(cfg.DataDir, "credentials.json")},
 		AutoPasswords: cfg.AutoRootPasswordsOn(),
@@ -605,4 +641,71 @@ func offsiteTransport() *http.Transport {
 	t := netx.Transport()
 	t.ResponseHeaderTimeout = 2 * time.Minute
 	return t
+}
+
+// watchPaths: the filesystems to watch for free space (each once).
+func watchPaths(paths ...string) []string {
+	var out []string
+	seen := map[uint64]bool{}
+	for _, p := range paths {
+		fi, err := os.Stat(p)
+		if err != nil {
+			continue
+		}
+		st, ok := fi.Sys().(*syscall.Stat_t)
+		if ok && seen[st.Dev] {
+			continue
+		}
+		if ok {
+			seen[st.Dev] = true
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+// stopAllGuests shuts every running VM and container down cleanly (power
+// failing / overheating), waiting up to the context's deadline, then forces
+// what is still running.
+func stopAllGuests(ctx context.Context, svc *vm.Service, cts *ct.Service) error {
+	vms, _ := svc.List(ctx)
+	for _, v := range vms {
+		if v.State == "running" {
+			_, _ = svc.Stop(ctx, v.Name, false)
+		}
+	}
+	if cts != nil {
+		if l, err := cts.List(ctx); err == nil {
+			for _, c := range l {
+				if c.State == "running" {
+					_, _ = cts.Stop(ctx, c.Name, false)
+				}
+			}
+		}
+	}
+	for {
+		running := 0
+		if l, err := svc.List(ctx); err == nil {
+			for _, v := range l {
+				if v.State == "running" || v.State == "stopping" {
+					running++
+				}
+			}
+		}
+		if running == 0 {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			if l, err := svc.List(context.Background()); err == nil {
+				for _, v := range l {
+					if v.State != "stopped" {
+						_, _ = svc.Stop(context.Background(), v.Name, true)
+					}
+				}
+			}
+			return fmt.Errorf("%d VM(s) didn't shut down in time; forced off", running)
+		case <-time.After(5 * time.Second):
+		}
+	}
 }

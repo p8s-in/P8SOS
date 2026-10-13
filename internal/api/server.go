@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"p8sos/internal/creds"
+	"p8sos/internal/monitor"
 	"sync"
 	"time"
 
@@ -131,6 +132,8 @@ type Server struct {
 	// AutoPasswords makes a root password for VMs/containers created without one.
 	Creds         *creds.Store
 	AutoPasswords bool
+	// Monitor watches the server's health and sends alerts; nil = off.
+	Monitor *monitor.Monitor
 	// Imports brings VMs in from Proxmox backups / disk images; nil = off.
 	Imports      Importer
 	ImportFolder string // shown so admins can scp files there
@@ -197,6 +200,9 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("GET /api/v1/host/metrics", s.hostMetrics)
 	auth.HandleFunc("GET /api/v1/isos", s.listISOs)
 	auth.HandleFunc("PUT /api/v1/isos/{name}", s.uploadISO)
+	auth.HandleFunc("GET /api/v1/alerts", s.getAlerts)
+	auth.HandleFunc("PUT /api/v1/alerts/settings", s.putAlertSettings)
+	auth.HandleFunc("POST /api/v1/alerts/test", s.testAlert)
 	auth.HandleFunc("GET /api/v1/imports", s.listImports)
 	auth.HandleFunc("GET /api/v1/imports/{file}/plan", s.importPlan)
 	auth.HandleFunc("PUT /api/v1/imports/{file}", s.uploadImport)

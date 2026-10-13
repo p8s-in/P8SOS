@@ -59,6 +59,7 @@ if zpool list -H "$POOL" >/dev/null 2>&1 && command -v virsh >/dev/null && comma
   command -v ssh >/dev/null || apt-get install -y openssh-client >/dev/null 2>&1 || true  # off-site copies to another server
   command -v qemu-img >/dev/null || apt-get install -y qemu-utils >/dev/null 2>&1 || true  # importing disk images (VMware, Hyper-V, ...)
   command -v lzop >/dev/null || apt-get install -y lzop >/dev/null 2>&1 || true  # importing .vma.lzo Proxmox backups
+  command -v smartctl >/dev/null || apt-get install -y smartmontools >/dev/null 2>&1 || true  # disk health alerts
 else
   P8S_BRIDGE=$BRIDGE bash "$REPO/scripts/bootstrap-debian13.sh" $DEV
 fi

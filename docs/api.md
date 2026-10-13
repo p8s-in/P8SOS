@@ -324,6 +324,11 @@ Read it again later (owner or admin): `GET /vms/{name}/login`, `GET /containers/
 (`known:false` when P8S didn't make or set one, e.g. ISO installs). Setting root's password through
 P8S updates it; deleting the guest forgets it. Stored in `<data_dir>/credentials.json` (0600).
 
+### Health & alerts (admins)
+
+`GET /alerts` (active alerts, checks, history, settings), `PUT /alerts/settings`, `POST /alerts/test`.
+Details: [alerts.md](alerts.md).
+
 ### Importing VMs (admins)
 
 `GET /imports`, `PUT /imports/{file}` (upload), `GET /imports/{file}/plan`, `POST /imports/{file}/start`

@@ -11,6 +11,9 @@ document.body.insertAdjacentHTML("beforeend", `
     <button class="btn" id="ndShell" type="button" title="Root shell on this server, in a new window (like at its keyboard)">&gt;_ Shell</button></div>
   <div id="ndRunning" class="toast" style="max-width:none;box-shadow:none;margin:8px 0;border-left-color:var(--warn)" hidden></div>
 
+  <h3>Health &amp; alerts</h3>
+  <div id="ndHealth"></div>
+
   <h3>Memory</h3>
   <div id="ndMem"></div>
 
@@ -50,6 +53,72 @@ function nodeShell(){
   if (!isAdmin() || !$("#bNode")) return;
   $("#bNode").hidden = false;
   $("#bNode").onclick = () => openNode();
+  alertBadge(); setInterval(alertBadge, 60000);
+}
+
+// red/orange count on the server button while something is wrong
+async function alertBadge(){
+  let st; try { st = await call("GET", "/alerts"); } catch { return; }
+  const b = $("#bNode"); if (!b) return;
+  b.querySelector(".alert-badge")?.remove();
+  const n = st.active.length;
+  if (!n) return;
+  const crit = st.active.some(a => a.severity === "critical");
+  b.insertAdjacentHTML("beforeend", `<span class="badge alert-badge" style="background:var(${crit ? "--bad" : "--warn"})" title="${esc(st.active.map(a => a.title).join("\n"))}">${n}</span>`);
+}
+
+// Health & alerts: what is wrong now, the checks, where alerts go
+async function loadHealth(){
+  const box = $("#ndHealth");
+  if (box.contains(document.activeElement)) return; // don't wipe what is being typed
+  const wasOpen = [...box.querySelectorAll("details")].map(d => d.open);
+  let st;
+  try { st = await call("GET", "/alerts"); } catch (e) { $("#ndHealth").innerHTML = `<div class="sub">${esc(e.message)}</div>`; return; }
+  const s = st.settings, col = {critical: "var(--bad)", warning: "var(--warn)", ok: "var(--ok)"};
+  const icon = {critical: "✘", warning: "!", ok: "✔"};
+  const act = st.active.length ? st.active.map(a => `<div class="toast" style="max-width:none;box-shadow:none;margin:6px 0;border-left-color:${col[a.severity]}">
+      <b>${esc(a.title)}</b><div class="sub" style="white-space:pre-wrap">${esc(a.detail)}</div><div class="sub">since ${esc(ndWhen(a.since))}</div></div>`).join("")
+    : `<div class="sub" style="color:var(--ok)">✔ Everything looks fine.</div>`;
+  const checks = st.checks.map(c => `<tr><td><b style="color:${col[c.status] || "inherit"}">${icon[c.status] || "·"}</b> ${esc(c.name)}</td><td class="sub" style="text-align:right">${esc(c.value)}</td></tr>`).join("");
+  const hist = st.history.slice(0, 15).map(e => `<tr><td class="sub" style="white-space:nowrap">${esc(ndWhen(e.time))}</td><td>${{raised: "▲", worse: "▲▲", resolved: "✔", action: "⏻", test: "✉"}[e.what] || ""} ${esc(e.title)}</td></tr>`).join("");
+  const none = !s.emails.length && !s.webhook && !s.ntfy;
+  $("#ndHealth").innerHTML = act +
+    (none ? `<div class="sub" style="color:var(--warn)">Alerts aren't sent anywhere yet: add an email, a webhook or an ntfy topic below.</div>` : "") +
+    `<details style="margin-top:6px"><summary class="sub">What is watched (${st.checks.length})</summary><table class="snaps"><tbody>${checks || '<tr><td class="sub">First check runs about a minute after start.</td></tr>'}</tbody></table></details>
+    <details style="margin-top:4px" ${none ? "open" : ""}><summary class="sub">Where alerts go, and power / heat protection</summary>
+      <label for="alEmails">Email addresses <span class="muted">(comma separated; needs email set up under Settings)</span></label><input id="alEmails" value="${esc(s.emails.join(", "))}" placeholder="ops@example.com">
+      <label for="alHook">Webhook <span class="muted">(Slack, Discord, Teams, Mattermost… gets a JSON POST)</span></label><input id="alHook" value="${esc(s.webhook || "")}" placeholder="https://hooks.slack.com/services/…">
+      <label for="alNtfy">Phone push via ntfy <span class="muted">(install the ntfy app, subscribe to the same topic)</span></label><input id="alNtfy" value="${esc(s.ntfy || "")}" placeholder="https://ntfy.sh/p8s-some-secret-name">
+      <div class="row" style="grid-template-columns:1fr 1fr 1fr">
+        <div><label for="alPoolW">Pool full: warn at %</label><input id="alPoolW" type="number" min="50" max="99" value="${s.pool_warn_pct}"></div>
+        <div><label for="alPoolC">Pool full: critical at %</label><input id="alPoolC" type="number" min="50" max="99" value="${s.pool_crit_pct}"></div>
+        <div><label for="alDisk">System disk: warn at %</label><input id="alDisk" type="number" min="50" max="99" value="${s.disk_warn_pct}"></div>
+        <div><label for="alMem">RAM: warn at %</label><input id="alMem" type="number" min="50" max="99" value="${s.mem_warn_pct}"></div>
+        <div><label for="alCPU">CPU temp: warn at °C</label><input id="alCPU" type="number" min="50" max="105" value="${s.cpu_temp_warn_c}"></div>
+        <div><label for="alDT">Disk temp: warn at °C</label><input id="alDT" type="number" min="35" max="80" value="${s.disk_temp_warn_c}"></div>
+      </div>
+      <label style="display:flex;gap:8px;align-items:center;font-weight:400;margin-top:8px"><input id="alPower" type="checkbox" style="width:auto" ${s.power_shutdown ? "checked" : ""}>
+        On a power cut, shut the VMs and containers down cleanly and power off before the battery runs out</label>
+      <div class="row" style="grid-template-columns:1fr 1fr 1fr">
+        <div><label for="alBat">…when the battery is at %</label><input id="alBat" type="number" min="1" max="50" value="${s.battery_shutdown_pct}"></div>
+        <div><label for="alUPS">UPS (NUT name)</label><input id="alUPS" value="${esc(s.ups || "")}" placeholder="ups@localhost (empty: laptop battery)"></div>
+        <div><label for="alHot">Overheat shutdown at °C</label><input id="alHot" type="number" min="0" max="110" value="${s.thermal_shutdown_c || 0}" title="0 = never"></div>
+      </div>
+      <div class="inline" style="margin-top:8px"><button class="btn" id="alTest">Send a test</button><span class="spacer"></span><button class="btn primary" id="alSave">Save</button></div>
+    </details>
+    ${hist ? `<details style="margin-top:4px"><summary class="sub">Recent alerts</summary><table class="snaps"><tbody>${hist}</tbody></table></details>` : ""}`;
+  if (wasOpen.length) box.querySelectorAll("details").forEach((d, i) => { if (i < wasOpen.length) d.open = wasOpen[i]; });
+  $("#alSave").onclick = async () => {
+    const body = {emails: $("#alEmails").value.split(/[,;\s]+/).filter(Boolean), webhook: $("#alHook").value.trim(), ntfy: $("#alNtfy").value.trim(),
+      pool_warn_pct: +$("#alPoolW").value, pool_crit_pct: +$("#alPoolC").value, disk_warn_pct: +$("#alDisk").value, mem_warn_pct: +$("#alMem").value,
+      cpu_temp_warn_c: +$("#alCPU").value, disk_temp_warn_c: +$("#alDT").value, power_shutdown: $("#alPower").checked,
+      battery_shutdown_pct: +$("#alBat").value, ups: $("#alUPS").value.trim(), thermal_shutdown_c: +$("#alHot").value};
+    try { await call("PUT", "/alerts/settings", body); toast("Alert settings saved"); loadHealth(); } catch (e) { toast(e.message, true); }
+  };
+  $("#alTest").onclick = async () => {
+    try { await call("POST", "/alerts/test"); toast("Test sent — check your email / chat / phone"); } catch (e) { toast(e.message, true); }
+  };
+  alertBadge();
 }
 
 async function openNode(){
@@ -66,7 +135,7 @@ async function loadNode(quiet){
     node = await r.json();
   } catch (e) { if (!quiet) toast(e.message, true); } // p8sd may be restarting (template added)
   if (node) renderNode();
-  loadMem();
+  loadMem(); loadHealth();
   if (taskOpen) await showTask(taskOpen, true);
   clearTimeout(nodeTimer);
   if ($("#dlgNode").open && (node?.running || !node)) nodeTimer = setTimeout(() => loadNode(true), 3000);
