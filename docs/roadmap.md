@@ -52,6 +52,9 @@ Each phase ships something usable on its own.
 - [x] Containers (LXC, unprivileged, ZFS clones, cgroup limits, cloud-init, browser terminal with xterm.js), Create CT, Manage, container templates on the Server page, `p8 ct` ([containers.md](containers.md))
 - [x] Container backups (freeze + ZFS snapshot + zstd, restore as new, daily schedule), per-container firewall,
   public IPs from pools, P8S Cloud plans and billing for containers
+- [x] VM and container pages like Proxmox: click one in the sidebar → toolbar (Start, Shutdown, Reboot, Force off,
+  Delete) and tabs Summary, Console (inside the page), Hardware, Network & firewall, Snapshots, Backups, Options;
+  task bar at the bottom (backups, restores, downloads, off-site copies, server tasks)
 - [x] Off-site backups: folder / S3-compatible / SSH targets, optional encryption, retention per place, bring back ([offsite-backups.md](offsite-backups.md))
 - [x] Speed: VM disks with an I/O thread, native AIO and multi-queue; vhost-net multi-queue NICs; host tuning
   (ZFS ARC capped at 10% of RAM, KSM, vhost_net, swappiness 10); faster, flicker-free dashboard polling

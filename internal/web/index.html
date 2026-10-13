@@ -142,6 +142,34 @@ dialog form.uform{padding:0}
 .menu-list{position:absolute;right:0;top:calc(100% + 4px);background:var(--panel);border:1px solid var(--line);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.14);padding:4px;z-index:6;min-width:150px;display:flex;flex-direction:column}
 .menu-list .btn{border:0;text-align:left;background:transparent}
 .menu-list .btn:hover{background:var(--bar)}
+
+/* ---------- VM / container pages (Manage shown in the content area, with tabs) and the task bar ---------- */
+dialog.as-page{position:fixed;inset:49px 0 34px 232px;width:auto;max-width:none;max-height:none;height:auto;margin:0;border:0;border-radius:0;
+  box-shadow:none;background:var(--bg);overflow:auto;z-index:5;padding:0}
+dialog.as-page>.dlg-body{max-width:1100px;padding:18px 22px}
+dialog.as-page .dlg-actions{justify-content:flex-start}
+dialog.as-page #mClose,dialog.as-page #cmClose{display:none}
+.page-crumb{font-size:13px;color:var(--muted);margin-bottom:6px}
+.page-crumb a{color:var(--muted);cursor:pointer;text-decoration:none}.page-crumb a:hover{color:var(--text)}
+.page-bar{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 4px}
+.tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin:12px 0 4px;overflow-x:auto}
+.tabs button{border:0;background:transparent;padding:8px 12px;font-size:13.5px;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap}
+.tabs button:hover{color:var(--text)}
+.tabs button.on{color:var(--text);border-bottom-color:var(--accent);font-weight:600}
+.console-frame iframe{width:100%;height:calc(100vh - 250px);min-height:360px;border:1px solid var(--line);border-radius:8px;background:#000}
+.kv{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px;margin:12px 0}
+.kv>div{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:9px 11px;min-width:0}
+.kv b{display:block;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;font-weight:600;margin-bottom:3px}
+.kv span{overflow-wrap:anywhere}
+#taskbar{position:fixed;left:0;right:0;bottom:0;z-index:6;background:var(--panel);border-top:1px solid var(--line);font-size:12.5px}
+#taskbar .tb-head{display:flex;align-items:center;gap:10px;height:33px;padding:0 14px;cursor:pointer;user-select:none}
+#taskbar .tb-head b{font-size:12px}
+#taskbar .tb-last{color:var(--muted);overflow:hidden;white-space:nowrap;text-overflow:ellipsis;flex:1}
+#taskbar .tb-list{max-height:34vh;overflow:auto;border-top:1px solid var(--line)}
+#taskbar table td{padding:5px 14px;white-space:nowrap;border-bottom:1px solid var(--line)}
+#taskbar table td.msg{white-space:normal;color:var(--muted);width:100%}
+.shell{padding-bottom:34px}
+@media (max-width:900px){ dialog.as-page{left:0} dialog.as-page>.dlg-body{padding:14px 16px} }
 #bSideToggle{display:none}
 .side-mobile{display:none}
 @media (max-width:900px){
@@ -157,6 +185,8 @@ dialog form.uform{padding:0}
   .side-mobile{display:block}
   #vmFilter{width:0;flex:1;min-width:60px}
   .shell>header .logo{white-space:nowrap}
+  .shell>header .lg{display:none}
+  .shell>header{gap:6px;padding:8px 10px}
 }
 @media (max-width:760px){
   header{padding:10px 16px} main{padding:16px} .panel-head{flex-wrap:wrap} #hVer{display:none}
@@ -240,19 +270,26 @@ dialog form.uform{padding:0}
   <h2 id="mTitle"></h2>
   <div class="sub" id="mSub"></div>
 
+  <div data-tab="summary">
   <h3>Usage <span class="sub" style="font-weight:400">last hour</span></h3>
   <div class="charts" id="mCharts"></div>
+  </div>
 
+  <div data-tab="options">
   <div id="mOwnerBox" hidden><h3>Owner</h3>
     <div class="inline"><select id="mOwner"></select><button class="btn" id="mOwnerGo">Give</button></div>
     <div class="hint">The owner sees and manages this VM. Admins always can.</div></div>
+  </div>
 
+  <div data-tab="summary">
   <div id="mPubBox" hidden><h3>Public IP</h3>
     <div class="sub" id="mPub"></div></div>
 
   <div id="mCD" hidden><h3>Installer CD</h3>
     <div class="inline"><span class="sub" id="mCDTxt"></span><span class="spacer"></span><button class="btn" id="mEject">Eject</button></div></div>
+  </div>
 
+  <div data-tab="resources">
   <h3>Resize</h3>
   <div class="sub" id="mRzHint"></div>
   <div class="row">
@@ -262,7 +299,9 @@ dialog form.uform{padding:0}
   </div>
   <div class="hint">Disks can only grow. The VM's filesystem grows to the new size when it boots.</div>
   <div class="inline"><span class="spacer"></span><button class="btn primary" id="mRzGo">Apply</button></div>
+  </div>
 
+  <div data-tab="network">
   <h3>Websites on the internet</h3>
   <div id="mSiteBox">
     <div class="sub" id="mSiteSub"></div>
@@ -277,7 +316,9 @@ dialog form.uform{padding:0}
   </div>
 
   <div id="mFwBox"></div>
+  </div>
 
+  <div data-tab="options">
   <h3>Change password</h3>
   <div class="sub" id="mPwHint">Sets a login password inside the VM (needs it running and fully booted).</div>
   <div class="inline">
@@ -285,7 +326,9 @@ dialog form.uform{padding:0}
     <input id="mPw" type="password" minlength="8" maxlength="128" placeholder="new password (8+)" autocomplete="new-password">
     <button class="btn" id="mPwGo">Set</button>
   </div>
+  </div>
 
+  <div data-tab="snapshots">
   <h3>Snapshots</h3>
   <div class="sub">A snapshot saves the VM's disk as it is right now, in an instant. Take one before
     risky changes; roll back to undo everything since.</div>
@@ -294,7 +337,9 @@ dialog form.uform{padding:0}
     <button class="btn" id="mSnapGo">Take snapshot</button>
   </div>
   <table class="snaps"><tbody id="mSnaps"></tbody></table>
+  </div>
 
+  <div data-tab="backups">
   <h3>Backups</h3>
   <div class="sub">A backup is a full copy of the disk in a file. It survives even if the VM is deleted, and works while the VM runs.</div>
   <div class="inline">
@@ -304,6 +349,9 @@ dialog form.uform{padding:0}
     <button class="btn" id="mBackupGo">Back up now</button>
   </div>
   <table class="snaps"><tbody id="mBackups"></tbody></table>
+  </div>
+
+  <div data-tab="console" class="page-only"><div class="console-frame" id="mConsole"></div></div>
 
   <div class="dlg-actions"><button class="btn" id="mClose">Close</button></div>
 </div></dialog>
@@ -688,8 +736,8 @@ function renderShell(){
     <span class="sub" id="hVer"></span>
     <span class="spacer"></span>
     <input id="vmFilter" type="search" placeholder="Search" aria-label="Search VMs and containers">
-    <button class="btn primary" id="bNew">+ Create VM</button>
-    <button class="btn primary" id="bNewCT" hidden>+ Create CT</button>
+    <button class="btn primary" id="bNew">+ <span class="lg">Create </span>VM</button>
+    <button class="btn primary" id="bNewCT" hidden>+ <span class="lg">Create </span>CT</button>
     <button class="btn" id="bMe" title="Your account: password, two-factor sign-in, keys"></button>
     <button class="btn" id="bOut">Sign out</button>
   </header>
@@ -853,7 +901,7 @@ document.addEventListener("click", async e => {
   if (cp) { try { await navigator.clipboard.writeText(cp.dataset.copy); toast("Copied: " + cp.dataset.copy); } catch { toast(cp.dataset.copy); } return; }
   const btn = e.target.closest("button[data-a]"); if (!btn) return;
   btn.closest("details.menu")?.removeAttribute("open");
-  const name = btn.closest("tr").dataset.n, a = btn.dataset.a;
+  const name = btn.closest("[data-n]").dataset.n, a = btn.dataset.a;
   if (a === "delete") return openDelete(name);
   if (a === "manage") return openManage(name);
   if (a === "console") { window.open(`/console?vm=${encodeURIComponent(name)}`, `p8s-console-${name}`); return; }
@@ -1018,7 +1066,7 @@ async function openManage(name){
     $("#mOwner").value = v.owner || "";
   }
   renderManage();
-  $("#dlgManage").showModal();
+  showPage($("#dlgManage"));
   $("#mBackups").innerHTML = `<tr><td class="muted">Loading…</td></tr>`;
   $("#mCharts").innerHTML = "";
   $("#mSites").innerHTML = ""; $("#mSiteName").value = ""; $("#mSitePort").value = 80; $("#mSiteTLS").checked = false;
@@ -1745,5 +1793,6 @@ document.addEventListener("DOMContentLoaded", render); // after cloud.js has loa
 <script src="/node.js"></script>
 <script src="/containers.js"></script>
 <script src="/offsite.js"></script>
+<script src="/pages.js"></script>
 </body>
 </html>

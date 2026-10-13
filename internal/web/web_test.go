@@ -43,3 +43,13 @@ func TestServesConsoleAndNoVNC(t *testing.T) {
 		}
 	}
 }
+
+func TestFraming(t *testing.T) {
+	for path, want := range map[string]string{"/": "frame-ancestors 'none'", "/console": "frame-ancestors 'self'", "/terminal": "frame-ancestors 'self'"} {
+		rec := httptest.NewRecorder()
+		Handler().ServeHTTP(rec, httptest.NewRequest("GET", path, nil))
+		if !strings.Contains(rec.Header().Get("Content-Security-Policy"), want) {
+			t.Errorf("%s: %s", path, rec.Header().Get("Content-Security-Policy"))
+		}
+	}
+}

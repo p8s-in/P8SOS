@@ -34,6 +34,7 @@ document.body.insertAdjacentHTML("beforeend", `
 <dialog id="dlgCTM" class="wide"><div class="dlg-body">
   <h2 id="cmTitle"></h2><div class="sub" id="cmSub"></div>
   <div class="inline" id="cmPower" style="flex-wrap:wrap"></div>
+  <div data-tab="resources">
   <h3>Resources</h3>
   <div class="row">
     <div><label for="cmCPU">CPUs</label><input id="cmCPU" type="number" min="1"></div>
@@ -43,9 +44,13 @@ document.body.insertAdjacentHTML("beforeend", `
   <label style="display:flex;gap:8px;align-items:center;font-weight:400"><input type="checkbox" id="cmAuto" style="width:auto"> Start with the server</label>
   <div class="hint">Changes apply at once, also while it runs. The disk can shrink only down to what's used.</div>
   <div class="dlg-actions" style="justify-content:flex-start"><button class="btn primary" id="cmSave">Save resources</button></div>
+  </div>
+  <div data-tab="snapshots">
   <h3>Snapshots</h3>
   <div class="inline"><input id="cmSnapName" placeholder="name (optional)" style="flex:1"><button class="btn" id="cmSnap">Take snapshot</button></div>
   <table class="snaps"><tbody id="cmSnaps"></tbody></table>
+  </div>
+  <div data-tab="backups">
   <h3>Backups</h3>
   <div class="sub">A full copy of the disk in the backup folder (works while it runs). Comes back as a new container.</div>
   <div class="inline">
@@ -53,7 +58,11 @@ document.body.insertAdjacentHTML("beforeend", `
     <input id="cmKeep" type="number" min="1" max="365" value="7" style="flex:0 0 64px" aria-label="Backups to keep">
     <span class="spacer"></span><button class="btn" id="cmBackup">Back up now</button></div>
   <table class="snaps"><tbody id="cmBackups"></tbody></table>
+  </div>
+  <div data-tab="network">
   <div id="cmFwBox"></div>
+  </div>
+  <div data-tab="options">
   <h3>SSH</h3>
   <div class="inline"><span class="sub" style="flex:1" id="cmSSHHint">The SSH server is installed by itself on the first start (needs internet). If SSH doesn't answer, install or repair it here.</span>
     <button class="btn" id="cmSSH">Install / repair SSH</button></div>
@@ -61,6 +70,9 @@ document.body.insertAdjacentHTML("beforeend", `
   <h3>Password</h3>
   <div class="inline"><input id="cmUser" value="root" style="flex:0 0 120px" aria-label="User"><input id="cmPw" type="password" minlength="8" placeholder="new password" autocomplete="new-password" style="flex:1"><button class="btn" id="cmPwGo">Set</button></div>
   <div id="cmOwnerBox" hidden><h3>Owner</h3><div class="inline"><select id="cmOwner" style="flex:1"></select><button class="btn" id="cmOwnerGo">Change</button></div></div>
+  </div>
+  <div data-tab="summary" class="page-only"><div id="cmSummary"></div></div>
+  <div data-tab="console" class="page-only"><div class="console-frame" id="cmConsole"></div></div>
   <div class="dlg-actions"><button class="btn danger" id="cmDel">Delete container…</button><span class="spacer"></span><button class="btn" id="cmClose">Close</button></div>
 </div></dialog>`);
 
@@ -252,7 +264,7 @@ async function openCTManage(name){
   $("#cmSSHOut").hidden = true;
   if (!ctTpls.length) { try { ctTpls = (await call("GET", "/ct-templates")).templates; } catch {} }
   renderCTManage();
-  $("#dlgCTM").showModal();
+  showPage($("#dlgCTM"));
   loadCTSnaps(); loadCTBackups(); ctFw.load();
   $("#cmOwnerBox").hidden = !(isAdmin() && me?.accounts_on);
   if (!$("#cmOwnerBox").hidden) {

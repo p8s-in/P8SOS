@@ -27,6 +27,8 @@ var (
 	containersJS []byte
 	//go:embed offsite.js
 	offsiteJS []byte
+	//go:embed pages.js
+	pagesJS []byte
 	//go:embed terminal.html
 	terminalPage []byte
 	//go:embed xterm.min.js
@@ -54,6 +56,7 @@ var assets = map[string]asset{
 	"/node.js":           {nodeJS, "text/javascript; charset=utf-8", "no-cache"},
 	"/containers.js":     {containersJS, "text/javascript; charset=utf-8", "no-cache"},
 	"/offsite.js":        {offsiteJS, "text/javascript; charset=utf-8", "no-cache"},
+	"/pages.js":          {pagesJS, "text/javascript; charset=utf-8", "no-cache"},
 	"/terminal":          {terminalPage, "text/html; charset=utf-8", "no-cache"},
 	"/xterm.min.js":      {xtermJS, "text/javascript; charset=utf-8", "public, max-age=86400"},
 	"/xterm-fit.min.js":  {xtermFitJS, "text/javascript; charset=utf-8", "public, max-age=86400"},
@@ -78,7 +81,14 @@ func Handler() http.Handler {
 		h.Set("Content-Type", a.ctype)
 		h.Set("Cache-Control", a.cache)
 		h.Set("X-Content-Type-Options", "nosniff")
-		h.Set("X-Frame-Options", "DENY")
+		// the console pages may be shown inside the dashboard (same origin only)
+		frame := "'none'"
+		if r.URL.Path == "/console" || r.URL.Path == "/terminal" {
+			frame = "'self'"
+			h.Set("X-Frame-Options", "SAMEORIGIN")
+		} else {
+			h.Set("X-Frame-Options", "DENY")
+		}
 		h.Set("Referrer-Policy", "no-referrer")
 		// connect-src lists the WebSocket origin explicitly for older browsers
 		// where 'self' doesn't cover ws:/wss:.
@@ -91,7 +101,7 @@ func Handler() http.Handler {
 		h.Set("Content-Security-Policy",
 			"default-src 'self'; script-src 'self' 'unsafe-inline' "+rzp+"; style-src 'unsafe-inline'; img-src 'self' data: https:; "+
 				"connect-src 'self'"+ws+" https://api.razorpay.com https://lumberjack.razorpay.com; "+
-				"frame-src https://api.razorpay.com "+rzp+"; frame-ancestors 'none'; form-action 'self'")
+				"frame-src 'self' https://api.razorpay.com "+rzp+"; frame-ancestors "+frame+"; form-action 'self'")
 		_, _ = w.Write(a.body)
 	})
 }
