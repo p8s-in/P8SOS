@@ -506,8 +506,9 @@ func (s *Server) createVM(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	generated := false
 	if req.ISO == "" { // installer VMs set their passwords in the installer
-		s.autoPassword(r, &req.RootPassword)
+		generated = s.autoPassword(r, &req.RootPassword)
 	}
 	v, err := s.VMs.Create(r.Context(), req)
 	if err != nil {
@@ -521,8 +522,10 @@ func (s *Server) createVM(w http.ResponseWriter, r *http.Request) {
 		if err := s.Creds.Set("vm", v.Name, l); err != nil && s.Log != nil {
 			s.Log.Error("store vm login", "vm", v.Name, "err", err)
 		}
-		lv := viewOf(l, true)
-		login = &lv
+		if generated { // a password the caller typed is never sent back
+			lv := viewOf(l, true)
+			login = &lv
+		}
 	}
 	w.Header().Set("Location", "/api/v1/vms/"+v.Name)
 	writeJSON(w, http.StatusCreated, struct {

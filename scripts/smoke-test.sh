@@ -320,9 +320,12 @@ if [[ -n $bid ]]; then
 fi
 
 step "6d. install from ISO"
-ISOF=$(mktemp -d)/p8s-smoke.iso
-printf '#cloud-config\n' > "${ISOF%.iso}.ud"; printf 'instance-id: x\n' > "${ISOF%.iso}.md"
-if cloud-localds "$ISOF" "${ISOF%.iso}.ud" "${ISOF%.iso}.md" 2>/dev/null; then
+ISOD=$(mktemp -d); ISOF=$ISOD/p8s-smoke.iso
+# a tiny BOOTABLE CD (El Torito, no-emulation): P8S refuses ISOs that can't start a computer
+mkdir -p "$ISOD/cd"; head -c 2048 /dev/zero > "$ISOD/cd/boot.img"; printf '\x55\xaa' | dd of="$ISOD/cd/boot.img" bs=1 seek=510 conv=notrunc 2>/dev/null
+mkiso=""; for t in genisoimage mkisofs xorrisofs; do command -v $t >/dev/null && { mkiso=$t; break; }; done
+[[ -z $mkiso ]] && command -v xorriso >/dev/null && mkiso="xorriso -as mkisofs"
+if [[ -n $mkiso ]] && $mkiso -quiet -o "$ISOF" -V P8STEST -b boot.img -no-emul-boot -boot-load-size 4 "$ISOD/cd" 2>/dev/null; then
   code=$(curl -ks -o /dev/null -w '%{http_code}' -X PUT -H "Authorization: Bearer $TOK" -T "$ISOF" "$URL/isos/p8s-smoke.iso")
   [[ $code == 201 ]] && ok "ISO upload -> 201" || bad "ISO upload -> $code"
 fi
@@ -467,6 +470,18 @@ if jq -e '.networks | index("lan")' <<<"$BODY" >/dev/null 2>&1; then
     bad "LAN VM got no IP in ${IP_TIMEOUT}s (does your router hand out DHCP? p8 bootlog $LAN_NAME)"
   fi
   if [[ ${KEEP:-0} != 1 ]]; then api DELETE "/vms/$LAN_NAME"; expect "delete LAN VM" 204; fi
+  # VLAN: a VM on tagged VLAN 4000 (no DHCP there, so only the wiring is checked)
+  if [[ $(jq -r '.vlans // false' <<<"$(curl -ks -H "Authorization: Bearer $TOK" "$URL/host")") == true ]]; then
+    VN=${NAME}v
+    api POST /vms '{"name":"'"$VN"'","template":"'"$TEMPLATE"'","network":"lan","vlan":4000,"vcpus":1,"memory_mib":512}'
+    expect "create VM on VLAN 4000" 201
+    [[ $(jq -r .vlan <<<"$BODY") == 4000 ]] && ok "API reports VLAN 4000" || bad "vlan: $BODY"
+    br=$(sudo virsh domiflist "p8s-$VN" 2>/dev/null | awk 'NR>2 && $3 {print $3; exit}')
+    [[ $br == br0v4000 ]] && ok "attached to br0v4000" || bad "attached to '$br', want br0v4000"
+    ip -d link show p8sv4000 2>/dev/null | grep -q "vlan protocol 802.1Q id 4000" && ok "p8sv4000 tags VLAN 4000 on the uplink" || bad "p8sv4000 missing"
+    sudo grep -q " 4000 br0v4000" /var/lib/p8s/vlans.list 2>/dev/null && ok "VLAN kept for the next boot" || bad "vlans.list has no VLAN 4000"
+    api DELETE "/vms/$VN"; expect "delete VLAN VM" 204
+  fi
 else
   echo "  skipped: home network not set up on this host"
 fi

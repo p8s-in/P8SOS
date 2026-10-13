@@ -137,7 +137,11 @@ func (s *Service) createFromISO(ctx context.Context, r CreateRequest) (VM, error
 	if err != nil {
 		return VM{}, err
 	}
-	bridge := s.bridgeFor(r.Network)
+	bridge, err := s.bridgeVLAN(ctx, r.Network, r.VLAN)
+	if err != nil {
+		s.logErr("rollback disk", s.Disks.DestroyDisk(bg, dom))
+		return VM{}, err
+	}
 	release := func() {}
 	if r.IPPool != "" { // the address is typed into the installer (shown in Manage)
 		l, rel, err := s.lease(r.IPPool, r.Name, "")

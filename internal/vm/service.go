@@ -55,6 +55,8 @@ type Service struct {
 	Templates []config.Template
 	Bridge    string // NAT bridge (network "nat", the default)
 	LANBridge string // bridge onto the home network (network "lan"); empty = not set up
+	// VLANs makes the bridges of tagged VLANs on the home network; nil = no VLANs.
+	VLANs VLANs
 	// BridgeUp reports whether a host bridge exists; nil means "assume yes".
 	BridgeUp func(name string) bool
 	// TPMReady reports whether the software TPM (swtpm) is installed; nil = yes.
@@ -117,9 +119,10 @@ type VM struct {
 	MemoryMiB  int    `json:"memory_mib"`
 	DiskGB     int    `json:"disk_gb"`
 	MAC        string `json:"mac"`
-	Network    string `json:"network"`   // "nat" (private, behind the host) or "lan" (home network)
-	IP         string `json:"ip"`        // first IPv4; empty while booting or stopped
-	Autostart  bool   `json:"autostart"` // starts when the host boots
+	Network    string `json:"network"`        // "nat" (private, behind the host) or "lan" (home network)
+	VLAN       int    `json:"vlan,omitempty"` // tagged VLAN on the home network (0 = none)
+	IP         string `json:"ip"`             // first IPv4; empty while booting or stopped
+	Autostart  bool   `json:"autostart"`      // starts when the host boots
 	UUID       string `json:"uuid"`
 	CreatedAt  string `json:"created_at"`
 	Owner      string `json:"owner,omitempty"` // P8S user it belongs to; empty = admins only
@@ -137,6 +140,7 @@ type CreateRequest struct {
 	SSHKeys   []string `json:"ssh_keys"`
 	UserData  string   `json:"user_data,omitempty"`
 	Network   string   `json:"network,omitempty"` // "nat" (default), "lan", or "public" (with ip_pool)
+	VLAN      int      `json:"vlan,omitempty"`    // with "lan": put it on this tagged VLAN (1-4094)
 	// IPPool gives the VM a public address from this pool (static, via cloud-init).
 	IPPool string `json:"ip_pool,omitempty"`
 	// Plan is a priced size (P8S Cloud); the API fills in CPUs/RAM/disk from it.
@@ -182,6 +186,44 @@ func (s *Service) Networks() []string {
 	return []string{NetNAT}
 }
 
+// VLANs makes the bridge of a tagged VLAN (vlan.Manager).
+type VLANs interface {
+	Bridge(ctx context.Context, vid int) (string, error)
+	VLANOf(bridge string) int
+}
+
+func (s *Service) vlanOf(bridge string) int {
+	if s.VLANs == nil {
+		return 0
+	}
+	return s.VLANs.VLANOf(bridge)
+}
+
+// bridgeVLAN is the bridge for a network and VLAN (made if needed).
+func (s *Service) bridgeVLAN(ctx context.Context, network string, vid int) (string, error) {
+	if vid > 0 && network == NetLAN {
+		if s.VLANs == nil {
+			return "", fmt.Errorf("%w: VLANs aren't available on this host", ErrInvalid)
+		}
+		return s.VLANs.Bridge(ctx, vid)
+	}
+	return s.bridgeFor(network), nil
+}
+
+func (s *Service) checkVLAN(network string, vid int) string {
+	switch {
+	case vid == 0:
+		return ""
+	case vid < 1 || vid > 4094:
+		return "vlan must be 1-4094"
+	case network != NetLAN:
+		return `vlan needs network "lan" (the home / datacenter network)`
+	case s.VLANs == nil:
+		return "VLANs aren't available on this host"
+	}
+	return ""
+}
+
 func (s *Service) bridgeFor(network string) string {
 	if network == NetLAN {
 		return s.LANBridge
@@ -190,7 +232,7 @@ func (s *Service) bridgeFor(network string) string {
 }
 
 func (s *Service) networkOf(bridge string) string {
-	if s.LANBridge != "" && bridge == s.LANBridge {
+	if s.LANBridge != "" && bridge == s.LANBridge || s.vlanOf(bridge) > 0 {
 		return NetLAN
 	}
 	return NetNAT
@@ -258,6 +300,9 @@ func (s *Service) validate(r *CreateRequest) (config.Template, error) {
 	case NetPublic:
 	default:
 		errs = append(errs, `network must be "nat", "lan" or "public"`)
+	}
+	if msg := s.checkVLAN(r.Network, r.VLAN); msg != "" {
+		errs = append(errs, msg)
 	}
 	if r.RootPassword != "" {
 		if len(r.RootPassword) < 8 || len(r.RootPassword) > 128 || strings.ContainsAny(r.RootPassword, "\n\r\x00") {
@@ -331,7 +376,12 @@ func (s *Service) Create(ctx context.Context, r CreateRequest) (VM, error) {
 		ci.RootPasswordHash = cloudinit.HashPassword(r.RootPassword)
 		ci.RootSSHPassword = r.SSHPasswordAuth == nil || *r.SSHPasswordAuth
 	}
-	mac, bridge := virt.RandomMAC(), s.bridgeFor(r.Network)
+	mac := virt.RandomMAC()
+	bridge, err := s.bridgeVLAN(ctx, r.Network, r.VLAN)
+	if err != nil {
+		rollback()
+		return VM{}, err
+	}
 	if r.IPPool != "" {
 		l, release, err := s.lease(r.IPPool, r.Name, "")
 		if err != nil {
@@ -402,7 +452,7 @@ func (s *Service) get(ctx context.Context, dom string) (VM, error) {
 	v := VM{
 		Name: strings.TrimPrefix(spec.Name, Prefix), State: st, Template: spec.Template,
 		VCPUs: spec.VCPUs, MemoryMiB: spec.MemoryMiB, DiskGB: spec.DiskGB,
-		MAC: spec.MAC, Network: s.networkOf(spec.Bridge), UUID: spec.UUID, CreatedAt: spec.CreatedAt,
+		MAC: spec.MAC, Network: s.networkOf(spec.Bridge), VLAN: s.vlanOf(spec.Bridge), UUID: spec.UUID, CreatedAt: spec.CreatedAt,
 		Owner: spec.Owner,
 		User:  "debian",
 	}

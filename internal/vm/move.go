@@ -44,7 +44,8 @@ type MoveHeader struct {
 	CreatedAt string             `json:"created_at"`
 	Owner     string             `json:"owner,omitempty"`
 	Network   string             `json:"network"` // nat | lan
-	Seed      bool               `json:"seed"`    // had a cloud-init disk
+	VLAN      int                `json:"vlan,omitempty"`
+	Seed      bool               `json:"seed"` // had a cloud-init disk
 	Autostart bool               `json:"autostart"`
 	Firewall  *firewall.Settings `json:"firewall,omitempty"`
 	Schedule  *Schedule          `json:"schedule,omitempty"`
@@ -119,6 +120,9 @@ func (s *Service) moveHeader(ctx context.Context, name string) (MoveHeader, erro
 		CreatedAt: sp.CreatedAt, Owner: sp.Owner, Network: NetNAT, Seed: sp.SeedISO != "", Autostart: auto}
 	if s.LANBridge != "" && sp.Bridge == s.LANBridge {
 		h.Network = NetLAN
+	}
+	if v := s.vlanOf(sp.Bridge); v > 0 {
+		h.Network, h.VLAN = NetLAN, v
 	}
 	if fw, err := s.GetFirewall(ctx, name); err == nil && (fw.Enabled || len(fw.Rules) > 0) {
 		h.Firewall = &fw
@@ -227,6 +231,10 @@ func (s *Service) defineMoved(ctx context.Context, h MoveHeader, disk string, un
 	if network == NetLAN && !s.LANAvailable() {
 		network, note = NetNAT, "; this server has no home network, so it is on the private network (new IP)"
 	}
+	bridge, err := s.bridgeVLAN(ctx, network, h.VLAN)
+	if err != nil {
+		bridge, note = s.bridgeFor(NetNAT), fmt.Sprintf("; VLAN %d isn't available here (%v), so it is on the private network", h.VLAN, err)
+	}
 	seed := ""
 	if h.Seed {
 		// the same instance-id: cloud-init sees the same machine and changes nothing
@@ -237,7 +245,7 @@ func (s *Service) defineMoved(ctx context.Context, h MoveHeader, disk string, un
 		*undo = append(*undo, func() { s.logErr("rollback seed", s.Seeds.Remove(dom)) })
 	}
 	spec := virt.Spec{Name: dom, UUID: h.UUID, VCPUs: h.VCPUs, MemoryMiB: h.MemoryMiB, DiskGB: h.DiskGB, DiskPath: disk, SeedISO: seed,
-		Bridge: s.bridgeFor(network), MAC: h.MAC, OSType: h.OSType, Template: h.Template, CreatedAt: h.CreatedAt, Owner: h.Owner,
+		Bridge: bridge, MAC: h.MAC, OSType: h.OSType, Template: h.Template, CreatedAt: h.CreatedAt, Owner: h.Owner,
 		DiskBus: h.DiskBus, NICModel: h.NICModel, Firmware: h.Firmware}
 	if spec.UUID == "" {
 		spec.UUID = newUUID()

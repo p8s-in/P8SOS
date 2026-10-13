@@ -92,7 +92,7 @@ function pageInfo(dlg){
       kv("SSH", typeof sshLine === "function" ? sshLine(v.name, v.user).replace(/^<div[^>]*>|<\/div>$/g, "") || "" : "") +
       kv("System", esc(os) + (tpl ? " · " + esc(tpl) : "")) +
       kv("Size", `${v.vcpus} CPU · ${gb(v.memory_mib)} RAM · ${v.disk_gb} GB disk`) +
-      kv("Network", v.public ? "public IP" : v.network === "lan" ? "home network" : "private (NAT)") +
+      kv("Network", v.public ? "public IP" : v.network === "lan" ? (v.vlan ? "home network, VLAN " + v.vlan : "home network") : "private (NAT)") +
       kv("Server", v.node ? esc(v.node) + (v.node_id ? ` <span class="sub">${esc(v.node_id)}</span>` : "") : "") +
       kv("Owner", isAdmin() ? esc(v.owner || "admins only") : "") +
       kv("Created", v.created_at ? when(v.created_at) : "") +

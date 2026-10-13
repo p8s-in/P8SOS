@@ -129,6 +129,12 @@ hardware**. Work through it on the new machine; tick each line and note problems
 - [ ] (only with a real public IP) Built-in VPN: on, Open the port on my router (or forward UDP 51830 by hand), add a phone, import the .conf, dashboard at https://10.251.0.1:8006 on mobile data; Remove cuts it off
 - [ ] Reboot: the VPN comes back (p8s-vpn interface), devices reconnect
 
+## 12. VLANs (needs a managed switch, or a router that does VLANs)
+
+- [ ] `p8 test` section 8 passes the VLAN lines (VLAN 4000 wiring)
+- [ ] Switch port = trunk with VLAN 20 tagged; VM on VLAN 20 gets an address from VLAN 20's DHCP and reaches its gateway
+- [ ] Reboot the server: the VLAN VM comes back on VLAN 20 (p8s-vlans.service ran before libvirt)
+
 ## Add new features here as they are built
 
 (Every new feature adds its own lines above before it counts as done.)

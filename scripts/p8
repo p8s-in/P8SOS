@@ -17,7 +17,7 @@ usage() {
 p8 — manage P8S OS virtual machines
 
   p8 list                          show all VMs
-  p8 create NAME [CPUS] [RAM_MB] [DISK_GB] [--os TEMPLATE] [--lan] [--root-password]
+  p8 create NAME [CPUS] [RAM_MB] [DISK_GB] [--os TEMPLATE] [--lan] [--vlan ID] [--root-password]
                                    make a VM (default 1 CPU, 1024 MB, template size, debian-13)
                                    --os: which OS, see  p8 templates
   p8 create NAME CPUS RAM_MB DISK_GB --iso FILE.iso [--windows]
@@ -201,14 +201,15 @@ case $cmd in
     table <<<"$body" ;;
 
   create|new)
-    net=nat; args=(); askpw=0; os=debian-13; next_os=0; iso=""; next_iso=0; ostype=linux; owner=""; next_for=0; ippool=""; next_ip=0
+    net=nat; args=(); askpw=0; os=debian-13; next_os=0; iso=""; next_iso=0; ostype=linux; owner=""; next_for=0; ippool=""; next_ip=0; vlan=""; next_vlan=0
     for a in "$@"; do
       if (( next_for )); then owner=$a; next_for=0; continue; fi
       if (( next_ip )); then ippool=$a; next_ip=0; continue; fi
       if (( next_os )); then os=$a; next_os=0; continue; fi
       if (( next_iso )); then iso=$a; next_iso=0; continue; fi
+      if (( next_vlan )); then vlan=$a; next_vlan=0; continue; fi
       case $a in
-        --lan) net=lan ;; --nat) net=nat ;; --root-password|--password) askpw=1 ;;
+        --lan) net=lan ;; --nat) net=nat ;; --vlan) net=lan; next_vlan=1 ;; --vlan=*) net=lan; vlan=${a#*=} ;; --root-password|--password) askpw=1 ;;
         --os|--template) next_os=1 ;; --os=*|--template=*) os=${a#*=} ;;
         --iso) next_iso=1 ;; --iso=*) iso=${a#*=} ;; --windows) ostype=windows ;;
         --for) next_for=1 ;; --for=*) owner=${a#*=} ;;
@@ -237,6 +238,7 @@ case $cmd in
       '{name:$n, template:$os, vcpus:($c|tonumber), memory_mib:($m|tonumber), disk_gb:($d|tonumber), ssh_keys:$k, network:$net}')
     [[ -n $owner ]] && req=$(jq -c --arg o "$owner" '. + {owner: $o}' <<<"$req")
     [[ -n $ippool ]] && req=$(jq -c --arg p "$ippool" 'del(.network) + {ip_pool: $p}' <<<"$req")
+    [[ -n ${vlan:-} ]] && req=$(jq -c --argjson v "$vlan" '. + {vlan: $v}' <<<"$req")
     if (( askpw )); then
       pw=$(ask_password "root password for $1") || exit 1
       req=$(jq -c --arg p "$pw" '. + {root_password: $p, ssh_password_auth: true}' <<<"$req")

@@ -135,7 +135,7 @@ func (s *Server) createCT(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	s.autoPassword(r, &req.RootPassword)
+	generated := s.autoPassword(r, &req.RootPassword)
 	c, err := s.CTs.Create(r.Context(), req)
 	if err != nil && c.Name == "" {
 		s.fail(w, r, err)
@@ -147,8 +147,10 @@ func (s *Server) createCT(w http.ResponseWriter, r *http.Request) {
 		if err := s.Creds.Set("ct", c.Name, l); err != nil && s.Log != nil {
 			s.Log.Error("store container login", "ct", c.Name, "err", err)
 		}
-		lv := viewOf(l, true)
-		login = &lv
+		if generated { // a password the caller typed is never sent back
+			lv := viewOf(l, true)
+			login = &lv
+		}
 	}
 	if c.PublicIP != "" {
 		s.reapplyFirewall(r.Context())

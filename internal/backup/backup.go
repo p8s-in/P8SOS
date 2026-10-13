@@ -31,6 +31,7 @@ type Meta struct {
 	Template    string `json:"template"`
 	User        string `json:"user"`
 	Network     string `json:"network"`
+	VLAN        int    `json:"vlan,omitempty"`
 	OSType      string `json:"os_type,omitempty"`
 	Owner       string `json:"owner,omitempty"`     // P8S user the VM belonged to
 	Pool        string `json:"ip_pool,omitempty"`   // public IP pool, if it had an address

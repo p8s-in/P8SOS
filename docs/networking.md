@@ -76,3 +76,20 @@ ssh -p 2205 debian@192.168.0.106        # server address + the guest's port
 - Turn off with `"ssh_ports": false` in `/etc/p8s/p8sd.json`, or move with `"ssh_port_base": 30001`.
 - Login: cloud VMs use their image user (`debian`, `ubuntu`, …) with your SSH key, or `root` with the password
   you set; containers use `root`.
+
+## VLANs (tagged networks)
+
+For offices and datacenters where the switch carries several VLANs on the
+server's cable. Needs the home network (`sudo p8 lan-setup`) first.
+
+- Create VM → Network **Home network** → **VLAN** 1-4094 (or `p8 create web1 --vlan 100`).
+  The VM sees only that VLAN, untagged, and gets its address from that VLAN's DHCP/router.
+- The switch port the server is plugged into must carry the VLAN **tagged**
+  (trunk). The untagged network stays the normal home network.
+- How it works: for VLAN 100 P8S makes `p8sv100` (a VLAN device on the
+  network port behind br0) and a bridge `br0v100`; the server itself gets no
+  address there. The list is in `/var/lib/p8s/vlans.list` and
+  `p8s-vlans.service` makes them again at boot, before the VMs start.
+- Moves, backups and HA keep the VLAN; a server without the VLAN puts the
+  VM on the private network and says so.
+- Per-VM firewall rules work the same on VLANs.

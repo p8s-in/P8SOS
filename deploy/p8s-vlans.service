@@ -1,0 +1,12 @@
+[Unit]
+Description=P8S OS: VLAN bridges for VMs
+After=networking.service network.target
+Before=libvirtd.service virtqemud.service p8sd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/share/p8s/vlans.sh
+
+[Install]
+WantedBy=multi-user.target

@@ -169,6 +169,8 @@ install -m 0755 "$REPO/scripts/make-ct-template.sh" /usr/local/share/p8s/make-ct
 install -m 0755 "$REPO/scripts/tune.sh" /usr/local/share/p8s/tune.sh
 install -m 0755 "$REPO/scripts/netcheck.sh" /usr/local/share/p8s/netcheck.sh
 install -m 0755 "$REPO/scripts/tailscale.sh" /usr/local/share/p8s/tailscale.sh
+install -m 0755 "$REPO/scripts/vlans.sh" /usr/local/share/p8s/vlans.sh
+install -m 0644 "$REPO/deploy/p8s-vlans.service" /etc/systemd/system/p8s-vlans.service
 # guest internet: repair at boot and after every firewall reload (which can wipe libvirt's NAT rules)
 install -m 0644 "$REPO/deploy/p8s-net.service" /etc/systemd/system/p8s-net.service
 install -d -m 0755 /etc/systemd/system/nftables.service.d
@@ -243,6 +245,7 @@ ok "p8sd running: $(curl -kfs https://127.0.0.1:8006/api/v1/health)"
 
 # Guest internet: check and repair now (VMs keep running), and at every boot
 systemctl enable p8s-net.service >/dev/null 2>&1 || true
+systemctl enable p8s-vlans.service >/dev/null 2>&1 || true
 bash /usr/local/share/p8s/netcheck.sh --repair | sed 's/^/  /' || true
 
 # Host tuning: ZFS cache limit, KSM, vhost_net, low swappiness

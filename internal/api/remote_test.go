@@ -11,8 +11,10 @@ import (
 func TestRemoteAccess(t *testing.T) {
 	m := newMultiUserCfg(t, func(s *Server) {
 		s.Remote = &Remote{VPN: &vpn.Manager{Dir: t.TempDir()},
-			PublicIP:   func(context.Context) (string, error) { return "49.37.1.2", nil },
-			FindRouter: func(context.Context) (vpn.Router, error) { return vpn.Router{Found: true, Name: "JioFiber", ExternalIP: "100.80.1.1", CGNAT: true}, nil }}
+			PublicIP: func(context.Context) (string, error) { return "49.37.1.2", nil },
+			FindRouter: func(context.Context) (vpn.Router, error) {
+				return vpn.Router{Found: true, Name: "JioFiber", ExternalIP: "100.80.1.1", CGNAT: true}, nil
+			}}
 	})
 	v := m.req("GET", "/api/v1/remote", secret, "", 200)
 	if v["public_ip"] != "49.37.1.2" || v["router"].(map[string]any)["cgnat"] != true {

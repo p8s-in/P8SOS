@@ -61,6 +61,7 @@ import (
 	"p8sos/internal/updates"
 	"p8sos/internal/users"
 	"p8sos/internal/virt"
+	"p8sos/internal/vlan"
 	"p8sos/internal/vm"
 	"p8sos/internal/vpn"
 	"p8sos/internal/web"
@@ -134,6 +135,9 @@ func serve(args []string) error {
 		Firewall: func(ctx context.Context, vms []firewall.VM) error {
 			return firewall.Apply(ctx, run, vms)
 		},
+	}
+	if cfg.LANBridge != "" { // tagged VLANs on the home / datacenter network
+		svc.VLANs = &vlan.Manager{Run: run, LANBridge: cfg.LANBridge, ListFile: filepath.Join(cfg.DataDir, "vlans.list")}
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -339,6 +343,7 @@ func serve(args []string) error {
 		Host: func(ctx context.Context) any {
 			in := hostinfo.Collect(ctx, run, cfg.VMDataset)
 			in.Networks = svc.Networks()
+			in.VLANs = svc.VLANs != nil && svc.LANAvailable()
 			return in
 		},
 		UI:       web.Handler(),

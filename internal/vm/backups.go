@@ -104,7 +104,7 @@ func (s *Service) runBackup(ctx context.Context, name string, keep int, p jobs.P
 
 	p("copying the disk")
 	m, err := s.Backups.Save(ctx, dom, snap, Backup{
-		ID: id, VM: name, Template: v.Template, User: v.User, Network: v.Network, OSType: v.OSType,
+		ID: id, VM: name, Template: v.Template, User: v.User, Network: v.Network, VLAN: v.VLAN, OSType: v.OSType,
 		VCPUs: v.VCPUs, MemoryMiB: v.MemoryMiB, DiskGB: v.DiskGB, Consistent: consistent, Owner: v.Owner,
 		Pool: poolOf(v), PublicIP: publicIPOf(v),
 	})
@@ -270,7 +270,11 @@ func (s *Service) restoreAsNew(ctx context.Context, name string, m Backup, p job
 	if network == NetLAN && !s.LANAvailable() || network == NetPublic {
 		network = NetNAT
 	}
-	mac, note, bridge := virt.RandomMAC(), "", s.bridgeFor(network)
+	mac, note := virt.RandomMAC(), ""
+	bridge, err := s.bridgeVLAN(ctx, network, m.VLAN)
+	if err != nil {
+		bridge, note = s.bridgeFor(NetNAT), fmt.Sprintf(" (VLAN %d isn't available, so it is on the private network)", m.VLAN)
+	}
 	// A deleted VM recreated under its own name gets its public address back
 	// (or another one from the pool); copies under a new name stay private.
 	if m.Pool != "" && name == m.VM && s.Pools != nil {
