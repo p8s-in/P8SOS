@@ -59,3 +59,19 @@ func TestTopProcs(t *testing.T) {
 		t.Fatalf("%+v", got)
 	}
 }
+
+func TestCgroupMem(t *testing.T) {
+	d := t.TempDir()
+	os.MkdirAll(filepath.Join(d, "cg"), 0o755)
+	os.WriteFile(filepath.Join(d, "cg/memory.current"), []byte("524288000\n"), 0o644)
+	os.WriteFile(filepath.Join(d, "cg/memory.stat"), []byte("anon 52428800\nfile 471859200\ninactive_file 419430400\n"), 0o644)
+	old := Root
+	Root = d
+	defer func() { Root = old }()
+	if got := CgroupMemMiB("cg"); got != 100 {
+		t.Fatal(got)
+	}
+	if CgroupMemMiB("nope") != 0 {
+		t.Fatal("missing cgroup")
+	}
+}

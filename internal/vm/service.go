@@ -92,25 +92,28 @@ type Service struct {
 type Limits struct{ MaxVCPUs, MaxMemoryMiB, MaxDiskGB int }
 
 type VM struct {
-	Name      string     `json:"name"`
-	Node      string     `json:"node,omitempty"`    // server it runs on (clusters)
-	NodeID    string     `json:"node_id,omitempty"` // n1 = master
-	State     virt.State `json:"state"`
-	Template  string     `json:"template"`
-	User      string     `json:"user"`                  // login user with the SSH keys (debian, ubuntu, rocky, ...)
-	ISO       string     `json:"iso,omitempty"`         // installer CD still in the drive
-	OSType    string     `json:"os_type,omitempty"`     // "windows" (BIOS) / "windows11" (UEFI, Secure Boot, TPM)
-	Drivers   string     `json:"drivers_iso,omitempty"` // drivers CD (virtio-win) still in the drive
-	VCPUs     int        `json:"vcpus"`
-	MemoryMiB int        `json:"memory_mib"`
-	DiskGB    int        `json:"disk_gb"`
-	MAC       string     `json:"mac"`
-	Network   string     `json:"network"`   // "nat" (private, behind the host) or "lan" (home network)
-	IP        string     `json:"ip"`        // first IPv4; empty while booting or stopped
-	Autostart bool       `json:"autostart"` // starts when the host boots
-	UUID      string     `json:"uuid"`
-	CreatedAt string     `json:"created_at"`
-	Owner     string     `json:"owner,omitempty"` // P8S user it belongs to; empty = admins only
+	Name   string     `json:"name"`
+	Node   string     `json:"node,omitempty"`    // server it runs on (clusters)
+	NodeID string     `json:"node_id,omitempty"` // n1 = master
+	State  virt.State `json:"state"`
+	// MemUsedMiB is the RAM in use inside the guest (filled by the API from
+	// the balloon statistics; 0 = not known yet).
+	MemUsedMiB int    `json:"mem_used_mib,omitempty"`
+	Template   string `json:"template"`
+	User       string `json:"user"`                  // login user with the SSH keys (debian, ubuntu, rocky, ...)
+	ISO        string `json:"iso,omitempty"`         // installer CD still in the drive
+	OSType     string `json:"os_type,omitempty"`     // "windows" (BIOS) / "windows11" (UEFI, Secure Boot, TPM)
+	Drivers    string `json:"drivers_iso,omitempty"` // drivers CD (virtio-win) still in the drive
+	VCPUs      int    `json:"vcpus"`
+	MemoryMiB  int    `json:"memory_mib"`
+	DiskGB     int    `json:"disk_gb"`
+	MAC        string `json:"mac"`
+	Network    string `json:"network"`   // "nat" (private, behind the host) or "lan" (home network)
+	IP         string `json:"ip"`        // first IPv4; empty while booting or stopped
+	Autostart  bool   `json:"autostart"` // starts when the host boots
+	UUID       string `json:"uuid"`
+	CreatedAt  string `json:"created_at"`
+	Owner      string `json:"owner,omitempty"` // P8S user it belongs to; empty = admins only
 	// Public is the VM's address from an IP pool (network "public").
 	Public *ippool.Lease `json:"public,omitempty"`
 }

@@ -355,6 +355,11 @@ func (s *Server) listVMs(w http.ResponseWriter, r *http.Request) {
 	p, out := who(r), []vm.VM{}
 	for _, v := range vms {
 		if mayUse(p, v.Owner) {
+			if v.MemUsedMiB == 0 && s.Metrics != nil && v.State == "running" {
+				if pts := s.Metrics.VM(v.Name); len(pts) > 0 {
+					v.MemUsedMiB = pts[len(pts)-1].GuestMiB
+				}
+			}
 			out = append(out, v)
 		}
 	}

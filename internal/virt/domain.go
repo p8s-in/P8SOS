@@ -47,8 +47,9 @@ type Spec struct {
 // definitions are re-rendered at start-up (vm.UpgradeDomains); they pick up
 // the change at their next power-on.
 //
-//	1 VGA display; 2 I/O thread + multi-queue virtio disk and network
-const DefVersion = 2
+//	1 VGA display; 2 I/O thread + multi-queue virtio disk and network;
+//	3 memory balloon with free page reporting + guest memory statistics
+const DefVersion = 3
 
 // VideoModel is the display adapter every P8S VM gets.
 const VideoModel = "vga"
@@ -197,6 +198,21 @@ type devicesXML struct {
 			Value string `xml:",chardata"`
 		} `xml:"backend"`
 	} `xml:"rng"`
+	// Balloon: the guest hands RAM it frees back to the host (free page
+	// reporting, like Proxmox's ballooning) and reports how much it really
+	// uses (stats every 10 s, read by `virsh domstats`).
+	Balloon *balloonXML `xml:"memballoon"`
+}
+
+type balloonXML struct {
+	Model             string        `xml:"model,attr"`
+	Autodeflate       string        `xml:"autodeflate,attr,omitempty"`
+	FreePageReporting string        `xml:"freePageReporting,attr,omitempty"`
+	Stats             *balloonStats `xml:"stats"`
+}
+
+type balloonStats struct {
+	Period int `xml:"period,attr"`
 }
 
 type diskXML struct {
@@ -408,6 +424,7 @@ func DomainXML(s Spec) ([]byte, error) {
 	d.Devices.Graphics.Autoport, d.Devices.Graphics.Listen = "yes", "127.0.0.1"
 	d.Devices.RNG.Model = "virtio"
 	d.Devices.RNG.Backend.Model, d.Devices.RNG.Backend.Value = "random", "/dev/urandom"
+	d.Devices.Balloon = &balloonXML{Model: "virtio", Autodeflate: "on", FreePageReporting: "on", Stats: &balloonStats{Period: 10}}
 
 	return xml.MarshalIndent(d, "", "  ")
 }

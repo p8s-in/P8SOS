@@ -181,3 +181,13 @@ func TestFastIO(t *testing.T) {
 		}
 	}
 }
+
+func TestBalloon(t *testing.T) {
+	b, err := DomainXML(Spec{Name: "b", VCPUs: 1, MemoryMiB: 512, DiskPath: "/dev/zvol/x", Bridge: "virbr0", MAC: "52:54:00:00:00:01"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `<memballoon model="virtio" autodeflate="on" freePageReporting="on">`) || !strings.Contains(string(b), `<stats period="10"></stats>`) {
+		t.Fatal(string(b))
+	}
+}

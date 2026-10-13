@@ -809,6 +809,8 @@ function renderShell(){
 }
 
 const gb = mib => (mib / 1024).toFixed(mib % 1024 ? 1 : 0) + " GB";
+// RAM column: "120 MB of 0.5 GB" while running (in use now, caches not counted), else the size given
+const ramCell = (used, size) => used ? `<span title="in use now (disk cache not counted) / RAM given">${used < 1024 ? used + " MB" : (used / 1024).toFixed(1) + " GB"} of ${gb(size)}</span>` : gb(size);
 // where the RAM goes; ZFS cache and file cache are given back when VMs need RAM
 function memSub(h){
   const m = h.mem || {};
@@ -899,7 +901,7 @@ function renderVMs(){
       <td data-k="State"><span class="state ${esc(v.state)}"><span class="dot"></span>${b ? "working…" : esc(v.state)}</span></td>
       <td data-k="Name"><b>${esc(v.name)}</b><div class="sub">${esc(templates.find(t => t.name === v.template)?.label || v.template.replace(/^iso:/, "from "))}${v.os_type === "windows11" ? " · Windows (UEFI, TPM)" : v.os_type === "windows" ? " · Windows" : ""}${v.network === "lan" ? " · home network" : ""}${v.public ? " · public IP" : ""}${v.iso ? " · CD in drive" : ""}${v.node_id && v.node_id !== "n1" ? " · on " + esc(v.node) : ""}${isAdmin() && v.owner ? ` · <b>${esc(v.owner)}</b>` : ""}</div></td>
       <td data-k="IP">${ip}${sshLine(v.name, v.user)}</td>
-      <td data-k="CPU">${v.vcpus}</td><td data-k="RAM">${gb(v.memory_mib)}</td><td data-k="Disk">${v.disk_gb} GB</td>
+      <td data-k="CPU">${v.vcpus}</td><td data-k="RAM">${ramCell(v.mem_used_mib, v.memory_mib)}</td><td data-k="Disk">${v.disk_gb} GB</td>
       <td data-k="Autostart">${v.autostart ? "yes" : "no"}</td>
       <td><div class="actions">${main}<button class="btn" data-a="manage" ${dis} title="Settings, snapshots, backups, firewall">Manage</button>${more}</div></td></tr>`;
   }).join("");
@@ -1372,8 +1374,10 @@ async function loadVMCharts(){
   if (!box.children.length) box.innerHTML = '<div class="chart"></div>'.repeat(4);
   const [c1, c2, c3, c4] = box.children, t = pts.map(p => p.t), s1 = css("--series-1"), s2 = css("--series-2");
   lineChart(c1, {title: "CPU", times: t, fmt: fmtPct, max: 100, series: [{name: "CPU", color: s1, values: pts.map(p => p.cpu)}]});
-  lineChart(c2, {title: "Memory (host RAM used)", times: t, fmt: fmtMiB, max: Math.max(v.memory_mib * 1.1, ...pts.map(p => p.mem_mib)),
-    series: [{name: "Memory", color: s1, values: pts.map(p => p.mem_mib)}]});
+  const guest = pts.some(p => p.guest_mem_mib);
+  lineChart(c2, {title: "Memory", times: t, fmt: fmtMiB, max: Math.max(v.memory_mib * 1.1, ...pts.map(p => p.mem_mib)),
+    series: [{name: "Host RAM taken", color: s1, values: pts.map(p => p.mem_mib)}].concat(guest
+      ? [{name: "Used inside the VM", color: s2, values: pts.map(p => p.guest_mem_mib || 0)}] : [])});
   lineChart(c3, {title: "Disk", times: t, fmt: fmtRate, series: [
     {name: "Read", color: s1, values: pts.map(p => p.disk_read_bps)}, {name: "Write", color: s2, values: pts.map(p => p.disk_write_bps)}]});
   lineChart(c4, {title: "Network", times: t, fmt: fmtRate, series: [

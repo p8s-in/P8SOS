@@ -175,3 +175,17 @@ func TopProcs(n int) []Proc {
 func ARCLimits() (maxMiB, minMiB int) {
 	return int(readInt("sys/module/zfs/parameters/zfs_arc_max") >> 20), int(readInt("sys/module/zfs/parameters/zfs_arc_min") >> 20)
 }
+
+// CgroupMemMiB is a cgroup's memory in use without its reclaimable file
+// cache (memory.current - inactive_file), like `docker stats` shows.
+func CgroupMemMiB(dir string) int {
+	cur := readInt(filepath.Join(dir, "memory.current"))
+	if cur == 0 {
+		return 0
+	}
+	st := kv(filepath.Join(dir, "memory.stat"), " ")
+	if in := st["inactive_file"]; in < cur {
+		cur -= in
+	}
+	return int(cur >> 20)
+}

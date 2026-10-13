@@ -17,10 +17,11 @@ import (
 
 // Point is one VM sample. Rates are averages since the previous sample.
 type Point struct {
-	T         int64   `json:"t"`             // unix seconds
-	CPU       float64 `json:"cpu"`           // % of the VM's own vCPUs (0-100)
-	MemMiB    int     `json:"mem_mib"`       // host RAM the VM uses
-	DiskRead  float64 `json:"disk_read_bps"` // bytes per second
+	T         int64   `json:"t"`                       // unix seconds
+	CPU       float64 `json:"cpu"`                     // % of the VM's own vCPUs (0-100)
+	MemMiB    int     `json:"mem_mib"`                 // host RAM the VM uses
+	GuestMiB  int     `json:"guest_mem_mib,omitempty"` // RAM in use inside the guest (balloon stats; caches not counted)
+	DiskRead  float64 `json:"disk_read_bps"`           // bytes per second
 	DiskWrite float64 `json:"disk_write_bps"`
 	NetRx     float64 `json:"net_rx_bps"`
 	NetTx     float64 `json:"net_tx_bps"`
@@ -39,6 +40,7 @@ type Raw struct {
 	CPUTimeNs                          uint64
 	VCPUs                              int
 	RSSKiB                             uint64
+	BalloonAvailKiB, BalloonUsableKiB  uint64
 	RdBytes, WrBytes, RxBytes, TxBytes uint64
 }
 
@@ -74,6 +76,10 @@ func ParseDomStats(out string) map[string]Raw {
 			r.VCPUs = int(n)
 		case k == "balloon.rss":
 			r.RSSKiB = n
+		case k == "balloon.available":
+			r.BalloonAvailKiB = n
+		case k == "balloon.usable":
+			r.BalloonUsableKiB = n
 		case strings.HasPrefix(k, "block.") && strings.HasSuffix(k, ".rd.bytes"):
 			r.RdBytes += n
 		case strings.HasPrefix(k, "block.") && strings.HasSuffix(k, ".wr.bytes"):
@@ -178,7 +184,7 @@ func (c *Collector) Sample(ctx context.Context) {
 		vcpus := max(r.VCPUs, 1)
 		cpu := rate(r.CPUTimeNs, p.CPUTimeNs, secs) / 1e9 / float64(vcpus) * 100
 		c.vms[name] = append(c.vms[name], Point{
-			T: now.Unix(), CPU: round1(min(cpu, 100)), MemMiB: int(r.RSSKiB / 1024),
+			T: now.Unix(), CPU: round1(min(cpu, 100)), MemMiB: int(r.RSSKiB / 1024), GuestMiB: guestMiB(r),
 			DiskRead: rate(r.RdBytes, p.RdBytes, secs), DiskWrite: rate(r.WrBytes, p.WrBytes, secs),
 			NetRx: rate(r.RxBytes, p.RxBytes, secs), NetTx: rate(r.TxBytes, p.TxBytes, secs),
 		})
@@ -264,4 +270,13 @@ func parseCPULine(line string) (busy, total uint64, ok bool) {
 func ProcMem() (usedMiB, totalMiB int) {
 	m := hostinfo.ReadMem()
 	return m.UsedMiB, m.TotalMiB
+}
+
+// guestMiB is the guest's own used memory: what it has minus what it could
+// still use without swapping (its page cache counts as usable).
+func guestMiB(r Raw) int {
+	if r.BalloonAvailKiB == 0 || r.BalloonUsableKiB > r.BalloonAvailKiB {
+		return 0
+	}
+	return int((r.BalloonAvailKiB - r.BalloonUsableKiB) / 1024)
 }

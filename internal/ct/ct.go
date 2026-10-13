@@ -15,6 +15,7 @@ package ct
 
 import (
 	"p8sos/internal/backup"
+	"p8sos/internal/hostinfo"
 	"p8sos/internal/ippool"
 	"p8sos/internal/jobs"
 
@@ -49,6 +50,7 @@ type Container struct {
 	Template  string `json:"template"`
 	VCPUs     int    `json:"vcpus"`
 	MemoryMiB int    `json:"memory_mib"`
+	MemUsed   int    `json:"mem_used_mib,omitempty"` // in use now, file cache not counted
 	DiskGB    int    `json:"disk_gb"`
 	DiskUsed  int64  `json:"disk_used,omitempty"` // bytes
 	IP        string `json:"ip,omitempty"`
@@ -570,6 +572,7 @@ func (s *Service) view(ctx context.Context, name string, m meta) Container {
 		DiskGB: m.DiskGB, MAC: m.MAC, Network: m.Network, Owner: m.Owner, Autostart: m.Autostart, Created: m.Created, User: "root"}
 	if c.State == "running" {
 		c.IP = s.ip(ctx, name)
+		c.MemUsed = hostinfo.CgroupMemMiB("sys/fs/cgroup/system.slice/" + unit(name) + ".service")
 	}
 	if l, ok := s.lease(name); ok && m.Network == vm.NetPublic {
 		c.PublicIP = l.IP
