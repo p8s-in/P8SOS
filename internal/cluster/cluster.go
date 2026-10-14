@@ -102,6 +102,9 @@ type Status struct {
 	Error    string   `json:"error,omitempty"`
 	Capacity Capacity `json:"capacity"`
 	Tunnel   string   `json:"tunnel,omitempty"` // last WireGuard handshake (empty: tunnel never came up)
+	// Connecting: just joined (or back) and not answering yet — not an error worth showing
+	Connecting bool `json:"connecting,omitempty"`
+	misses     int  // polls in a row without an answer
 }
 
 // Capacity is what a node has and what its VMs already take.
@@ -247,6 +250,16 @@ func (m *Manager) SelfName() string {
 	if m.st.Self.Name != "" {
 		return m.st.Self.Name
 	}
+	return m.hostname()
+}
+
+// hostname is this server's name now (Hostname, or the OS's).
+func (m *Manager) hostname() string {
+	if m.Hostname != nil {
+		if h := m.Hostname(); h != "" {
+			return h
+		}
+	}
 	h, _ := os.Hostname()
 	return h
 }
@@ -351,7 +364,7 @@ func (m *Manager) JoinCode(ctx context.Context, masterURL, endpoint string) (cod
 			m.mu.Unlock()
 			return "", "", err
 		}
-		host, _ := os.Hostname()
+		host := m.hostname()
 		m.st = State{Role: "master", WGPriv: priv,
 			Self: Node{ID: "n1", Name: host, WGIP: Subnet + ".1", WGPub: pub, CertSHA: pin, Joined: m.now().UTC().Format(time.RFC3339)}}
 	}
@@ -432,6 +445,17 @@ func (m *Manager) Register(ctx context.Context, r RegisterRequest) (RegisterRepl
 	if idx < 0 {
 		m.mu.Unlock()
 		return RegisterReply{}, fmt.Errorf("%w: the join code is wrong, used or expired (make a new one on the master)", ErrInvalid)
+	}
+	// two servers with one name are impossible to tell apart (dashboard, logs, HA)
+	if r.Name == m.st.Self.Name {
+		m.mu.Unlock()
+		return RegisterReply{}, fmt.Errorf("%w: this server and the master are both called %q; rename this one first (Server page → Rename, or p8 rename NEWNAME), then join again", ErrInvalid, r.Name)
+	}
+	for _, n := range m.st.Nodes {
+		if n.Name == r.Name && n.CertSHA != r.CertSHA && n.WGPub != r.WGPub {
+			m.mu.Unlock()
+			return RegisterReply{}, fmt.Errorf("%w: the cluster already has a server called %q (%s); rename this one first (Server page → Rename, or p8 rename NEWNAME), then join again", ErrInvalid, r.Name, n.ID)
+		}
 	}
 	codeEndpoint := m.st.Joins[idx].Endpoint
 	m.st.Joins = append(m.st.Joins[:idx], m.st.Joins[idx+1:]...)
@@ -569,7 +593,19 @@ func (m *Manager) Rename(ctx context.Context, id, name string) error {
 
 // Join registers this server with a master (`p8 join URL CODE`).
 func (m *Manager) Join(ctx context.Context, masterURL, code string) (RegisterReply, error) {
-	secret, pin, ok := strings.Cut(strings.TrimSpace(code), ".")
+	code = strings.TrimSpace(code)
+	if f := strings.Fields(code); len(f) == 4 && f[0] == "p8" && f[1] == "join" { // the whole command pasted
+		if masterURL == "" {
+			masterURL = f[2]
+		}
+		code = f[3]
+	}
+	if strings.HasPrefix(code, "p8s_") && !strings.Contains(code, ".") {
+		return RegisterReply{}, fmt.Errorf("%w: that is a server's setup code / API token (p8s_…), not a join code. "+
+			"Easiest: on the master press Add next to this server, then accept the invitation here. "+
+			"Or on the master: Cluster → + Add a server → Not listed? → it shows a command \"p8 join https://… CODE\"; the CODE part goes here", ErrInvalid)
+	}
+	secret, pin, ok := strings.Cut(code, ".")
 	if !ok || len(secret) < 20 || len(pin) < 16 {
 		return RegisterReply{}, fmt.Errorf("%w: the join code looks incomplete; copy the whole line from the master", ErrInvalid)
 	}
@@ -596,7 +632,7 @@ func (m *Manager) Join(ctx context.Context, masterURL, code string) (RegisterRep
 		return RegisterReply{}, err
 	}
 	token := randToken(30)
-	host, _ := os.Hostname()
+	host := m.hostname()
 	req := RegisterRequest{Code: code, Name: host, WGPub: pub, Token: token, CertSHA: myPin, APIPort: m.port()}
 	if m.Run == nil && m.TestURL != "" {
 		req.APIURL = m.TestURL

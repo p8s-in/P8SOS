@@ -389,9 +389,9 @@ func (u *menus) ask() error {
 	}
 	// name
 	if a.Hostname == "" {
-		a.Hostname = "p8s-node"
+		a.Hostname = installer.DefaultHostname()
 	}
-	if a.Hostname, err = wt("--inputbox", "Server name (like p8s-node, or a full name like p8s1.example.com):", "10", "70", a.Hostname); err != nil {
+	if a.Hostname, err = wt("--inputbox", "Server name — give every server its own (like p8s-1, p8s-office, or a full name like p8s1.example.com):", "10", "74", a.Hostname); err != nil {
 		return err
 	}
 	if err := u.askNetwork(); err != nil {

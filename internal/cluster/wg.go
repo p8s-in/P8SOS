@@ -110,7 +110,9 @@ func (m *Manager) applyWG(ctx context.Context) error {
 	steps := [][]string{
 		{"wg", "setconf", Iface, conf},
 		{"ip", "address", "replace", st.Self.WGIP + "/24", "dev", Iface},
-		{"ip", "link", "set", Iface, "mtu", "1380", "up"},
+		// 1280: the smallest MTU every path carries (Wi-Fi, VirtualBox bridges, PPPoE, VPNs);
+		// with 1380, small packets (ping) passed but full-size HTTPS packets got lost on some paths
+		{"ip", "link", "set", Iface, "mtu", "1280", "up"},
 	}
 	for _, s := range steps {
 		if _, err := m.Run.Run(ctx, s[0], s[1:]...); err != nil {

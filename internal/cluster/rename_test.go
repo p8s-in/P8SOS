@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // Renames show up by themselves, the master can rename a worker, and a
@@ -72,5 +73,46 @@ func TestRenameAndRemoveTellsWorker(t *testing.T) {
 	}
 	if len(m.Workers()) != 0 {
 		t.Fatal("still listed")
+	}
+}
+
+// One missed answer is no outage; three are. A server that just joined is "connecting".
+func TestPollDebounce(t *testing.T) {
+	up := true
+	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !up {
+			http.Error(w, "down", 500)
+			return
+		}
+		json.NewEncoder(w).Encode(Capacity{CPUs: 2})
+	}))
+	defer worker.Close()
+	now := time.Now()
+	m := &Manager{Dir: t.TempDir(), HTTP: func(string) *http.Client { return worker.Client() }, Now: func() time.Time { return now }}
+	m.loaded, m.status = true, map[string]*Status{}
+	m.st = State{Role: "master", Self: Node{ID: "n1", Name: "a"},
+		Nodes: []Node{{ID: "n2", Name: "b", API: worker.URL, Token: "t", Joined: now.UTC().Format(time.RFC3339)}}}
+	ctx := context.Background()
+	up = false
+	m.Poll(ctx)
+	if s := m.NodeStatus("n2"); s.Online || !s.Connecting || s.Error != "" {
+		t.Fatalf("just joined: %+v", s)
+	}
+	up = true
+	m.Poll(ctx)
+	if s := m.NodeStatus("n2"); !s.Online || s.Connecting {
+		t.Fatalf("answering: %+v", s)
+	}
+	now = now.Add(10 * time.Minute)
+	up = false
+	for i := 1; i < offlineAfter; i++ {
+		m.Poll(ctx)
+		if !m.NodeStatus("n2").Online {
+			t.Fatalf("offline after %d miss(es)", i)
+		}
+	}
+	m.Poll(ctx)
+	if s := m.NodeStatus("n2"); s.Online || s.Error == "" {
+		t.Fatalf("still online after %d misses: %+v", offlineAfter, s)
 	}
 }

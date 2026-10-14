@@ -685,14 +685,26 @@ func (m *Manager) Poll(ctx context.Context) {
 			s.Tunnel = t.UTC().Format(time.RFC3339)
 		}
 		if err != nil {
-			if s.Online && m.Log != nil {
-				m.Log.Warn("cluster server offline", "id", n.ID, "name", n.Name, "err", err)
+			s.misses++
+			joined, _ := time.Parse(time.RFC3339, n.Joined)
+			young := !joined.IsZero() && m.now().Sub(joined) < 2*time.Minute
+			switch {
+			case young || (s.Seen == "" && s.misses < offlineAfter):
+				// just joined: the tunnel and its p8sd are still starting
+				s.Connecting, s.Online, s.Error = true, false, ""
+			case s.misses < offlineAfter && s.Online:
+				// one slow or lost answer is no outage: stay online, ask again
+			default:
+				if s.Online && m.Log != nil {
+					m.Log.Warn("cluster server offline", "id", n.ID, "name", n.Name, "err", err)
+				}
+				s.Online, s.Connecting, s.Error = false, false, friendlyErr(n, err)
 			}
-			s.Online, s.Error = false, err.Error()
 		} else {
 			if !s.Online && m.Log != nil {
 				m.Log.Info("cluster server online", "id", n.ID, "name", n.Name)
 			}
+			s.misses, s.Connecting = 0, false
 			s.Online, s.Error, s.Capacity, s.Seen = true, "", c, m.now().UTC().Format(time.RFC3339)
 		}
 		m.mu.Unlock()
@@ -701,6 +713,25 @@ func (m *Manager) Poll(ctx context.Context) {
 		}
 	}
 	m.pushBook(ctx) // every server keeps a copy, so one can take over
+}
+
+// offlineAfter: polls in a row without an answer before a server counts as offline (~45 s).
+const offlineAfter = 3
+
+// friendlyErr says in plain words why a server doesn't answer.
+func friendlyErr(n Node, err error) string {
+	e := err.Error()
+	switch {
+	case strings.Contains(e, "deadline exceeded") || strings.Contains(e, "timeout") || strings.Contains(e, "no route"):
+		return n.Name + " doesn't answer through the cluster tunnel (switched off, asleep, or its network is down)"
+	case strings.Contains(e, "connection refused"):
+		return n.Name + " is reachable but P8S OS isn't running on it (sudo systemctl start p8sd there)"
+	case strings.Contains(e, "certificate"):
+		return n.Name + " answered with a different certificate: it was reinstalled? Remove it and add it again"
+	case strings.Contains(e, "401") || strings.Contains(e, "unauthorized") || strings.Contains(e, "token"):
+		return n.Name + " no longer accepts this master's key: it left the cluster? Remove it and add it again"
+	}
+	return e
 }
 
 // refreshNames keeps the names right after a server was renamed: this

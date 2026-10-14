@@ -59,7 +59,11 @@ func newClusterNode(t *testing.T, mem int, local cluster.Local, owned *ownedVMs)
 	dir := t.TempDir()
 	sum := sha256.Sum256([]byte(secret))
 	n := &clusterNode{mem: mem, used: owned}
-	n.m = &cluster.Manager{Dir: filepath.Join(dir, "cluster")}
+	name := "srv-" + filepath.Base(dir) // every test server its own name (as on real networks)
+	if len(name) > 40 {
+		name = name[:40]
+	}
+	n.m = &cluster.Manager{Dir: filepath.Join(dir, "cluster"), Hostname: func() string { return strings.ToLower(name) }}
 	n.vms = &cluster.VMs{Local: local, M: n.m}
 	n.s = &Server{VMs: n.vms, Version: "test", Tokens: []config.Token{{Name: "host", SHA256: hex.EncodeToString(sum[:])}},
 		Users: &users.Store{Path: filepath.Join(dir, "users.json")}, Sessions: &users.Sessions{}, Limiter: &users.Limiter{Max: 3},

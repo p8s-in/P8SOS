@@ -282,6 +282,11 @@ hardware**. Work through it on the new machine; tick each line and note problems
 - [ ] Remove a worker that is switched off: removed on the master; when it is back its dashboard still says worker → **Leave the cluster** there works
 - [ ] Add the removed server again with + Add a server: joins as before
 - [ ] `p8 rename`, `p8 cluster rename n2 NAME`, `p8 cluster remove n2` work
+- [ ] Two servers with the same name: the master's Find servers list says "same name… rename it first" (no Add); a join command is refused with the same advice
+- [ ] Fresh installs get different default names (p8s-xxxx)
+- [ ] Just after Accept the worker shows "connecting…", then online — never a red error
+- [ ] Pull the worker's cable for 20 s: it stays online; for 60 s+: offline with a plain-words reason; plug in: online again
+- [ ] Send an invitation, restart p8sd on the new server (`sudo systemctl restart p8sd`): the invitation is still there
 
 ## Add new features here as they are built
 

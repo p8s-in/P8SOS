@@ -46,7 +46,7 @@ func TestMasterTunnel(t *testing.T) {
 		t.Fatalf("state %+v", st)
 	}
 	calls := strings.Join(run.Calls, "\n")
-	for _, want := range []string{"ip link add p8s-wg type wireguard", "wg setconf p8s-wg ", "ip address replace 10.250.0.1/24 dev p8s-wg", "ip link set p8s-wg mtu 1380 up"} {
+	for _, want := range []string{"ip link add p8s-wg type wireguard", "wg setconf p8s-wg ", "ip address replace 10.250.0.1/24 dev p8s-wg", "ip link set p8s-wg mtu 1280 up"} {
 		if !strings.Contains(calls, want) {
 			t.Fatalf("missing %q in\n%s", want, calls)
 		}
@@ -58,6 +58,12 @@ func TestMasterTunnel(t *testing.T) {
 	}
 	if _, err := m.Register(ctx, RegisterRequest{Code: code, Name: "lap3", WGPub: pub, Token: strings.Repeat("t", 30), CertSHA: strings.Repeat("b", 64)}); err == nil {
 		t.Fatal("join code used twice")
+	}
+	// a second server with the same name is refused (rename it first)
+	codeN, _, _ := m.JoinCode(ctx, "https://192.168.0.106:8006", "")
+	_, pubN, _ := wgKeys()
+	if _, err := m.Register(ctx, RegisterRequest{Code: codeN, Name: "lap2", WGPub: pubN, Token: strings.Repeat("t", 30), CertSHA: strings.Repeat("d", 64)}); err == nil || !strings.Contains(err.Error(), "rename") {
+		t.Fatalf("same name accepted: %v", err)
 	}
 	conf, _ := os.ReadFile(filepath.Join(m.Dir, "wg.conf"))
 	if !strings.Contains(string(conf), "ListenPort = 51820") || !strings.Contains(string(conf), "PublicKey = "+pub) ||

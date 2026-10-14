@@ -9,10 +9,10 @@ let cluster = null; // GET /cluster (admins)
 document.querySelector("#dlgNode #ndTasks").closest("table").previousElementSibling // the "Tasks" heading
   .insertAdjacentHTML("beforebegin", `<div id="clBox">
   <h3>Cluster</h3>
+  <div id="clInvites"></div>
   <div class="sub" id="clSub"></div>
   <table class="snaps"><tbody id="clNodes"></tbody></table>
   <div class="inline" id="clActions" style="flex-wrap:wrap"></div>
-  <div id="clInvites"></div>
   <div id="clAddBox" hidden style="border:1px solid var(--line);border-radius:8px;padding:10px;margin-top:8px">
     <nav class="tabs" style="margin-top:0"><button type="button" data-cltab="lan" class="on">On this network</button><button type="button" data-cltab="wan">Another network</button></nav>
     <div data-clp="lan">
@@ -43,7 +43,8 @@ document.querySelector("#dlgNode #ndTasks").closest("table").previousElementSibl
   </div>
   <div id="clJoinBox" hidden style="border:1px solid var(--line);border-radius:8px;padding:10px;margin-top:8px">
     <label for="clURL">Master address</label><input id="clURL" placeholder="https://192.168.0.106:8006">
-    <label for="clCode">Join code</label><input id="clCode" placeholder="from the master: Server → Cluster → Add a server">
+    <label for="clCode">Join code</label><input id="clCode" placeholder="the code from the master's command (or paste the whole p8 join … line)">
+    <div class="hint">Easier: on the master press <b>Add</b> next to this server and accept the invitation that appears here — no code needed. The setup code (p8s_…) is not a join code.</div>
     <div class="inline"><span class="spacer"></span><button class="btn primary" id="clJoinGo" type="button">Join</button></div>
   </div>
 </div>`);
@@ -51,6 +52,7 @@ document.querySelector("#dlgNode #ndTasks").closest("table").previousElementSibl
 const clGB = mib => (mib / 1024).toFixed(mib >= 10240 ? 0 : 1);
 async function loadCluster(){
   try { cluster = await call("GET", "/cluster"); } catch { cluster = null; $("#clBox").hidden = true; return; }
+  if (!cluster.role) loadInvites(); // an invitation may be waiting: show it right away
   $("#clBox").hidden = false;
   const role = cluster.role, nodes = cluster.nodes || [];
   $("#clSub").innerHTML = !role
@@ -74,12 +76,19 @@ async function loadCluster(){
     return `<tr><td><b>${esc(n.name)}</b> <span class="sub">${esc(n.id)} · ${esc(n.role)}${n.self ? " · this server" : ""} · ${esc(n.wg_ip)}</span>
       <div class="sub">${room}</div>${!n.self && cluster.role === "master" ? `<div class="sub">${n.status?.tunnel ? "tunnel up · last handshake " + esc(new Date(n.status.tunnel).toLocaleTimeString()) : `<span style="color:var(--warn)">tunnel not up yet</span> — on another network, check UDP 51820 forwarding to this server`}</div>` : ""}
       ${!on && n.status?.error ? `<div class="sub" style="color:var(--bad)">${esc(n.status.error)}</div>` : ""}</td>
-      <td style="white-space:nowrap"><span class="state ${on ? "running" : "stopped"}"><span class="dot"></span>${on ? "online" : "offline"}</span></td>
+      <td style="white-space:nowrap">${on ? `<span class="state running"><span class="dot"></span>online</span>`
+        : n.status?.connecting ? `<span class="state" title="Just joined: its tunnel and P8S OS are starting"><span class="dot" style="background:var(--warn)"></span>connecting…</span>`
+        : `<span class="state stopped"><span class="dot"></span>offline</span>`}</td>
       <td style="text-align:right;white-space:nowrap">${role === "master" && !n.self ? `<button class="btn" data-clsh="${esc(n.id)}" data-name="${esc(n.name)}" type="button" title="Root shell of ${esc(n.name)}">&gt;_ Shell</button> <button class="btn" data-clren="${esc(n.id)}" data-name="${esc(n.name)}" type="button" title="Give ${esc(n.name)} a new name">Rename</button> <button class="btn danger" data-clrm="${esc(n.id)}" data-name="${esc(n.name)}" type="button">Remove</button>` : ""}</td></tr>`;
   }).join("");
   $("#clActions").innerHTML = role === "worker"
     ? `<span class="spacer"></span><button class="btn danger" id="clLeave" type="button">Leave the cluster</button>`
-    : `<span class="spacer"></span>${role ? "" : `<button class="btn" id="clJoinOpen" type="button">Join a master…</button>`}<button class="btn primary" id="clAddOpen" type="button">+ Add a server</button>`;
+    : `<span class="spacer"></span>${role ? (nodes.length <= 1 ? `<button class="btn" id="clAlone" type="button" title="No other servers yet: undo the cluster set-up">Stand alone again</button>` : "")
+        : `<button class="btn" id="clJoinOpen" type="button">Join a master…</button>`}<button class="btn primary" id="clAddOpen" type="button">+ Add a server</button>`;
+  if ($("#clAlone")) $("#clAlone").onclick = async () => {
+    if (!confirm("This server is a master without other servers. Make it a plain standalone server again? (You can add servers again any time.)")) return;
+    try { await call("POST", "/cluster/leave"); toast("This server stands alone again."); loadCluster(); } catch (e) { toast(e.message, true); }
+  };
   if ($("#clAddOpen")) $("#clAddOpen").onclick = () => { $("#clAddBox").hidden = false; $("#clJoinBox").hidden = true; clTab("lan"); };
   if ($("#clJoinOpen")) $("#clJoinOpen").onclick = () => { $("#clJoinBox").hidden = false; $("#clAddBox").hidden = true; };
   if ($("#clPromote")) $("#clPromote").onclick = async () => {
@@ -159,7 +168,10 @@ $("#clCmd").onclick = () => navigator.clipboard?.writeText($("#clCmd").textConte
 $("#clJoinGo").onclick = async () => {
   const go = $("#clJoinGo"); go.disabled = true;
   try {
-    const r = await call("POST", "/cluster/join", {url: $("#clURL").value.trim(), code: $("#clCode").value.trim()});
+    let url = $("#clURL").value.trim(), code = $("#clCode").value.trim();
+    const f = code.split(/\s+/);
+    if (f.length === 4 && f[0] === "p8" && f[1] === "join") { url = url || f[2]; code = f[3]; } // the whole command pasted
+    const r = await call("POST", "/cluster/join", {url, code});
     toast(`Joined ${r.master}'s cluster as ${r.id}`); $("#clJoinBox").hidden = true; loadCluster();
   } catch (e) { toast(e.message, true); }
   go.disabled = false;
@@ -245,7 +257,10 @@ async function loadInvites(){
       <div class="inline" style="margin:0"><button class="btn primary" data-clacc="${esc(i.id)}" type="button">Accept</button><button class="btn" data-cldec="${esc(i.id)}" type="button">Decline</button></div></div>`;
   $("#clBanner").innerHTML = clInv.map(card).join("");
   $("#clBanner").hidden = !clInv.length;
-  if ($("#clInvites")) $("#clInvites").innerHTML = clInv.length ? `<div style="border:1px solid var(--line);border-radius:8px;padding:10px;margin-top:8px">${clInv.map(card).join("")}</div>` : "";
+  if ($("#clInvites")) $("#clInvites").innerHTML = clInv.length ? `<div style="border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:8px;padding:10px;margin:8px 0">
+    <b>Invitation waiting</b>${clInv.map(card).join("")}</div>` : "";
+  // the Server window covers the page (and the banner): show the invitation in it instead
+  if ($("#dlgNode")?.open) $("#clBanner").hidden = true;
 }
 document.addEventListener("click", async e => {
   const a = e.target.closest("[data-clacc]"), d = e.target.closest("[data-cldec]");

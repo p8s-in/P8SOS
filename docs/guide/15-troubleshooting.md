@@ -34,6 +34,9 @@ Summary: What to do when installing, VMs, storage or the cluster go wrong.
 | --- | --- |
 | Pool DEGRADED | A disk failed: replace it (below). The server keeps running |
 | Pool almost full | Delete old snapshots and backups, `p8 storage`, add disks |
+| Joining refused: "both called …" | Every server needs its own name: on the new one, Server page → **Rename** (or `p8 rename p8s-2`), then **Add** it again |
+| Invitation not visible on the new server | Open its Server page → Cluster ("Invitation waiting"), or run `p8 cluster accept` there. Invitations last 15 minutes |
+| Worker shows **connecting…** | Normal for up to 2 minutes after joining while its tunnel starts |
 | Worker shows offline | Check its power and network; `wg show p8s-wg` on both; VMs keep running there |
 | Two servers both think they are master | Only after a manual promote while the old master was cut off: it steps down once it hears the newer term |
 | Ceph HEALTH\_WARN | `p8 ceph` says what's wrong; a server off is normal until it returns |

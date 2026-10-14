@@ -10,6 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -136,9 +138,10 @@ func (m *Manager) Discover(ctx context.Context, version string, targets ...strin
 		_, _ = pc.WriteTo([]byte(discoverAsk+nonce), addr)
 	}
 	selfPin, _ := CertSHA(m.CertFile)
-	members := map[string]bool{}
+	members, names := map[string]bool{}, map[string]bool{m.SelfName(): true}
 	for _, n := range m.Workers() {
 		members[n.CertSHA] = true
+		names[n.Name] = true
 	}
 	seen := map[string]Found{}
 	deadline := time.Now().Add(2 * time.Second)
@@ -163,6 +166,8 @@ func (m *Manager) Discover(ctx context.Context, version string, targets ...strin
 			f.Why = "already in this cluster"
 		case r.Role != "":
 			f.Why = "already in another cluster (as " + r.Role + ")"
+		case names[r.Name]:
+			f.Why = "has the same name as a server of this cluster; rename it first (on it: Server page → Rename)"
 		case version != "" && r.Version != "" && r.Version != version:
 			f.Why = "runs P8S OS " + r.Version + " (this server: " + version + "); update both first"
 		default:
@@ -197,12 +202,54 @@ type Invite struct {
 }
 
 type inviteBox struct {
-	mu   sync.Mutex
-	list []*Invite
-	last time.Time
+	mu     sync.Mutex
+	list   []*Invite
+	last   time.Time
+	loaded bool
 }
 
-func (m *Manager) box() *inviteBox { return &m.inv }
+// box returns the open invitations. They are kept in data_dir/cluster/invites.json
+// (0600: they hold join codes) so a p8sd restart — a rename, an update — doesn't lose them.
+// Callers lock b.mu; box itself loads the file once.
+func (m *Manager) box() *inviteBox {
+	b := &m.inv
+	b.mu.Lock()
+	if !b.loaded && m.Dir != "" {
+		b.loaded = true
+		var saved []savedInvite
+		if raw, err := os.ReadFile(filepath.Join(m.Dir, "invites.json")); err == nil && json.Unmarshal(raw, &saved) == nil {
+			for _, s := range saved {
+				i := s.Invite
+				i.code = s.Code
+				b.list = append(b.list, &i)
+			}
+		}
+	}
+	b.mu.Unlock()
+	return b
+}
+
+type savedInvite struct {
+	Invite
+	Code string `json:"code"`
+}
+
+// saveInvites writes the list (b.mu held).
+func (m *Manager) saveInvites(b *inviteBox) {
+	if m.Dir == "" {
+		return
+	}
+	l := make([]savedInvite, 0, len(b.list))
+	for _, i := range b.list {
+		l = append(l, savedInvite{Invite: *i, Code: i.code})
+	}
+	raw, _ := json.Marshal(l)
+	_ = os.MkdirAll(m.Dir, 0o700)
+	p := filepath.Join(m.Dir, "invites.json")
+	if os.WriteFile(p+".tmp", raw, 0o600) == nil {
+		_ = os.Rename(p+".tmp", p)
+	}
+}
 
 // ConfirmNumber is the 6-digit number both screens show for a join code.
 func ConfirmNumber(code string) string {
@@ -239,6 +286,7 @@ func (m *Manager) ReceiveInvite(masterName, masterURL, code, from string) (Invit
 	inv := &Invite{ID: randToken(5), MasterName: masterName, MasterURL: masterURL, From: from, Confirm: ConfirmNumber(code),
 		Expires: now.Add(inviteTTL).UTC().Format(time.RFC3339), code: code}
 	b.list = append(b.list, inv)
+	m.saveInvites(b)
 	if m.Log != nil {
 		m.Log.Warn("a cluster master wants to add this server: accept in the dashboard (Server → Cluster) or with p8 cluster accept",
 			"master", masterName, "from", from, "confirm", inv.Confirm)
@@ -267,6 +315,7 @@ func (m *Manager) takeInvite(id string) (*Invite, error) {
 	for k, i := range b.list {
 		if i.ID == id {
 			b.list = append(b.list[:k], b.list[k+1:]...)
+			m.saveInvites(b)
 			if t, _ := time.Parse(time.RFC3339, i.Expires); !t.After(m.now()) {
 				return nil, errors.New("the invitation has expired; add this server again on the master")
 			}

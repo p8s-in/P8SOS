@@ -1,6 +1,7 @@
 package installer
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -73,12 +74,23 @@ var reservedUsers = map[string]bool{"root": true, "daemon": true, "bin": true, "
 // ErrNotErase is returned when the answers don't say the disks may be wiped.
 var ErrNotErase = errors.New(`the answers must say "erase": true (every disk listed is wiped)`)
 
+// DefaultHostname is a name no other P8S server on the network has yet, like
+// p8s-3fa2: servers that all keep the same default name can't be told apart in
+// a cluster (and can't join one).
+func DefaultHostname() string {
+	b := make([]byte, 2)
+	if _, err := rand.Read(b); err != nil {
+		return "p8s-node"
+	}
+	return fmt.Sprintf("p8s-%x", b)
+}
+
 // Check validates and fills in defaults. zoneOK reports whether a time zone
 // exists (nil: only the format is checked).
 func (a *Answers) Check(zoneOK func(string) bool) error {
 	a.Hostname = strings.ToLower(strings.TrimSpace(a.Hostname))
 	if a.Hostname == "" {
-		a.Hostname = "p8s-node"
+		a.Hostname = DefaultHostname()
 	}
 	if len(a.Hostname) > 253 {
 		return fmt.Errorf("hostname: too long")
