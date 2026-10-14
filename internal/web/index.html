@@ -159,6 +159,22 @@ dialog.as-page{position:fixed;inset:49px 0 34px 232px;width:auto;max-width:none;
 dialog.as-page>.dlg-body{max-width:1100px;padding:18px 22px}
 dialog.as-page .dlg-actions{justify-content:flex-start}
 dialog.as-page #mClose,dialog.as-page #cmClose{display:none}
+/* Server page: tabs and a grid of cards that uses the full width */
+#dlgNode.as-page>.dlg-body{max-width:1500px}
+#dlgNode .nd-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(460px,100%),1fr));gap:14px;align-items:start;margin-top:14px}
+#dlgNode .nd-grid[hidden]{display:none}
+#dlgNode .nd-card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 16px 14px;min-width:0;overflow-x:auto}
+#dlgNode .nd-card[hidden]{display:none}
+#dlgNode .nd-card.nd-wide{grid-column:1/-1}
+#dlgNode .nd-card>h3:first-child,#dlgNode .nd-card>div>h3:first-child,#dlgNode .nd-card>details>h3:first-child{margin-top:0}
+#dlgNode .nd-card table{width:100%}
+#dlgNode #ndTabs{margin-top:12px;overflow-x:auto;flex-wrap:nowrap;scrollbar-width:none}
+#dlgNode #ndTabs button{white-space:nowrap}
+dialog.as-page #ndClose{display:none}
+#dlgNode:not(.as-page) #ndTabs,#dlgNode:not(.as-page) .page-crumb{display:none}
+#side .tree-srv{padding-left:22px;font-weight:600}
+#side .tree-srv .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#side .tree-node .role{font-weight:400;font-size:11.5px;color:var(--muted)}
 .page-crumb{font-size:13px;color:var(--muted);margin-bottom:6px}
 .page-crumb a{color:var(--muted);cursor:pointer;text-decoration:none}.page-crumb a:hover{color:var(--text)}
 .page-bar{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 4px}
@@ -2125,5 +2141,6 @@ document.addEventListener("DOMContentLoaded", render); // after cloud.js has loa
 <script src="/nics.js"></script>
 <script src="/storages.js"></script>
 <script src="/ceph.js"></script>
+<script src="/nodepage.js"></script>
 </body>
 </html>

@@ -202,23 +202,56 @@ if (typeof openNode === "function") {
   openNode = async function(){ $("#clAddBox").hidden = true; $("#clJoinBox").hidden = true; loadCluster(); return _openNode(); };
 }
 
-/* ---------- sidebar: VMs grouped by server ---------- */
+/* ---------- sidebar: every cluster server, with its VMs under it ---------- */
+// Every server shows up, also one without VMs, with a dot: green online,
+// amber connecting, red offline. This server's VMs sit under the "server"
+// entry above; other servers get their own entry (click: Server page → Cluster).
+let clSideAt = 0;
+async function refreshClusterSide(){
+  if (!isAdmin() || Date.now() - clSideAt < 15000) return;
+  clSideAt = Date.now();
+  try { cluster = await call("GET", "/cluster"); } catch { return; }
+  renderVMs();
+}
 const _renderVMsCl = renderVMs;
 renderVMs = function(){
   _renderVMsCl();
-  const side = $("#sideVMs");
-  if (!side || !vms.some(v => v.node_id)) return;
+  refreshClusterSide();
+  const side = $("#sideVMs"), nodes = (cluster?.role && cluster.nodes) || [];
+  if (!side || (nodes.length < 2 && !vms.some(v => v.node_id))) return;
+  const selfId = nodes.find(n => n.self)?.id || "n1";
+  const bn = $("#bNode"), selfRole = nodes.find(n => n.self)?.role || "";
+  if (bn && bn.querySelector(".role")?.textContent !== selfRole) {
+    bn.querySelector(".role")?.remove();
+    if (selfRole) bn.querySelector("#hName2")?.insertAdjacentHTML("afterend", `<span class="role">${esc(selfRole)}</span>`);
+  }
   const q = ($("#vmFilter")?.value || "").trim().toLowerCase();
   const list = q ? vms.filter(v => (v.name + " " + (v.ip || "") + " " + (v.owner || "") + " " + v.template + " " + (v.node || "")).toLowerCase().includes(q)) : vms;
   const btn = v => `<button class="tree-vm ${esc(v.state)}" data-vm="${esc(v.name)}" title="VM ${esc(v.name)} on ${esc(v.node || "")} — ${esc(v.state)}"><span class="dot"></span>${ic("vm")}<span class="nm">${esc(v.name)}</span></button>`;
   const groups = new Map();
-  for (const v of list) { const k = v.node_id || "n1"; if (!groups.has(k)) groups.set(k, {name: v.node, vms: []}); groups.get(k).vms.push(v); }
-  const ids = [...groups.keys()].sort((a, b) => (+a.slice(1)) - (+b.slice(1)));
-  // the master's VMs sit under the "server" entry above; workers get their own entry
-  side.innerHTML = ids.map(id => (id === "n1" ? "" : `<div class="tree-node btn" style="cursor:default" title="cluster server ${esc(id)}">${ic("server")}<span>${esc(groups.get(id).name || id)}</span></div>`) +
-    groups.get(id).vms.map(btn).join("")).join("");
+  for (const n of nodes) groups.set(n.id, {node: n, name: n.name, vms: []});
+  for (const v of list) {
+    const k = v.node_id || selfId;
+    if (!groups.has(k)) groups.set(k, {name: v.node || k, vms: []});
+    groups.get(k).vms.push(v);
+  }
+  const num = id => +String(id).replace(/\D/g, "") || 0;
+  const ids = [...groups.keys()].sort((a, b) => a === selfId ? -1 : b === selfId ? 1 : num(a) - num(b));
+  const state = n => !n ? ["", "server"] : n.self || n.status?.online ? ["running", "online"]
+    : n.status?.connecting ? ["stopping", "connecting…"] : ["crashed", "offline"];
+  side.innerHTML = ids.map(id => {
+    const g = groups.get(id);
+    if (id === selfId) return g.vms.map(btn).join("");
+    const [cls, word] = state(g.node);
+    return `<button class="btn tree-node tree-srv ${cls}" type="button" data-clnode="${esc(id)}" title="Server ${esc(g.name)} (${esc(id)}${g.node ? " · " + esc(g.node.role) : ""}) — ${word}">
+      ${ic("server")}<span class="nm">${esc(g.name)}</span>${g.node ? `<span class="role">${esc(g.node.role)}</span>` : ""}<span class="dot" style="margin-left:auto"></span></button>` + g.vms.map(btn).join("");
+  }).join("");
   if (typeof markSide === "function") markSide();
 };
+document.addEventListener("click", e => {
+  const b = e.target.closest("#sideVMs [data-clnode]");
+  if (b && typeof openNodeTab === "function") openNodeTab("cluster");
+});
 
 /* ---------- Create VM: which server ---------- */
 const nodeBoxHTML = `<div id="cNodeBox" hidden><label for="cNode">Server</label><select id="cNode"></select>

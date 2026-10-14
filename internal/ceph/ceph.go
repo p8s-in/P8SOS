@@ -377,19 +377,56 @@ func (m *Manager) settle() time.Duration {
 	return 2 * time.Minute
 }
 
-// Install puts the Ceph packages on this server.
+// Install puts the Ceph packages on this server. apt runs in its own
+// systemd unit (outside p8sd's service, so a p8sd restart can't kill dpkg
+// half way), after finishing any install an earlier attempt left unfinished.
 func (m *Manager) Install(ctx context.Context) error {
 	if m.Installed() {
 		return nil
 	}
-	if _, err := m.Run.Run(ctx, "env", "DEBIAN_FRONTEND=noninteractive", "apt-get", "update", "-qq"); err != nil {
-		return fmt.Errorf("apt-get update: %w", err)
+	// an earlier failed try may have left packages unpacked but not set up
+	_, _ = m.host(ctx, "dpkg", "--configure", "-a")
+	if out, err := m.host(ctx, "apt-get", "update", "-qq"); err != nil {
+		return fmt.Errorf("apt-get update: %w%s", err, aptErrors(out))
 	}
-	args := append([]string{"DEBIAN_FRONTEND=noninteractive", "apt-get", "install", "-y", "-qq"}, Packages...)
-	if _, err := m.Run.Run(ctx, "env", args...); err != nil {
-		return fmt.Errorf("installing Ceph: %w", err)
+	args := append([]string{"apt-get", "install", "-y", "-q", "-o", "Dpkg::Options::=--force-confdef", "-o", "Dpkg::Options::=--force-confold"}, Packages...)
+	out, err := m.host(ctx, args...)
+	if err != nil {
+		// one repair try: finish what was unpacked, fix dependencies, then again
+		_, _ = m.host(ctx, "dpkg", "--configure", "-a")
+		_, _ = m.host(ctx, "apt-get", "install", "-f", "-y", "-q")
+		if out, err = m.host(ctx, args...); err != nil {
+			return fmt.Errorf("installing Ceph: %w%s", err, aptErrors(out))
+		}
 	}
 	return nil
+}
+
+// host runs a command in a transient systemd unit and waits for it, with
+// its output passed back (--pipe).
+func (m *Manager) host(ctx context.Context, args ...string) ([]byte, error) {
+	return m.Run.Run(ctx, "systemd-run", append([]string{"--wait", "--pipe", "--quiet", "--collect",
+		"--setenv=DEBIAN_FRONTEND=noninteractive", "--setenv=HOME=/root", "--"}, args...)...)
+}
+
+// aptErrors picks the lines that say which package failed and why.
+func aptErrors(out []byte) string {
+	var keep []string
+	for _, l := range strings.Split(string(out), "\n") {
+		t := strings.TrimSpace(l)
+		lt := strings.ToLower(t)
+		if t != "" && (strings.HasPrefix(t, "E:") || strings.HasPrefix(t, "dpkg:") || strings.Contains(lt, "error") ||
+			strings.Contains(lt, "failed") || strings.Contains(lt, "no space")) {
+			keep = append(keep, t)
+		}
+	}
+	if len(keep) > 12 {
+		keep = keep[len(keep)-12:]
+	}
+	if len(keep) == 0 {
+		return ""
+	}
+	return "\n" + strings.Join(keep, "\n")
 }
 
 func (m *Manager) needInstalled() error {

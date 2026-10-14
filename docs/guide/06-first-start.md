@@ -35,8 +35,8 @@ The dashboard account is separate from the Linux login, but you can use the same
 | Area | What's there |
 | --- | --- |
 | VMs / Containers | Your machines; **Create**; each one's Manage page (console, options, disks, snapshots, backups, firewall) |
-| Server | Usage, storage, network, Ceph, updates, shell, HA |
-| Cluster | Servers, joining, moves |
+| Server (the server's name in the sidebar) | A full page with tabs: **Summary** (health, memory, updates, reboot), **Storage** (ZFS, network storage, Ceph), **Templates**, **Network**, **Cluster**, **Tasks**; Rename and Shell at the top |
+| Cluster | Server page → Cluster: servers, joining, moves. In a cluster the sidebar lists every server (master / worker) with its VMs |
 | Users | Accounts, roles, plans and quotas |
 | Health & alerts | Checks, alert channels |
 | Activity | Who did what (tamper-evident log) |

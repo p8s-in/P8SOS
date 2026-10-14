@@ -11,6 +11,8 @@ Install P8S OS on each machine as usual. The first server is the **master**.
 
 New VMs go to the server with the most free RAM, or the one an admin picks. Each worker has a **>\_ Shell** button in Server → Cluster.
 
+The sidebar on the master lists every server of the cluster, marked **master** or **worker**, with its VMs under it and a dot: green online, amber connecting (just joined), red offline. A worker with no VMs is listed too. Click a worker to open Server → Cluster with its Shell / Rename / Remove buttons.
+
 ## Renaming and removing servers
 
 | Task | Dashboard | Command |

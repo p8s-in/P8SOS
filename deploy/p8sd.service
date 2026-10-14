@@ -11,12 +11,12 @@ Type=simple
 ExecStart=/usr/local/bin/p8sd serve -config /etc/p8s/p8sd.json
 Restart=always
 RestartSec=3
-# Runs as root: zfs clone/destroy and /dev/zvol access need it in Phase 1.
+# Runs as root and manages the whole server: ZFS, libvirt, packages (Ceph),
+# /etc/ceph, /etc/fstab (NFS), iSCSI, network. So no ProtectSystem/ProtectHome:
+# with ProtectSystem=full, /usr and /etc were read-only and "Install Ceph"
+# failed inside dpkg ("Sub-process /usr/bin/dpkg returned an error code (1)").
 NoNewPrivileges=yes
 PrivateTmp=yes
-ProtectHome=yes
-ProtectSystem=full
-ReadWritePaths=/var/lib/p8s
 
 [Install]
 WantedBy=multi-user.target

@@ -419,3 +419,26 @@ func TestBusy(t *testing.T) {
 		t.Fatal("fsid isn't a v4 uuid")
 	}
 }
+
+// Install runs apt outside p8sd's unit (systemd-run), finishes an earlier
+// broken try first and says which package failed.
+func TestInstallRunsAptOutsideP8sd(t *testing.T) {
+	f := &fakeRun{fail: map[string]string{"systemd-run --wait --pipe --quiet --collect --setenv=DEBIAN_FRONTEND=noninteractive --setenv=HOME=/root -- apt-get install -y -q -o": "E: Sub-process /usr/bin/dpkg returned an error code (1)"}}
+	m := &Manager{Run: f, Etc: t.TempDir(), Lib: t.TempDir(), Exists: func(string) bool { return false }}
+	err := m.Install(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "dpkg returned an error code") {
+		t.Fatalf("err = %v", err)
+	}
+	all := f.all()
+	for _, want := range []string{"-- dpkg --configure -a", "-- apt-get update -qq", "-- apt-get install -f -y -q", "ceph-mon ceph-mgr"} {
+		if !strings.Contains(all, want) {
+			t.Errorf("missing %q in\n%s", want, all)
+		}
+	}
+	if strings.Contains(all, "\nenv ") || strings.HasPrefix(all, "env ") {
+		t.Errorf("apt ran inside p8sd:\n%s", all)
+	}
+	if got := aptErrors([]byte("Setting up foo\ndpkg: error processing package ceph-osd (--configure):\n installed ceph-osd package post-installation script subprocess returned error exit status 1\nok\n")); !strings.Contains(got, "ceph-osd (--configure)") || strings.Contains(got, "Setting up") {
+		t.Errorf("aptErrors = %q", got)
+	}
+}

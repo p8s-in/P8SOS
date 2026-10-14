@@ -223,6 +223,7 @@ hardware**. Work through it on the new machine; tick each line and note problems
 ## 21. Ceph (3 servers in a cluster, each with an empty disk; VirtualBox VMs with a second 20 GB disk work)
 
 - [ ] Server → Ceph on the master: every server listed; Install Ceph on each (a few minutes; ⏳ then ✔)
+- [ ] An install that failed before (dpkg error 1, from the old p8sd sandbox) works on the next **Install Ceph** after `update.sh`: it finishes the half-done packages first; a real failure names the package (`dpkg: error processing package …`)
 - [ ] Set up Ceph with the LAN network (pre-filled): health shows, 1 monitor, manager up; the other servers show "installed" and get the configuration (`ls /etc/ceph` on them)
 - [ ] Add monitor on two other servers → monitors 3/3; Add manager on one → `p8 ceph` shows it
 - [ ] Each server's empty disk is offered ("Give to Ceph"); a disk with data or the system disk is not; after giving: osd.N up
@@ -299,6 +300,16 @@ hardware**. Work through it on the new machine; tick each line and note problems
 - [ ] Windows VM: second card shows up in Windows (e1000e), gets DHCP
 - [ ] Customer account: no network-card section (staff only); API answers 403
 - [ ] `p8 nics`, `p8 nic-add web1 lan --vlan 20`, `p8 nic-rm web1 MAC` work
+
+## 27. Server page and the server tree
+
+- [ ] Click the server in the sidebar: the Server page fills the content area (no narrow window) with tabs Summary · Storage · Templates · Network · Cluster · Tasks; sections are cards, two per row on a wide screen, one on a phone
+- [ ] The tab you used last is opened again next time; "Datacenter" in the breadcrumb goes back
+- [ ] Rename / Shell buttons and the "task running" banner still work; an empty section (e.g. Ceph not set up, HA off) doesn't leave an empty card
+- [ ] Cluster of 2: the sidebar shows the master with "master" and its VMs, and **every** worker with "worker" and a dot — also a worker with no VMs (p8s-vm1)
+- [ ] Stop p8sd on the worker: within about 30 s its dot turns red (offline); start it: green again (amber "connecting…" right after joining)
+- [ ] Click a worker in the sidebar: the Server page opens on Cluster (Shell / Rename / Remove for it)
+- [ ] Standalone server: no extra entries, sidebar as before
 
 ## Add new features here as they are built
 

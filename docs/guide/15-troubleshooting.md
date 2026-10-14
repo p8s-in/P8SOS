@@ -39,6 +39,7 @@ Summary: What to do when installing, VMs, storage or the cluster go wrong.
 | Worker shows **connecting…** | Normal for up to 2 minutes after joining while its tunnel starts |
 | Worker shows offline | Check its power and network; `wg show p8s-wg` on both; VMs keep running there |
 | Two servers both think they are master | Only after a manual promote while the old master was cut off: it steps down once it hears the newer term |
+| Install Ceph: "dpkg returned an error code (1)" | Fixed in P8S OS from 2026-10-14 (p8sd couldn't write /usr and /etc). Run `update.sh`, then **Install Ceph** again: it finishes the half-installed packages itself. Still failing: the message names the package; `sudo dpkg --configure -a` shows the full error |
 | Ceph HEALTH\_WARN | `p8 ceph` says what's wrong; a server off is normal until it returns |
 
 ## Replacing a failed disk in a mirror or RAID
