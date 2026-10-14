@@ -224,3 +224,27 @@ func TestStorageCheck(t *testing.T) {
 		t.Fatalf("%+v", fs)
 	}
 }
+
+func TestCephCheck(t *testing.T) {
+	var st *CephState
+	m := &Monitor{Ceph: func(context.Context) *CephState { return st }}
+	if fs := m.checkCeph(context.Background()); len(fs) != 0 {
+		t.Fatal("no Ceph: no finding")
+	}
+	for _, c := range []struct {
+		st     CephState
+		status string
+	}{
+		{CephState{Health: "HEALTH_OK", FreePct: 60}, "ok"},
+		{CephState{Health: "HEALTH_OK", FreePct: 10}, Warning},
+		{CephState{Health: "HEALTH_WARN", Problems: []string{"warning: 1 osds down"}, FreePct: 60}, Warning},
+		{CephState{Health: "HEALTH_ERR", Problems: []string{"error: 2 pgs inactive"}, FreePct: -1}, Critical},
+		{CephState{Error: "timed out", FreePct: -1}, Critical},
+	} {
+		st = &c.st
+		fs := m.checkCeph(context.Background())
+		if len(fs) != 1 || fs[0].status != c.status {
+			t.Errorf("%+v: %+v", c.st, fs)
+		}
+	}
+}

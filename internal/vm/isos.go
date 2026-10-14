@@ -132,7 +132,7 @@ func (s *Service) createFromISO(ctx context.Context, r CreateRequest) (VM, error
 	} else if !errors.Is(err, virt.ErrNoDomain) {
 		return VM{}, err
 	}
-	if err := s.Disks.DestroyDisk(ctx, dom); err != nil { // leftover of an interrupted create
+	if err := s.dropLeftover(ctx, dom); err != nil { // leftover of an interrupted create
 		return VM{}, fmt.Errorf("remove leftover disk: %w", err)
 	}
 	if err := s.place(dom, r.Storage); err != nil {

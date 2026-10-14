@@ -22,6 +22,8 @@ type ZFS struct {
 	BusyRetry time.Duration
 	// Pools are other storages for VM disks: name -> parent dataset (nil = none).
 	Pools func() map[string]string
+	// Ceph is the Ceph pool for VM disks (storage "ceph"); nil = none.
+	Ceph *RBD
 
 	place placement
 }
@@ -38,16 +40,27 @@ func (z *ZFS) diskDataset(vm string) string { return z.parent(vm) + "/" + vm + "
 
 // DiskDataset is the dataset of the VM's disk i (0 = root).
 func (z *ZFS) DiskDataset(vm string, i int) string {
+	if z.Shared(vm) {
+		return z.Ceph.spec(z.Ceph.image(vm, i))
+	}
 	return fmt.Sprintf("%s/%s-disk%d", z.parent(vm), vm, i)
 }
 
 // DevicePath is the block device libvirt attaches for the VM's root disk.
-func (z *ZFS) DevicePath(vm string) string { return "/dev/zvol/" + z.diskDataset(vm) }
+func (z *ZFS) DevicePath(vm string) string {
+	if z.Shared(vm) {
+		return z.Ceph.Dev(z.Ceph.image(vm, 0))
+	}
+	return "/dev/zvol/" + z.diskDataset(vm)
+}
 
 // CloneDisk creates the VM's root disk as a copy-on-write clone of the
 // template snapshot, then grows it to sizeGB. Clones are instant and use no
 // space until the guest writes.
 func (z *ZFS) CloneDisk(ctx context.Context, snapshot, vm string, sizeGB int) (string, error) {
+	if z.Shared(vm) {
+		return z.cephClone(ctx, snapshot, vm, sizeGB)
+	}
 	ds := z.diskDataset(vm)
 	if poolOf(snapshot) != poolOf(ds) { // network storage: a full copy
 		if err := z.copyTemplate(ctx, snapshot, ds); err != nil {
@@ -71,6 +84,9 @@ func (z *ZFS) CloneDisk(ctx context.Context, snapshot, vm string, sizeGB int) (s
 
 // CreateDisk makes an empty disk for a VM installed from an ISO.
 func (z *ZFS) CreateDisk(ctx context.Context, vm string, sizeGB int) (string, error) {
+	if z.Shared(vm) {
+		return z.cephCreate(ctx, vm, 0, int64(sizeGB)<<30)
+	}
 	if _, err := z.Run.Run(ctx, "zfs", "create", "-p", "-s", "-V", fmt.Sprintf("%dG", sizeGB), "-o", "volmode=dev", z.diskDataset(vm)); err != nil {
 		return "", fmt.Errorf("create disk: %w", err)
 	}
@@ -85,6 +101,9 @@ func (z *ZFS) CreateDisk(ctx context.Context, vm string, sizeGB int) (string, er
 // WaitDevice waits for udev to create /dev/zvol/... for the VM's disk, so
 // libvirt can open it, and returns that path.
 func (z *ZFS) WaitDevice(ctx context.Context, vm string) (string, error) {
+	if z.Shared(vm) {
+		return z.Ceph.Map(ctx, z.Ceph.image(vm, 0))
+	}
 	return z.waitPath(ctx, z.DevicePath(vm))
 }
 
@@ -92,6 +111,9 @@ func (z *ZFS) WaitDevice(ctx context.Context, vm string) (string, error) {
 // Right after a VM is powered off, QEMU or udev can still hold the device open for
 // a moment ("dataset is busy"), so that case is retried for a few seconds.
 func (z *ZFS) DestroyDisk(ctx context.Context, vm string) error {
+	if z.Shared(vm) {
+		return z.cephDestroy(ctx, vm)
+	}
 	for _, i := range z.Extras(ctx, vm) { // data disks go with the VM
 		if err := z.DestroyExtra(ctx, vm, i); err != nil {
 			return err
@@ -122,6 +144,9 @@ func (z *ZFS) SnapshotExists(ctx context.Context, snapshot string) bool {
 
 // ResizeDisk sets the disk's size. Callers must only grow disks.
 func (z *ZFS) ResizeDisk(ctx context.Context, vm string, sizeGB int) error {
+	if z.Shared(vm) {
+		return z.Ceph.Grow(ctx, z.Ceph.image(vm, 0), sizeGB)
+	}
 	if _, err := z.Run.Run(ctx, "zfs", "set", fmt.Sprintf("volsize=%dG", sizeGB), z.diskDataset(vm)); err != nil {
 		return fmt.Errorf("resize disk: %w", err)
 	}
@@ -130,6 +155,9 @@ func (z *ZFS) ResizeDisk(ctx context.Context, vm string, sizeGB int) error {
 
 // DiskSizeGB reports the disk's current size (it changes on rollback).
 func (z *ZFS) DiskSizeGB(ctx context.Context, vm string) (int, error) {
+	if z.Shared(vm) {
+		return z.cephSizeGB(ctx, z.Ceph.image(vm, 0))
+	}
 	return z.volsizeGB(ctx, z.diskDataset(vm))
 }
 
@@ -143,6 +171,14 @@ type Snapshot struct {
 // Snapshot takes a ZFS snapshot of the VM's disks (instant, copy-on-write).
 // All disks are in one command, so ZFS takes them at the same moment.
 func (z *ZFS) Snapshot(ctx context.Context, vm, name string) error {
+	if z.Shared(vm) { // one image after the other (Ceph has no single command for several)
+		for _, img := range z.cephImages(ctx, vm) {
+			if _, err := z.Ceph.rbd(ctx, "snap", "create", z.Ceph.spec(img)+"@"+name); err != nil {
+				return fmt.Errorf("snapshot %s: %w", img, err)
+			}
+		}
+		return nil
+	}
 	args := []string{"snapshot"}
 	for _, ds := range z.all(ctx, vm) {
 		args = append(args, ds+"@"+name)
@@ -155,6 +191,9 @@ func (z *ZFS) Snapshot(ctx context.Context, vm, name string) error {
 
 // Snapshots lists the VM disk's snapshots, oldest first.
 func (z *ZFS) Snapshots(ctx context.Context, vm string) ([]Snapshot, error) {
+	if z.Shared(vm) {
+		return z.cephSnapshots(ctx, vm)
+	}
 	out, err := z.Run.Run(ctx, "zfs", "list", "-H", "-p", "-t", "snapshot", "-o", "name,creation,used",
 		"-s", "createtxg", "-d", "1", z.diskDataset(vm))
 	if err != nil {
@@ -191,6 +230,9 @@ func ParseSnapshots(out string) []Snapshot {
 // Rollback returns the disk to a snapshot. destroyNewer also deletes snapshots
 // taken after it (ZFS can only roll back to the latest one).
 func (z *ZFS) Rollback(ctx context.Context, vm, name string, destroyNewer bool) error {
+	if z.Shared(vm) {
+		return z.cephRollback(ctx, vm, name, destroyNewer)
+	}
 	z.dropRepSnaps(ctx, vm) // ours are newer; the next copy for HA is then a full one
 	z.dropBackupSnaps(ctx, vm)
 	args := []string{"rollback"}
@@ -216,6 +258,9 @@ func (z *ZFS) Rollback(ctx context.Context, vm, name string, destroyNewer bool) 
 
 // DestroySnapshot deletes one snapshot.
 func (z *ZFS) DestroySnapshot(ctx context.Context, vm, name string) error {
+	if z.Shared(vm) {
+		return z.cephDestroySnap(ctx, vm, name)
+	}
 	if _, err := z.Run.Run(ctx, "zfs", "destroy", z.diskDataset(vm)+"@"+name); err != nil {
 		return fmt.Errorf("delete snapshot: %w", err)
 	}
@@ -230,6 +275,14 @@ func (z *ZFS) DestroySnapshot(ctx context.Context, vm, name string) error {
 
 // HasSnapshot says whether every disk of the VM has snapshot name.
 func (z *ZFS) HasSnapshot(ctx context.Context, vm, name string) bool {
+	if z.Shared(vm) {
+		for _, img := range z.cephImages(ctx, vm) {
+			if !z.Ceph.HasImageSnap(ctx, img, name) {
+				return false
+			}
+		}
+		return true
+	}
 	for _, ds := range z.all(ctx, vm) {
 		if _, err := z.Run.Run(ctx, "zfs", "list", "-H", "-o", "name", "-t", "snapshot", ds+"@"+name); err != nil {
 			return false
@@ -241,6 +294,9 @@ func (z *ZFS) HasSnapshot(ctx context.Context, vm, name string) bool {
 // dropBackupSnaps removes the kept backup snapshots (p8s-backup-*) of the
 // VM's disks; the next backup is then a full one.
 func (z *ZFS) dropBackupSnaps(ctx context.Context, vm string) {
+	if z.Shared(vm) {
+		return
+	}
 	for _, ds := range z.all(ctx, vm) {
 		out, err := z.Run.Run(ctx, "zfs", "list", "-H", "-o", "name", "-t", "snapshot", "-d", "1", ds)
 		if err != nil {

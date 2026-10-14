@@ -220,6 +220,24 @@ hardware**. Work through it on the new machine; tick each line and note problems
 - [ ] `sudo apt upgrade` with a new kernel: still boots (ZFS rebuilt by DKMS, GRUB finds the ZFS system)
 - [ ] Laptop: the 1 TB hard disk shows `HAS DATA` — **don't tick it**; install on the SSD only
 
+## 21. Ceph (3 servers in a cluster, each with an empty disk; VirtualBox VMs with a second 20 GB disk work)
+
+- [ ] Server → Ceph on the master: every server listed; Install Ceph on each (a few minutes; ⏳ then ✔)
+- [ ] Set up Ceph with the LAN network (pre-filled): health shows, 1 monitor, manager up; the other servers show "installed" and get the configuration (`ls /etc/ceph` on them)
+- [ ] Add monitor on two other servers → monitors 3/3; Add manager on one → `p8 ceph` shows it
+- [ ] Each server's empty disk is offered ("Give to Ceph"); a disk with data or the system disk is not; after giving: osd.N up
+- [ ] Create the VM pool (automatic = 3 copies); health OK after a minute
+- [ ] New VM with Storage **ceph**: starts, `lsblk` on the server shows /dev/rbd0, `cat /etc/p8s/rbd-maps` lists it; snapshot + rollback work; add a data disk
+- [ ] Move it shut down to another server: done in seconds ("no disk copied"); starts there
+- [ ] Move it while running: only memory moves (seconds); keeps running; the old server's `rbd showmapped` no longer lists it
+- [ ] Protect it (HA), switch its server off: it starts on another server from the same disk (no data lost); switch the old server on: its old definition is gone, the disk still there
+- [ ] Reboot a server with Ceph VMs on autostart: they start (p8s-rbd opened their disks first)
+- [ ] Delete the VM: `rbd ls p8s-vms` no longer lists its disks
+- [ ] Backup of a Ceph VM: refused with "use snapshots"
+- [ ] Switch one Ceph server off: alert "Ceph needs attention", VMs on Ceph keep running; back on → healthy
+- [ ] Remove a disk: first press = taken out (data moves), second press when healthy = removed and wiped
+- [ ] `p8 ceph`, `p8 ceph osd n2 /dev/sdb`, `p8 create x --storage ceph` work from the command line
+
 ## Add new features here as they are built
 
 (Every new feature adds its own lines above before it counts as done.)

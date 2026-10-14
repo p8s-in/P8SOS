@@ -183,6 +183,8 @@ install -m 0644 "$REPO/deploy/p8s-vlans.service" /etc/systemd/system/p8s-vlans.s
 install -m 0755 "$REPO/scripts/storages-up.sh" /usr/local/share/p8s/storages-up.sh
 install -m 0755 "$REPO/scripts/libvirt-migrate.sh" /usr/local/share/p8s/libvirt-migrate.sh
 install -m 0644 "$REPO/deploy/p8s-storages.service" /etc/systemd/system/p8s-storages.service
+install -m 0755 "$REPO/scripts/ceph-map.sh" /usr/local/share/p8s/ceph-map.sh   # VM disks on Ceph, opened at boot
+install -m 0644 "$REPO/deploy/p8s-rbd.service" /etc/systemd/system/p8s-rbd.service
 # guest internet: repair at boot and after every firewall reload (which can wipe libvirt's NAT rules)
 install -m 0644 "$REPO/deploy/p8s-net.service" /etc/systemd/system/p8s-net.service
 install -d -m 0755 /etc/systemd/system/nftables.service.d
@@ -259,6 +261,7 @@ ok "p8sd running: $(curl -kfs https://127.0.0.1:8006/api/v1/health)"
 systemctl enable p8s-net.service >/dev/null 2>&1 || true
 systemctl enable p8s-vlans.service >/dev/null 2>&1 || true
 systemctl enable p8s-storages.service >/dev/null 2>&1 || true
+systemctl enable p8s-rbd.service >/dev/null 2>&1 || true
 bash /usr/local/share/p8s/netcheck.sh --repair | sed 's/^/  /' || true
 
 # Host tuning: ZFS cache limit, KSM, vhost_net, low swappiness

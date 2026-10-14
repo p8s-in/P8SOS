@@ -264,6 +264,14 @@ See [network-storage.md](network-storage.md). `GET /storages` → `{"storages":[
 `{"name":"san","type":"iscsi","portal":"10.0.0.5","target":"iqn...","lun":0,"format":true}` → `201 {"storage":…,"note":…}`
 (`409 confirm` when the disk would be erased without `format`); `POST /storages/discover` `{"portal"}` → `{"targets":[…]}`;
 `POST /storages/{name}/connect`; `DELETE /storages/{name}` (`409` while VMs are on it).
+
+### Ceph (admins; on the master or a server alone)
+
+See [ceph.md](ceph.md). `GET /ceph` → `{"ceph":{installed,configured,network,status:{health,problems,mons,quorum,mgr_up,osd_count,osd_up,used_bytes,size_bytes,osds,pools},pool_ready,nodes:[{id,name,self,online,info:{installed,configured,mon,mgr,osds,disks,addrs,task}}]},"advice":[…]}`.
+Steps start in the background (`202`, follow `info.task`): `POST /ceph/install {"node"}`, `POST /ceph/init {"network":"192.168.1.0/24"}`,
+`POST /ceph/mons {"node"}`, `POST /ceph/mgrs {"node"}`, `POST /ceph/osds {"node","disk":"/dev/sdb"}`, `DELETE /ceph/osds/{id}`.
+`POST /ceph/pool {"size":0}` → `{"pool":"p8s-vms","size":3}`. Every server also answers `GET /ceph/node`,
+`POST /ceph/node/config` and `POST /ceph/node/{action}` (called by the master). VMs: `"storage":"ceph"` on create.
 Create a VM there with `"storage":"san"` in `POST /vms`; the VM object then has `"storage":"san"`.
 
 ### Snapshots

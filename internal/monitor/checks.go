@@ -424,3 +424,42 @@ func (m *Monitor) checkStorages(ctx context.Context) []finding {
 	}
 	return out
 }
+
+// CephState is what the Ceph check needs.
+type CephState struct {
+	Health   string   // HEALTH_OK, HEALTH_WARN, HEALTH_ERR; "" = no answer
+	Problems []string // Ceph's own messages
+	FreePct  int      // -1 = unknown
+	Error    string   // why Ceph didn't answer
+}
+
+// checkCeph: Ceph unhealthy, unreachable or nearly full.
+func (m *Monitor) checkCeph(ctx context.Context) []finding {
+	if m.Ceph == nil {
+		return nil
+	}
+	c := m.Ceph(ctx)
+	if c == nil {
+		return nil
+	}
+	f := finding{key: "ceph", name: "Ceph", status: "ok", value: "healthy"}
+	switch {
+	case c.Health == "":
+		f.value, f.status = "no answer", Critical
+		f.title = "Ceph doesn't answer"
+		f.detail = c.Error + ". VMs on Ceph stop working. Check that the servers with monitors are on and can reach each other (Server → Ceph)."
+	case c.Health == "HEALTH_ERR":
+		f.value, f.status = "error", Critical
+		f.title = "Ceph has a serious problem"
+		f.detail = strings.Join(c.Problems, "; ") + ". See Server → Ceph."
+	case c.Health != "HEALTH_OK":
+		f.value, f.status = "warning", Warning
+		f.title = "Ceph needs attention"
+		f.detail = strings.Join(c.Problems, "; ") + ". See Server → Ceph."
+	case c.FreePct >= 0 && c.FreePct < 15:
+		f.value, f.status = fmt.Sprintf("%d%% free", c.FreePct), Warning
+		f.title = "Ceph is almost full"
+		f.detail = "Ceph stops writing at 95% full. Give it more disks (Server → Ceph) or delete VMs / snapshots on it."
+	}
+	return []finding{f}
+}

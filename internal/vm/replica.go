@@ -88,10 +88,11 @@ func (s *Service) HACheck(ctx context.Context, name string) (string, error) {
 	if v.Public != nil {
 		return "it has a public IP from this server's pool (it can't follow the VM to another server)", nil
 	}
-	if len(v.Disks) > 0 {
+	shared := s.shared(Prefix + name) // on Ceph: no copies needed, every server has the disks
+	if len(v.Disks) > 0 && !shared {
 		return "it has extra disks; high availability copies only VMs with one disk for now", nil
 	}
-	if v.Storage != "" {
+	if v.Storage != "" && !shared {
 		return "its disks are on network storage " + v.Storage + "; high availability copies only VMs on local storage for now", nil
 	}
 	return "", nil
@@ -105,6 +106,9 @@ func (s *Service) ReplicaSnaps(ctx context.Context, name string) ([]string, erro
 	}
 	if !reName.MatchString(name) {
 		return nil, fmt.Errorf("%w: bad name", ErrInvalid)
+	}
+	if h, err := s.loadReplica(name); err == nil && h.Shared != "" {
+		return []string{h.Snap}, nil
 	}
 	l, err := rd.ReplicaSnaps(ctx, Prefix+name)
 	if l == nil {
@@ -130,6 +134,11 @@ func (s *Service) SendReplica(ctx context.Context, name string, have []string, f
 	h, err := s.moveHeader(ctx, name)
 	unlock()
 	if err != nil {
+		return err
+	}
+	if h.Shared != "" { // shared disks: the description is all the other server needs
+		b, _ := json.Marshal(ReplicaHeader{MoveHeader: h, Snap: repSnapNow(), From: from})
+		_, err := w.Write(append(b, '\n'))
 		return err
 	}
 	mine, err := rd.DiskRepSnaps(ctx, dom)
@@ -173,6 +182,15 @@ func (s *Service) RecvReplica(ctx context.Context, r io.Reader) (Replica, error)
 	if _, err := s.HV.State(ctx, dom); err == nil {
 		return Replica{}, fmt.Errorf("%w: %s runs on this server; it can't also keep a copy of it", ErrExists, h.Name)
 	}
+	if h.Shared != "" {
+		if why := s.checkStorage(h.Shared); why != "" {
+			return Replica{}, fmt.Errorf("%w: %s", ErrConflict, why)
+		}
+		if err := s.saveReplica(h); err != nil {
+			return Replica{}, err
+		}
+		return s.replicaInfo(ctx, rd, h), nil
+	}
 	if err := rd.RecvReplica(ctx, dom, h.Base, br); err != nil {
 		return Replica{}, err
 	}
@@ -209,8 +227,14 @@ func (s *Service) loadReplica(name string) (ReplicaHeader, error) {
 }
 
 func (s *Service) replicaInfo(ctx context.Context, rd replicaDisks, h ReplicaHeader) Replica {
-	r := Replica{Name: h.Name, From: h.From, Bytes: rd.ReplicaBytes(ctx, Prefix+h.Name), VCPUs: h.VCPUs,
-		MemoryMiB: h.MemoryMiB, DiskGB: h.DiskGB, OSType: h.OSType, Owner: h.Owner}
+	r := Replica{Name: h.Name, From: h.From, VCPUs: h.VCPUs, MemoryMiB: h.MemoryMiB, DiskGB: h.DiskGB, OSType: h.OSType, Owner: h.Owner}
+	if h.Shared != "" { // nothing to copy: the VM's own disks on shared storage
+		if t := SnapTime(h.Snap); !t.IsZero() {
+			r.At = t.Format(time.RFC3339)
+		}
+		return r
+	}
+	r.Bytes = rd.ReplicaBytes(ctx, Prefix+h.Name)
 	if snaps, _ := rd.ReplicaSnaps(ctx, Prefix+h.Name); len(snaps) > 0 {
 		if t := SnapTime(snaps[len(snaps)-1]); !t.IsZero() {
 			r.At = t.Format(time.RFC3339)
@@ -230,7 +254,7 @@ func (s *Service) Replicas(ctx context.Context) []Replica {
 	sort.Strings(files)
 	for _, f := range files {
 		h, err := s.loadReplica(strings.TrimSuffix(filepath.Base(f), ".json"))
-		if err != nil || !rd.HasReplica(ctx, Prefix+h.Name) {
+		if err != nil || (h.Shared == "" && !rd.HasReplica(ctx, Prefix+h.Name)) {
 			continue
 		}
 		out = append(out, s.replicaInfo(ctx, rd, h))
@@ -254,17 +278,34 @@ func (s *Service) PromoteReplica(ctx context.Context, name string) (VM, string, 
 	if _, err := s.HV.State(ctx, dom); err == nil {
 		return VM{}, "", fmt.Errorf("%w: %s is already on this server", ErrExists, name)
 	}
+	bg := context.WithoutCancel(ctx)
+	h.Autostart = false // high availability starts it, not the host's boot
+	if h.Shared != "" { // the VM's own disks: open them here
+		disk, extra, err := s.attachShared(ctx, h.MoveHeader)
+		if err != nil {
+			return VM{}, "", err
+		}
+		undo := []func(){func() { s.logErr("close shared disks", s.release(bg, dom)) }}
+		h.Extra = extra
+		v, note, err := s.defineMoved(ctx, h.MoveHeader, disk, &undo)
+		if err != nil {
+			for i := len(undo) - 1; i >= 0; i-- {
+				undo[i]()
+			}
+			return VM{}, "", err
+		}
+		_ = os.Remove(s.replicaFile(name))
+		return v, "; its disks are on Ceph (nothing lost)" + note, nil
+	}
 	if !rd.HasReplica(ctx, dom) {
 		return VM{}, "", fmt.Errorf("%w: the copy of %q is missing", ErrNotFound, name)
 	}
-	_ = s.Disks.DestroyDisk(ctx, dom) // leftover of an interrupted move or failover
+	_ = s.dropLeftover(ctx, dom) // leftover of an interrupted move or failover
 	disk, err := rd.PromoteReplica(ctx, dom)
 	if err != nil {
 		return VM{}, "", err
 	}
-	bg := context.WithoutCancel(ctx)
 	undo := []func(){func() { s.logErr("undo failover disk", rd.RetireDisk(bg, dom)) }}
-	h.Autostart = false // high availability starts it, not the host's boot
 	v, note, err := s.defineMoved(ctx, h.MoveHeader, disk, &undo)
 	if err != nil {
 		for i := len(undo) - 1; i >= 0; i-- {
@@ -290,6 +331,12 @@ func (s *Service) DropReplica(ctx context.Context, name string) error {
 	}
 	dom := Prefix + name
 	defer s.lock(dom)()
+	if h, err := s.loadReplica(name); err == nil && h.Shared != "" {
+		if err := os.Remove(s.replicaFile(name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return nil
+	}
 	if err := rd.DropReplica(ctx, dom); err != nil {
 		return err
 	}
@@ -319,6 +366,12 @@ func (s *Service) RetireVM(ctx context.Context, name, from string) error {
 	}
 	if err := s.remove(ctx, name, true); err != nil {
 		return err
+	}
+	if h.Shared != "" { // the other server runs it from the same disks: just close them here
+		if err := s.release(context.WithoutCancel(ctx), dom); err != nil {
+			return err
+		}
+		return s.saveReplica(ReplicaHeader{MoveHeader: h, Snap: repSnapNow(), From: from})
 	}
 	if err := rd.RetireDisk(context.WithoutCancel(ctx), dom); err != nil {
 		return err

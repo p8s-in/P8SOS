@@ -103,6 +103,13 @@ p8 — manage P8S OS virtual machines
   p8 storages find SERVER          list a SAN's iSCSI targets
   p8 storages add-iscsi NAME SERVER TARGET [LUN] [--format]   use a SAN disk for VM disks
   p8 storages connect|rm NAME      reconnect / disconnect (data stays on the NAS / SAN)
+  p8 ceph                          Ceph across the servers: health, monitors, disks
+  p8 ceph install [SERVER]         install Ceph on a server (this one by default)
+  p8 ceph init NETWORK             set Ceph up here (first monitor + manager), e.g. 192.168.1.0/24
+  p8 ceph mon|mgr SERVER           add a monitor / manager on a server
+  p8 ceph osd SERVER DISK          give an empty disk to Ceph (it is erased)
+  p8 ceph osd-rm ID                take a disk out (run again to remove it once Ceph moved its data)
+  p8 ceph pool [COPIES]            make the VM pool (then: p8 create NAME --storage ceph)
   p8 lan-setup                     let VMs join your home network (Ethernet only, once)
   p8 bond-setup PORT [--mode M]    add a second cable to the home network (failover; M: active-backup, 802.3ad)
   p8 ipv6 on|off|status            IPv6 for VMs on the private network
@@ -879,6 +886,44 @@ TXT
         [[ -n ${2:-} ]] || { red "usage: p8 storages rm NAME"; exit 1; }
         call DELETE "/storages/$2" >/dev/null && green "✔ $2 disconnected (its data stays on the NAS / SAN)" ;;
       *) red "usage: p8 storages [list|add-nfs|find|add-iscsi|connect|rm]"; exit 1 ;;
+    esac ;;
+
+  ceph)
+    srv() { # server name or id -> id ("" = this server)
+      [[ -z ${1:-} ]] && { echo ""; return; }
+      jq -r --arg s "$1" '[.ceph.nodes[] | select(.name == $s or .id == $s) | .id][0] // $s' <<<"$(call GET /ceph)"
+    }
+    case ${1:-status} in
+      status|"")
+        body=$(call GET /ceph) || exit 1
+        if [[ $(jq -r .ceph.configured <<<"$body") == true ]]; then
+          jq -r '.ceph.status // empty | "health: \(.health)   monitors \(.quorum | length)/\(.mons)   manager \(if .mgr_up then "up" else "DOWN" end)   disks \(.osd_up)/\(.osd_count) up"' <<<"$body"
+          jq -r '.ceph.status.problems[]? | "  ! " + .' <<<"$body"
+          jq -r '.ceph.status_error // empty | "  ! " + .' <<<"$body"
+          jq -r '"network \(.ceph.network)   VM pool: \(if .ceph.pool_ready then .ceph.pool + " ready (p8 create NAME --storage ceph)" else "not made yet (p8 ceph pool)" end)"' <<<"$body"
+        fi
+        echo
+        jq -r '.ceph.nodes[] | [.name, (if .online|not then "offline" elif .info == null then (.error // "?") elif .info.installed|not then "not installed" else ((if .info.mon then "mon " else "" end) + (if .info.mgr then "mgr " else "" end) + ((.info.osds // []) | map("osd.\(.)") | join(" "))) end), ((.info.disks // []) | map(.name) | join(","))] | @tsv' <<<"$body" |
+          while IFS=$'\t' read -r n st d; do printf '%-16s %-34s %s\n' "$n" "$st" "${d:+empty disks: $d}"; done
+        echo; jq -r '.advice[] | "→ " + .' <<<"$body" ;;
+      install) call POST /ceph/install "$(jq -nc --arg n "$(srv "${2:-}")" '{node:$n}')" >/dev/null && green "✔ installing Ceph (a few minutes; watch: p8 ceph)" ;;
+      init)
+        [[ -n ${2:-} ]] || { red "usage: p8 ceph init NETWORK   (the network all servers share, e.g. 192.168.1.0/24)"; exit 1; }
+        call POST /ceph/init "$(jq -nc --arg n "$2" '{network:$n}')" >/dev/null && green "✔ setting Ceph up (watch: p8 ceph)" ;;
+      mon|mgr)
+        [[ -n ${2:-} ]] || { red "usage: p8 ceph $1 SERVER"; exit 1; }
+        call POST "/ceph/$1s" "$(jq -nc --arg n "$(srv "$2")" '{node:$n}')" >/dev/null && green "✔ adding a $1 on $2 (watch: p8 ceph)" ;;
+      osd)
+        [[ -n ${2:-} && -n ${3:-} ]] || { red "usage: p8 ceph osd SERVER DISK   (an empty disk, e.g. /dev/sdb; see p8 ceph)"; exit 1; }
+        if [[ ${YES:-0} != 1 ]]; then read -r -p "Give $3 on $2 to Ceph? It is erased. [y/N] " a; [[ $a == [yY]* ]] || exit 0; fi
+        call POST /ceph/osds "$(jq -nc --arg n "$(srv "$2")" --arg d "$3" '{node:$n, disk:$d}')" >/dev/null && green "✔ adding $3 (watch: p8 ceph)" ;;
+      osd-rm)
+        [[ ${2:-} =~ ^[0-9]+$ ]] || { red "usage: p8 ceph osd-rm ID"; exit 1; }
+        call DELETE "/ceph/osds/$2" >/dev/null && green "✔ osd.$2: taken out (Ceph moves its data first; run again to remove it when p8 ceph shows no warnings)" ;;
+      pool)
+        body=$(call POST /ceph/pool "$(jq -nc --argjson s "${2:-0}" '{size:$s}')") || exit 1
+        green "✔ VM pool $(jq -r .pool <<<"$body"): $(jq -r .size <<<"$body") copies of every block. Use it: p8 create NAME --storage ceph" ;;
+      *) red "usage: p8 ceph [status|install|init|mon|mgr|osd|osd-rm|pool]"; exit 1 ;;
     esac ;;
 
   lan-setup|lan)

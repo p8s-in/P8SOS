@@ -356,7 +356,7 @@ func (s *Service) Create(ctx context.Context, r CreateRequest) (VM, error) {
 	}
 	// No domain exists, so any disk or seed with this name is a leftover from a
 	// create that was interrupted (crash, power loss). Clear it so we can retry.
-	if err := s.Disks.DestroyDisk(ctx, dom); err != nil {
+	if err := s.dropLeftover(ctx, dom); err != nil {
 		return VM{}, fmt.Errorf("remove leftover disk: %w", err)
 	}
 	s.logErr("remove leftover seed", s.Seeds.Remove(dom))

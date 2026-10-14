@@ -73,6 +73,11 @@ func (m *Manager) call(ctx context.Context, n Node, method, path string, in, out
 	return json.NewDecoder(resp.Body).Decode(out)
 }
 
+// Call does one API request on node n as the cluster (admin rights there).
+func (m *Manager) Call(ctx context.Context, n Node, method, path string, in, out any) error {
+	return m.call(ctx, n, method, path, in, out)
+}
+
 // DialVNC opens the raw VNC stream of a VM on node n (the worker bridges it
 // to the VM's local VNC port after an HTTP Upgrade).
 func (m *Manager) DialVNC(ctx context.Context, n Node, vm string) (net.Conn, error) {

@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 // VM disks can also live on other ZFS pools (network storage: a pool on an
@@ -31,7 +32,7 @@ func (z *ZFS) pools() map[string]string {
 // parent is the dataset that holds the VM's disks.
 func (z *ZFS) parent(vm string) string {
 	pools := z.pools()
-	if len(pools) == 0 {
+	if len(pools) == 0 && z.Ceph == nil {
 		return z.Dataset
 	}
 	z.place.mu.Lock()
@@ -40,8 +41,13 @@ func (z *ZFS) parent(vm string) string {
 		z.place.where = map[string]string{}
 	}
 	if p, ok := z.place.where[vm]; ok {
-		return p
+		// "local" without a local disk may be a VM that came on Ceph since: look again
+		if p != z.Dataset || z.Ceph == nil || z.exists("/dev/zvol/"+z.Dataset+"/"+vm+"-disk0") {
+			return p
+		}
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
 	// look on every other pool once and remember what is where
 	names := make([]string, 0, len(pools))
 	for _, ds := range pools {
@@ -49,13 +55,22 @@ func (z *ZFS) parent(vm string) string {
 	}
 	sort.Strings(names)
 	for _, ds := range names {
-		out, err := z.Run.Run(context.Background(), "zfs", "list", "-H", "-o", "name", "-t", "volume", "-d", "1", ds)
+		out, err := z.Run.Run(ctx, "zfs", "list", "-H", "-o", "name", "-t", "volume", "-d", "1", ds)
 		if err != nil {
 			continue
 		}
 		for _, n := range strings.Fields(string(out)) {
 			if v, ok := strings.CutSuffix(strings.TrimPrefix(n, ds+"/"), "-disk0"); ok && !strings.Contains(v, "/") {
 				z.place.where[v] = ds
+			}
+		}
+	}
+	if z.cephReady(ctx) {
+		if imgs, err := z.Ceph.Images(ctx); err == nil {
+			for _, n := range imgs {
+				if v, ok := strings.CutSuffix(n, "-disk0"); ok {
+					z.place.where[v] = z.cephMarker()
+				}
 			}
 		}
 	}
@@ -68,7 +83,12 @@ func (z *ZFS) parent(vm string) string {
 // Place says which storage a new VM's disks go to ("" or "local" = this server's pool).
 func (z *ZFS) Place(vm, storage string) error {
 	ds := z.Dataset
-	if storage != "" && storage != LocalStorage {
+	if storage == CephStorage && z.Ceph != nil {
+		if !z.cephReady(context.Background()) {
+			return fmt.Errorf("Ceph storage isn't ready on this server (Server → Ceph)")
+		}
+		ds = z.cephMarker()
+	} else if storage != "" && storage != LocalStorage {
 		var ok bool
 		if ds, ok = z.pools()[storage]; !ok {
 			return fmt.Errorf("no storage %q for VM disks on this server", storage)
@@ -86,6 +106,9 @@ func (z *ZFS) Place(vm, storage string) error {
 // StorageOf names the storage a VM's disks are on.
 func (z *ZFS) StorageOf(vm string) string {
 	p := z.parent(vm)
+	if strings.HasPrefix(p, rbdMarker) {
+		return CephStorage
+	}
 	for name, ds := range z.pools() {
 		if ds == p {
 			return name
@@ -99,6 +122,9 @@ func (z *ZFS) Storages() []string {
 	l := []string{LocalStorage}
 	for name := range z.pools() {
 		l = append(l, name)
+	}
+	if z.cephReady(context.Background()) {
+		l = append(l, CephStorage)
 	}
 	sort.Strings(l[1:])
 	return l

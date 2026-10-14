@@ -53,6 +53,8 @@ var (
 	brandLogoWhite []byte
 	//go:embed storages.js
 	storagesJS []byte
+	//go:embed ceph.js
+	cephJS []byte
 	//go:embed disks.js
 	disksJS []byte
 	//go:embed remote.js
@@ -92,6 +94,7 @@ var assets = map[string]asset{
 	"/remote.js":     {remoteJS, "text/javascript; charset=utf-8", "no-cache"},
 	"/disks.js":      {disksJS, "text/javascript; charset=utf-8", "no-cache"},
 	"/storages.js":   {storagesJS, "text/javascript; charset=utf-8", "no-cache"},
+	"/ceph.js":       {cephJS, "text/javascript; charset=utf-8", "no-cache"},
 	// P8S logo (assets/brand): tab icon, phone home screen, header, sign-in page
 	"/favicon.svg":          {brandFavicon, "image/svg+xml", "public, max-age=86400"},
 	"/favicon.ico":          {brandFavicon32, "image/png", "public, max-age=86400"},

@@ -20,6 +20,7 @@ import (
 
 	"p8sos/internal/audit"
 	"p8sos/internal/billing"
+	"p8sos/internal/ceph"
 	"p8sos/internal/cloud"
 	"p8sos/internal/cluster"
 	"p8sos/internal/config"
@@ -157,6 +158,10 @@ type Server struct {
 	Remote *Remote
 	// Storages are network storages (NFS, iSCSI); nil = off.
 	Storages *storages.Manager
+	// CephLocal is this server's Ceph part; Ceph drives all servers (master or
+	// a server alone; nil on a worker). nil = Ceph off.
+	CephLocal *ceph.Manager
+	Ceph      *ceph.Cluster
 	// LocalVMs lists this server's own VMs (not the cluster's); nil = VMs.List.
 	LocalVMs func(ctx context.Context) ([]vm.VM, error)
 	// Security: allowed networks, password policy, 2FA for staff; nil = defaults.
@@ -341,6 +346,17 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("POST /api/v1/storages/discover", s.discoverISCSI)
 	auth.HandleFunc("POST /api/v1/storages/{name}/connect", s.connectStorage)
 	auth.HandleFunc("DELETE /api/v1/storages/{name}", s.removeStorage)
+	auth.HandleFunc("GET /api/v1/ceph", s.getCeph)
+	auth.HandleFunc("POST /api/v1/ceph/install", s.cephStep(ceph.ActInstall))
+	auth.HandleFunc("POST /api/v1/ceph/init", s.cephStep(ceph.ActInit))
+	auth.HandleFunc("POST /api/v1/ceph/mons", s.cephStep(ceph.ActMon))
+	auth.HandleFunc("POST /api/v1/ceph/mgrs", s.cephStep(ceph.ActMgr))
+	auth.HandleFunc("POST /api/v1/ceph/osds", s.cephStep(ceph.ActOSD))
+	auth.HandleFunc("DELETE /api/v1/ceph/osds/{id}", s.removeCephOSD)
+	auth.HandleFunc("POST /api/v1/ceph/pool", s.createCephPool)
+	auth.HandleFunc("GET /api/v1/ceph/node", s.getCephNode)
+	auth.HandleFunc("POST /api/v1/ceph/node/config", s.setCephConfig)
+	auth.HandleFunc("POST /api/v1/ceph/node/{action}", s.cephNodeStep)
 	auth.HandleFunc("PUT /api/v1/remote/vpn", s.putVPN)
 	auth.HandleFunc("POST /api/v1/remote/vpn/devices", s.addVPNDevice)
 	auth.HandleFunc("DELETE /api/v1/remote/vpn/devices/{id}", s.deleteVPNDevice)

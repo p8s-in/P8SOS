@@ -157,6 +157,9 @@ func (z *ZFS) PromoteReplica(ctx context.Context, vm string) (string, error) {
 // RetireDisk turns a VM's disk back into a copy (the VM runs elsewhere now);
 // the next replication brings it up to date from the other server.
 func (z *ZFS) RetireDisk(ctx context.Context, vm string) error {
+	if z.Shared(vm) { // the same disk is in use on the other server: just close it here
+		return z.Release(ctx, vm)
+	}
 	if err := z.DropReplica(ctx, vm); err != nil {
 		return err
 	}

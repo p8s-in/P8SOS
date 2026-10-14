@@ -130,6 +130,8 @@ type Monitor struct {
 	StopGuests func(ctx context.Context) error     // clean shutdown of every VM/container
 	Poweroff   func() error                        // power the server off
 	Storages   func(ctx context.Context) []Storage // network storages (NAS / SAN)
+	// Ceph is the Ceph cluster's state; nil func or nil result = no Ceph here.
+	Ceph func(ctx context.Context) *CephState
 
 	mu       sync.Mutex
 	set      *Settings
@@ -317,6 +319,7 @@ func (m *Monitor) Tick(ctx context.Context) {
 	fs = append(fs, m.checkJobs()...)
 	fs = append(fs, m.checkClock(ctx)...)
 	fs = append(fs, m.checkStorages(ctx)...)
+	fs = append(fs, m.checkCeph(ctx)...)
 	power, pf := m.checkPower(ctx, set)
 	fs = append(fs, pf...)
 	if needSmart {

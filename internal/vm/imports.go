@@ -277,7 +277,7 @@ func (s *Service) runImport(ctx context.Context, path string, pl imports.Plan, d
 		}
 		return "", err
 	}
-	if err := s.Disks.DestroyDisk(ctx, dom); err != nil { // leftover of an interrupted import
+	if err := s.dropLeftover(ctx, dom); err != nil { // leftover of an interrupted import
 		return "", fmt.Errorf("remove leftover disk: %w", err)
 	}
 	p(fmt.Sprintf("creating a %d GB disk", diskGB))

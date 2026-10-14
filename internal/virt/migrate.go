@@ -33,12 +33,47 @@ func (v *Virsh) MigratableXML(ctx context.Context, name string, inactive bool) (
 var rePct = regexp.MustCompile(`Migration: \[\s*(\d+)\s*%\]`)
 
 // MigrateArgs is the virsh command line for a live move to the server at ip.
-func MigrateArgs(uri, name, ip, xmlFile, persistentFile string) []string {
-	return []string{"-c", uri, "migrate", "--live", "--persistent", "--undefinesource",
-		"--copy-storage-all", "--auto-converge", "--verbose",
-		"--xml", xmlFile, "--persistent-xml", persistentFile,
-		"--migrateuri", "tcp://" + ip, "--disks-uri", "tcp://" + ip, "--listen-address", ip,
-		name, "qemu+tcp://" + ip + "/system"}
+// Disks are copied along, unless they are on shared storage (Ceph): then
+// only the memory moves.
+func MigrateArgs(uri, name, ip, xmlFile, persistentFile string, shared bool) []string {
+	a := []string{"-c", uri, "migrate", "--live", "--persistent", "--undefinesource"}
+	if !shared {
+		a = append(a, "--copy-storage-all")
+	}
+	a = append(a, "--auto-converge", "--verbose", "--xml", xmlFile, "--persistent-xml", persistentFile,
+		"--migrateuri", "tcp://"+ip)
+	if !shared {
+		a = append(a, "--disks-uri", "tcp://"+ip)
+	}
+	return append(a, "--listen-address", ip, name, "qemu+tcp://"+ip+"/system")
+}
+
+// SharedDisks reports whether every disk of a domain is a Ceph device
+// (/dev/rbd/...), which the other server opens itself.
+func SharedDisks(domXML []byte) bool {
+	var d struct {
+		Disks []struct {
+			Device string `xml:"device,attr"`
+			Source struct {
+				Dev  string `xml:"dev,attr"`
+				File string `xml:"file,attr"`
+			} `xml:"source"`
+		} `xml:"devices>disk"`
+	}
+	if xml.Unmarshal(domXML, &d) != nil {
+		return false
+	}
+	n := 0
+	for _, k := range d.Disks {
+		if k.Device != "disk" {
+			continue // CDs: the cloud-init disk is made on the other server
+		}
+		if !strings.HasPrefix(k.Source.Dev, "/dev/rbd/") {
+			return false
+		}
+		n++
+	}
+	return n > 0
 }
 
 // Migrate moves the running domain to the server at ip (its tunnel address).
@@ -56,7 +91,7 @@ func (v *Virsh) Migrate(ctx context.Context, name, ip string, xml, persistentXML
 	if err := os.WriteFile(pf, persistentXML, 0o600); err != nil {
 		return err
 	}
-	cmd := MigrateCmd(ctx, "virsh", MigrateArgs(v.URI, name, ip, xf, pf)...)
+	cmd := MigrateCmd(ctx, "virsh", MigrateArgs(v.URI, name, ip, xf, pf, SharedDisks(xml))...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.StdoutPipe()

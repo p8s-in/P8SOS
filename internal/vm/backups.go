@@ -41,6 +41,9 @@ type deviceWaiter interface {
 
 var errBackupsOff = fmt.Errorf("%w: backups are not configured on this host", ErrConflict)
 
+// errCephBackup: backups read ZFS disks; VMs on Ceph have snapshots (and three copies of every block).
+var errCephBackup = fmt.Errorf("%w: backups of VMs on Ceph aren't available yet; use snapshots (Ceph keeps 3 copies of every block)", ErrConflict)
+
 func (s *Service) backupsReady() error {
 	if s.Backups == nil || s.Jobs == nil {
 		return errBackupsOff
@@ -58,8 +61,10 @@ func (s *Service) startBackup(ctx context.Context, name string, keep int) (Job, 
 	if err := s.backupsReady(); err != nil {
 		return Job{}, err
 	}
-	if _, err := s.Get(ctx, name); err != nil {
+	if v, err := s.Get(ctx, name); err != nil {
 		return Job{}, err
+	} else if v.Storage == SharedStorage {
+		return Job{}, errCephBackup
 	}
 	j, err := s.Jobs.Start("backup", name, func(ctx context.Context, p jobs.Progress) (string, error) {
 		return s.runBackup(ctx, name, keep, p)
@@ -87,6 +92,10 @@ func (s *Service) runBackup(ctx context.Context, name string, keep int, p jobs.P
 	if err != nil {
 		unlock()
 		return "", err
+	}
+	if v.Storage == SharedStorage {
+		unlock()
+		return "", errCephBackup
 	}
 	sp, err := s.spec(ctx, dom)
 	if err != nil {
@@ -341,6 +350,8 @@ func (s *Service) StartRestore(ctx context.Context, name, id, newName string) (J
 	switch {
 	case exists && target != name:
 		return Job{}, fmt.Errorf("%w: vm %q already exists; pick another name", ErrExists, target)
+	case exists && s.shared(dom):
+		return Job{}, fmt.Errorf("%w: %q is on Ceph; restore the backup as a new VM (another name) instead", ErrConflict, target)
 	case exists && st != virt.Stopped:
 		return Job{}, fmt.Errorf("%w: stop vm %q before restoring over it (it is %s)", ErrConflict, target, st)
 	}

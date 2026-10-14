@@ -116,8 +116,10 @@ sessions and connections normally survive. Its private IP can still change
   (`p8 cpu web1 compatible`), shut it down and start it once: it then runs on
   the newest CPU model all servers share and can move live anywhere. A server
   added later with an older CPU: set it again.
-- **Not yet live:** UEFI VMs (Windows 11), VMs on network storage, VMs with a
+- **Not yet live:** UEFI VMs (Windows 11), VMs on a SAN disk (iSCSI), VMs with a
   public IP or a CD in the drive — move those shut down.
+- **VMs on Ceph** ([ceph.md](ceph.md)) move without copying any disk: shut down it is instant,
+  running only the memory goes over.
 - **How:** libvirt on each server listens on its tunnel address only
   (`scripts/libvirt-migrate.sh`, port 16509 and 49152-49215, firewalled to the
   tunnel); `virsh migrate --live --copy-storage-all` runs on the old server.

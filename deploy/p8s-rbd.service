@@ -1,0 +1,17 @@
+[Unit]
+Description=P8S OS: open this server's Ceph disks (VMs on Ceph)
+Wants=network-online.target
+After=network-online.target ceph.target ceph-mon.target
+Before=libvirtd.service virtqemud.service libvirt-guests.service p8sd.service
+ConditionPathExists=/etc/ceph/ceph.conf
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+TimeoutStartSec=10min
+TimeoutStopSec=5min
+ExecStart=/usr/local/share/p8s/ceph-map.sh map
+ExecStop=/usr/local/share/p8s/ceph-map.sh unmap
+
+[Install]
+WantedBy=multi-user.target

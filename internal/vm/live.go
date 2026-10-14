@@ -129,7 +129,7 @@ func (s *Service) LiveCheck(ctx context.Context, name string) (string, error) {
 		return "it has a public IP from this server's pool; release it first", nil
 	case v.ISO != "" || v.Drivers != "":
 		return "eject its CDs first (Manage → Installer CD)", nil
-	case v.Storage != "":
+	case v.Storage != "" && !s.shared(Prefix+name):
 		return "its disks are on network storage " + v.Storage + " (not supported yet)", nil
 	case sp.OSType == "windows11" || sp.Firmware == "uefi":
 		return "UEFI VMs (Windows 11) can't move live yet; shut it down and move it", nil
@@ -218,8 +218,27 @@ func (s *Service) LivePrepare(ctx context.Context, h LiveHeader) (LivePlan, erro
 		}
 		return LivePlan{}, err
 	}
-	_ = s.Disks.DestroyDisk(ctx, dom) // leftover of an interrupted move
 	repl := map[string]string{h.Bridge: bridge}
+	if h.Shared != "" { // the same disks: open them here too
+		disk, extra, err := s.attachShared(ctx, h.MoveHeader)
+		if err != nil {
+			return fail(err)
+		}
+		undo = append(undo, func() { s.logErr("close shared disks", s.release(bg, dom)) })
+		for _, d := range h.Disks {
+			if d.Index == 0 {
+				repl[d.Path] = disk
+			}
+			for _, e := range extra {
+				if e.Index == d.Index {
+					repl[d.Path] = e.Path
+				}
+			}
+		}
+		h.Disks = nil
+	} else {
+		_ = s.dropLeftover(ctx, dom) // leftover of an interrupted move
+	}
 	for _, d := range h.Disks {
 		if d.Bytes <= 0 || d.Index < 0 || d.Index > virt.MaxExtraDisks {
 			return fail(fmt.Errorf("%w: bad disk %d", ErrInvalid, d.Index))
@@ -313,6 +332,9 @@ func (s *Service) LiveAbort(ctx context.Context, name string) error {
 	}
 	s.logErr("remove seed", s.Seeds.Remove(dom))
 	_ = os.Remove(s.nvramPath(dom))
+	if s.shared(dom) {
+		return s.release(ctx, dom) // the VM still runs on its old server
+	}
 	return s.Disks.DestroyDisk(ctx, dom)
 }
 
@@ -331,6 +353,9 @@ func (s *Service) LiveCleanup(ctx context.Context, name string) error {
 	s.logErr("remove backup schedule", s.SetSchedule(name, Schedule{}))
 	s.logErr("remove firewall", s.dropFirewall(context.WithoutCancel(ctx), name))
 	_ = os.Remove(s.nvramPath(dom))
+	if s.shared(dom) {
+		return s.release(ctx, dom) // the new server uses the same disks
+	}
 	return s.Disks.DestroyDisk(ctx, dom)
 }
 

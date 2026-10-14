@@ -50,7 +50,11 @@ type MoveHeader struct {
 	Firewall  *firewall.Settings `json:"firewall,omitempty"`
 	Schedule  *Schedule          `json:"schedule,omitempty"`
 	NVRAM     []byte             `json:"nvram,omitempty"` // UEFI variables (boot entries)
-	TPM       []byte             `json:"tpm,omitempty"`   // software TPM state (Windows 11, BitLocker)
+	// Shared names the storage every server sees ("ceph"): no disk follows
+	// the header, the other server opens the same disks.
+	Shared string           `json:"shared,omitempty"`
+	Extra  []virt.ExtraDisk `json:"extra,omitempty"` // data disks (shared storage)
+	TPM    []byte           `json:"tpm,omitempty"`   // software TPM state (Windows 11, BitLocker)
 }
 
 // maxHeader caps the header line (UEFI variables are about 0.7 MB in base64).
@@ -138,6 +142,12 @@ func (s *Service) moveHeader(ctx context.Context, name string) (MoveHeader, erro
 			h.TPM = b
 		}
 	}
+	if s.shared(dom) {
+		h.Shared = s.storageOf(dom)
+		for _, d := range sp.Extra {
+			h.Extra = append(h.Extra, virt.ExtraDisk{Index: d.Index, SizeGB: d.SizeGB})
+		}
+	}
 	return h, nil
 }
 
@@ -157,7 +167,7 @@ func (s *Service) MoveCheck(ctx context.Context, name string) (string, error) {
 		return "it has a public IP from this server's pool; release it first", nil
 	case v.ISO != "" || v.Drivers != "":
 		return "eject its CDs first (Manage → Installer CD)", nil
-	case len(v.Disks) > 0:
+	case len(v.Disks) > 0 && !s.shared(Prefix+name):
 		return "it has extra disks; moving those isn't supported yet (back it up and restore it on the other server instead)", nil
 	}
 	return "", nil
@@ -181,6 +191,9 @@ func (s *Service) ExportVM(ctx context.Context, name string, w io.Writer) error 
 	b, _ := json.Marshal(h)
 	if _, err := w.Write(append(b, '\n')); err != nil {
 		return err
+	}
+	if h.Shared != "" {
+		return nil // the other server opens the same disks
 	}
 	return s.Disks.(diskMover).SendDisk(ctx, dom, w)
 }
@@ -209,7 +222,20 @@ func (s *Service) ImportMovedVM(ctx context.Context, r io.Reader) (VM, string, e
 		}
 		return VM{}, "", err
 	}
-	_ = s.Disks.DestroyDisk(ctx, dom) // leftover of an interrupted move
+	if h.Shared != "" {
+		disk, extra, err := s.attachShared(ctx, h)
+		if err != nil {
+			return fail(err)
+		}
+		undo = append(undo, func() { s.logErr("close shared disks", s.release(bg, dom)) })
+		h.Extra = extra
+		v, note, err := s.defineMoved(ctx, h, disk, &undo)
+		if err != nil {
+			return fail(err)
+		}
+		return v, note, nil
+	}
+	_ = s.dropLeftover(ctx, dom) // leftover of an interrupted move
 	disk, err := mv.RecvDisk(ctx, dom, br)
 	if err != nil {
 		return fail(err)
@@ -249,6 +275,9 @@ func (s *Service) defineMoved(ctx context.Context, h MoveHeader, disk string, un
 	spec := virt.Spec{Name: dom, UUID: h.UUID, VCPUs: h.VCPUs, MemoryMiB: h.MemoryMiB, DiskGB: h.DiskGB, DiskPath: disk, SeedISO: seed,
 		Bridge: bridge, MAC: h.MAC, OSType: h.OSType, Template: h.Template, CreatedAt: h.CreatedAt, Owner: h.Owner,
 		DiskBus: h.DiskBus, NICModel: h.NICModel, Firmware: h.Firmware}
+	if h.Shared != "" {
+		spec.Extra = h.Extra // opened by attachShared: paths on this server
+	}
 	if spec.UUID == "" {
 		spec.UUID = newUUID()
 	}

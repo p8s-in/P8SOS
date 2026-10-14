@@ -33,6 +33,7 @@ import (
 	"p8sos/internal/audit"
 	"p8sos/internal/backup"
 	"p8sos/internal/billing"
+	"p8sos/internal/ceph"
 	"p8sos/internal/cloud"
 	"p8sos/internal/cloudinit"
 	"p8sos/internal/cluster"
@@ -113,7 +114,11 @@ func serve(args []string) error {
 	run := execx.System{}
 	// network storages (NFS shares, iSCSI disks with a ZFS pool for VM disks)
 	nets := &storages.Manager{Run: run, File: filepath.Join(cfg.DataDir, "storages.json")}
-	disks := &storage.ZFS{Run: run, Dataset: cfg.VMDataset, Pools: nets.VMPools}
+	// Ceph across the cluster's servers (Server → Ceph): VM disks every server sees
+	cephMgr := &ceph.Manager{Run: run, Etc: "/etc/ceph", Lib: "/var/lib/ceph", Name: cephName(), Log: log}
+	var cephClu *cluster.Manager // set below, once the cluster is loaded
+	disks := &storage.ZFS{Run: run, Dataset: cfg.VMDataset, Pools: nets.VMPools,
+		Ceph: &storage.RBD{Run: run, Pool: ceph.Pool, MapsFile: "/etc/p8s/rbd-maps", Ready: cephMgr.PoolReady}}
 	pools := &ippool.Store{Path: filepath.Join(cfg.DataDir, "ippools.json")}
 	svc := &vm.Service{
 		HV:           &virt.Virsh{Run: run, URI: cfg.LibvirtURI},
@@ -349,6 +354,20 @@ func serve(args []string) error {
 			}
 			return out
 		},
+		Ceph: func(ctx context.Context) *monitor.CephState {
+			if !cephMgr.Configured() || (cephClu != nil && cephClu.Role() == "worker") { // the master reports for the cluster
+				return nil
+			}
+			st, err := cephMgr.Status(ctx)
+			if err != nil {
+				return &monitor.CephState{Error: err.Error(), FreePct: -1}
+			}
+			free := -1
+			if st.SizeBytes > 0 {
+				free = int(st.FreeBytes * 100 / st.SizeBytes)
+			}
+			return &monitor.CephState{Health: st.Health, Problems: st.Problems, FreePct: free}
+		},
 	}
 	go mon.Loop(ctx)
 
@@ -525,6 +544,10 @@ func serve(args []string) error {
 	apiSrv.Security.Load()
 	apiSrv.Encryption = disks.Encryption              // encryption at rest (Server page → Storage)
 	apiSrv.Storages, apiSrv.LocalVMs = nets, svc.List // NFS / iSCSI (Server page → Network storage)
+	apiSrv.CephLocal, cephClu = cephMgr, clu          // Ceph (Server page → Ceph); the master drives every server
+	if clu.Role() != "worker" {
+		apiSrv.Ceph = &ceph.Cluster{Local: cephMgr, Peers: cephPeers{clu}}
+	}
 	remoteVPN := &vpn.Manager{Dir: filepath.Join(cfg.DataDir, "vpn"), Run: run}
 	if err := remoteVPN.Apply(ctx); err != nil {
 		log.Error("remote-access vpn", "err", err)
@@ -773,4 +796,33 @@ func stopAllGuests(ctx context.Context, svc *vm.Service, cts *ct.Service) error 
 		case <-time.After(5 * time.Second):
 		}
 	}
+}
+
+// cephName is this server's Ceph monitor / manager name: the short host name.
+func cephName() string {
+	h, _ := os.Hostname()
+	return strings.ToLower(strings.SplitN(h, ".", 2)[0])
+}
+
+// cephPeers lets Ceph reach the cluster's servers (the master and its workers).
+type cephPeers struct{ m *cluster.Manager }
+
+func (p cephPeers) List() []ceph.Peer {
+	if p.m.Role() != "master" {
+		return nil // a server alone
+	}
+	l := []ceph.Peer{{ID: p.m.SelfID(), Name: p.m.SelfName(), Self: true, Online: true}}
+	for _, w := range p.m.Workers() {
+		l = append(l, ceph.Peer{ID: w.ID, Name: w.Name, Online: p.m.NodeStatus(w.ID).Online})
+	}
+	return l
+}
+
+func (p cephPeers) Call(ctx context.Context, id, method, path string, in, out any) error {
+	for _, w := range p.m.Workers() {
+		if w.ID == id {
+			return p.m.Call(ctx, w, method, path, in, out)
+		}
+	}
+	return fmt.Errorf("no server %q in the cluster", id)
 }

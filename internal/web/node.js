@@ -23,6 +23,9 @@ document.body.insertAdjacentHTML("beforeend", `
   <h3>Network storage</h3>
   <div id="ndNet"></div>
 
+  <h3>Ceph</h3>
+  <div id="ndCeph"></div>
+
   <h3>OS templates</h3>
   <div class="sub">Images new VMs are made from. Adding one downloads it from the publisher (a few hundred MB) and checks its checksum.</div>
   <table class="snaps"><tbody id="ndTpl"></tbody></table>
@@ -141,6 +144,7 @@ async function loadNode(quiet){
   if (node) renderNode();
   loadMem(); loadHealth();
   if (!quiet && typeof loadNetStorage === "function") loadNetStorage();
+  if (!quiet && typeof loadCeph === "function") loadCeph();
   if (taskOpen) await showTask(taskOpen, true);
   clearTimeout(nodeTimer);
   if ($("#dlgNode").open && (node?.running || !node)) nodeTimer = setTimeout(() => loadNode(true), 3000);
