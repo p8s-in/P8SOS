@@ -32,7 +32,7 @@ server, by themselves, within about 3 minutes. Needs a cluster
 |---|---|
 | a worker on the master's local network | yes |
 | a worker on another network (internet) | **no** — P8S OS can't tell "server off" from "internet path broken". You get an alert; when you are sure the server is off, VM → Options → High availability → **Start the copy** |
-| the master | **no** — if the master dies, open the dashboard of the server with the copy (Server → High availability → **Start here**) |
+| the master | **yes with 3+ servers** — the others elect a new master, which starts the copies; with 2 servers: open the dashboard of the server with the copy (Server → High availability → **Start here**), or `p8 cluster promote` there |
 
 Only start a copy by hand when the VM's own server is really off (unplug it if
 you aren't sure): otherwise the VM runs twice with the same disk and IP.

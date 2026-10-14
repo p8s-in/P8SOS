@@ -49,7 +49,8 @@ func (s *Server) getCluster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	st := s.Cluster.State()
-	out := map[string]any{"role": st.Role, "endpoint": st.Endpoint}
+	out := map[string]any{"role": st.Role, "endpoint": st.Endpoint, "term": st.Term,
+		"size": s.Cluster.ClusterSize(), "peer": s.Cluster.Peer(), "quorum": s.Cluster.HasQuorum()}
 	nodes := []nodeView{}
 	if st.Role != "" {
 		self := nodeView{Node: st.Self, Role: st.Role, Self: true, Status: cluster.Status{Online: true}}
@@ -63,6 +64,9 @@ func (s *Server) getCluster(w http.ResponseWriter, r *http.Request) {
 				role = "master"
 			}
 			nodes = append(nodes, nodeView{Node: n, Role: role, Status: s.Cluster.NodeStatus(n.ID)})
+		}
+		for _, n := range st.Mesh { // a worker's view of the other workers
+			nodes = append(nodes, nodeView{Node: n, Role: "worker", Status: cluster.Status{Online: true}})
 		}
 	}
 	out["nodes"] = nodes
@@ -97,6 +101,7 @@ func (s *Server) clusterRegister(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
+	req.FromIP = clientIP(r) // where its tunnel can be reached (same network)
 	rep, err := s.Cluster.Register(r.Context(), req)
 	if err != nil {
 		s.audit(r, "cluster-join", http.StatusBadRequest, err.Error())

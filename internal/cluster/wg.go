@@ -34,21 +34,48 @@ func wgPubOK(s string) ([]byte, error) {
 	return b, nil
 }
 
-// config renders the tunnel in `wg setconf` format.
+// config renders the tunnel in `wg setconf` format. Every server listens, and
+// peers with every other server it can dial (or that can dial it); pairs
+// that can't reach each other directly go through the master.
 func (st State) wgConfig() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "[Interface]\nPrivateKey = %s\n", st.WGPriv)
-	if st.Role == "master" {
-		fmt.Fprintf(&b, "ListenPort = %d\n", WGPort)
+	fmt.Fprintf(&b, "[Interface]\nPrivateKey = %s\nListenPort = %d\n", st.WGPriv, WGPort)
+	peers := append([]Node(nil), st.Nodes...)
+	peers = append(peers, st.Mesh...)
+	via := map[string][]string{} // worker side: addresses reached through the master
+	var masterID string
+	if st.Role == "worker" && len(st.Nodes) > 0 {
+		masterID = st.Nodes[0].ID
 	}
-	for _, n := range st.Nodes {
-		allowed := n.WGIP + "/32"
-		if st.Role == "worker" { // the master passes traffic between workers (live moves)
-			allowed = Subnet + ".0/24"
+	direct := func(n Node) bool {
+		return n.ID == masterID || st.Role == "master" || n.Endpoint != "" || st.Self.Endpoint != ""
+	}
+	for _, n := range peers {
+		if !direct(n) {
+			via[masterID] = append(via[masterID], n.WGIP+"/32")
 		}
-		fmt.Fprintf(&b, "\n[Peer]\n# %s %s\nPublicKey = %s\nAllowedIPs = %s\n", n.ID, strings.ReplaceAll(n.Name, "\n", " "), n.WGPub, allowed)
-		if st.Role == "worker" { // dial out to the master; keep NAT mappings open
-			fmt.Fprintf(&b, "Endpoint = %s\nPersistentKeepalive = 25\n", st.Endpoint)
+	}
+	for _, n := range peers {
+		if !direct(n) {
+			continue
+		}
+		allowed := []string{n.WGIP + "/32"}
+		if n.ID == masterID {
+			allowed = append(allowed, via[masterID]...)
+			if len(st.Mesh) == 0 { // no book yet: the master passes traffic to the other workers
+				allowed = []string{Subnet + ".0/24"}
+			}
+		}
+		fmt.Fprintf(&b, "\n[Peer]\n# %s %s\nPublicKey = %s\nAllowedIPs = %s\n", n.ID, strings.ReplaceAll(n.Name, "\n", " "), n.WGPub, strings.Join(allowed, ", "))
+		ep := n.Endpoint
+		if n.ID == masterID && st.Endpoint != "" {
+			ep = st.Endpoint // the address the join code was made for
+		}
+		if ep != "" {
+			fmt.Fprintf(&b, "Endpoint = %s\n", ep)
+		}
+		if st.Role == "worker" || ep != "" { // keep NAT mappings open
+			fmt.Fprintf(&b, "PersistentKeepalive = 25\n")
 		}
 	}
 	return b.String()

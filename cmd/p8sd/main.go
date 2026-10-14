@@ -485,6 +485,13 @@ func serve(args []string) error {
 			}
 			return c
 		}}
+	// no single master: every server keeps the master's settings and can take over
+	clu.DataDir = cfg.DataDir
+	clu.BookFiles = []string{"users.json", "cluster/ha.json", "ippools.json", "security.json", "ldap.json", "sso.json"}
+	clu.OnRoleChange = func(role string) {
+		log.Warn("cluster role changed; restarting p8sd to take it up", "role", role)
+		go func() { time.Sleep(2 * time.Second); os.Exit(3) }() // systemd starts it again (VMs keep running)
+	}
 	// live moves: libvirt listens on the tunnel address (or stops when it is gone)
 	clu.OnTunnel = func(ctx context.Context, ip string) {
 		args := []string{filepath.Join(scriptsDir(), "libvirt-migrate.sh"), "off"}
@@ -508,6 +515,7 @@ func serve(args []string) error {
 	apiSrv.LocalLive, apiSrv.LocalCPU = svc, svc  // live moves, CPU types
 	apiSrv.Dial, apiSrv.RemoteMetrics = cvms.Dial, cvms.RemoteMetrics
 	go clu.Loop(ctx, 15*time.Second)
+	go clu.Watch(ctx, 5*time.Second) // elections when the master is gone
 	ha := &cluster.HA{C: cvms, Local: svc, Dir: filepath.Join(cfg.DataDir, "cluster"), Log: log,
 		Notify: func(sev, title, detail string) { mon.Notice("ha", sev, title, detail) }}
 	apiSrv.HA, apiSrv.LocalHA = ha, svc                                              // high availability

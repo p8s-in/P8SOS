@@ -124,6 +124,36 @@ sessions and connections normally survive. Its private IP can still change
   Worker → worker moves pass through the master. If anything fails, the VM keeps
   running where it was and the half copy is removed.
 
+## No single master (3 or more servers)
+
+Every server keeps the **cluster book**: all servers, the keys to reach them,
+and the master's settings (accounts, high availability, IP pools, security,
+company sign-in). The master hands it out every 15 seconds.
+
+- **The master dies:** after about 45 seconds without the book, the servers
+  hold an election. The lowest-numbered server that the others still reach
+  asks for votes; with a **majority of all servers** (2 of 3, 3 of 5 …) it
+  becomes the master of the next *term*, takes the settings from the book and
+  restarts p8sd (VMs keep running). Open its dashboard to manage the cluster.
+  High availability carries on there: protected VMs of the dead master start
+  on their copies.
+- **The old master comes back:** it learns about the newer term and becomes a
+  worker of the new master.
+- **No two masters:** a master that can't reach a majority for 30 seconds
+  stops acting as master — no failovers, no leases — and switches its
+  protected VMs off (they start on the majority side). A worker cut off from
+  the majority switches its protected VMs off too. A server alone can never
+  become master.
+- **Two servers:** nobody can be outvoted, so there is no automatic takeover.
+  When the master is really gone: `p8 cluster promote` on the worker (or the
+  button in Server → Cluster). Don't do this while the old master is only cut
+  off — it would come back as a second master until it hears of the new term.
+- **Tunnels:** servers now connect to each other directly (each listens on
+  UDP 51820) where they can; pairs that can't (both behind NAT on other
+  networks) still go through the master.
+- **What stays on the old master:** P8S Cloud billing data and the support
+  inbox, containers (they run on the master), the update/licence server data.
+
 ## High availability
 
 Protected VMs are copied to a second server every few minutes and started there
@@ -159,6 +189,7 @@ Files: `/var/lib/p8s/cluster/state.json` (roles, keys, tokens; root only),
 ## Not yet
 
 - Moving containers; live moves of UEFI VMs and VMs on network storage
+- An external tie-breaker for two-server clusters (like Proxmox's QDevice)
 - Containers in high availability (VMs: see [ha.md](ha.md)); shared storage (Ceph/NFS)
 - Containers on workers (containers run on the master), ISO installs and public IPs on workers
 - One shared ISO library and template list

@@ -693,6 +693,7 @@ func (m *Manager) Poll(ctx context.Context) {
 		}
 		m.mu.Unlock()
 	}
+	m.pushBook(ctx) // every server keeps a copy, so one can take over
 }
 
 // Loop polls the workers while this server is the master.

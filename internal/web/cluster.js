@@ -58,6 +58,16 @@ async function loadCluster(){
     : role === "master"
       ? `This server is the <b>master</b>: one dashboard for all servers; new VMs go to the server with the most free memory.`
       : `This server is a <b>worker</b> of <b>${esc(nodes.find(n => n.role === "master")?.name || "the master")}</b>. Manage its VMs from the master's dashboard.`;
+  if (role) {
+    const seen = cluster.peer?.master_seen_s ?? -1;
+    $("#clSub").innerHTML += `<div class="hint">${cluster.size >= 3
+      ? `No single master: if the master is gone for about a minute, the other servers choose a new one (they need a majority: ${Math.floor(cluster.size / 2) + 1} of ${cluster.size}).`
+      : "With 3 or more servers the cluster also survives losing its master. With 2, a worker can take over by hand."}${cluster.term ? ` Term ${cluster.term}.` : ""}</div>` +
+      (role === "master" && cluster.quorum === false ? `<div class="hint" style="color:var(--bad)">This master can't reach most of the servers: high availability is paused here.</div>` : "") +
+      (role === "worker" && seen >= 45 ? `<div class="hint" style="color:var(--warn)">The master hasn't answered for ${seen < 100000 ? seen + " s" : "a long time"}.
+        ${cluster.size >= 3 ? "The servers will choose a new master if most of them agree." : ""}
+        <button class="btn" id="clPromote" type="button">Make this server the master</button></div>` : "");
+  }
   $("#clNodes").innerHTML = nodes.map(n => {
     const c = n.status?.capacity || {}, on = n.status?.online;
     const room = c.mem_total_mib ? `${clGB(c.mem_used_mib || 0)} of ${clGB(c.mem_total_mib)} GB RAM given to VMs · ${c.vms || 0} VMs · ${c.cpus || "?"} CPUs` : "";
@@ -72,6 +82,10 @@ async function loadCluster(){
     : `<span class="spacer"></span>${role ? "" : `<button class="btn" id="clJoinOpen" type="button">Join a master…</button>`}<button class="btn primary" id="clAddOpen" type="button">+ Add a server</button>`;
   if ($("#clAddOpen")) $("#clAddOpen").onclick = () => { $("#clAddBox").hidden = false; $("#clJoinBox").hidden = true; clTab("lan"); };
   if ($("#clJoinOpen")) $("#clJoinOpen").onclick = () => { $("#clJoinBox").hidden = false; $("#clAddBox").hidden = true; };
+  if ($("#clPromote")) $("#clPromote").onclick = async () => {
+    if (!confirm("Make this server the cluster master? Only do this when the old master is really gone (switched off or broken); it becomes a worker when it comes back.")) return;
+    try { const r = await call("POST", "/cluster/promote", {}); toast(r.note); setTimeout(() => location.reload(), 4000); } catch (e) { toast(e.message, true); }
+  };
   if ($("#clLeave")) $("#clLeave").onclick = async () => {
     if (!confirm("Leave the cluster? This server's VMs keep running here; the master won't show them any more.")) return;
     try { await call("POST", "/cluster/leave"); toast("This server stands alone again. Remove it on the master too."); loadCluster(); } catch (e) { toast(e.message, true); }

@@ -33,8 +33,9 @@ import (
 //     (internet) get copies but are failed over by hand ("Start the copy").
 //   - when the dead server comes back, its old VM is switched off and kept as
 //     the copy; copies then go the other way.
-// The master's own VMs can be protected too; if the master dies, start their
-// copies by hand in the other server's dashboard (Server → High availability).
+// The master's own VMs can be protected too. With 3+ servers, if the master
+// dies the others elect a new master (quorum.go), which starts their copies;
+// with 2, start them by hand in the other server's dashboard.
 
 // LocalHA is the local VM service's side (vm.Service).
 type LocalHA interface {
@@ -142,6 +143,8 @@ type HA struct {
 	told    map[string]bool      // "needs a manual start" sent for this outage
 	busy    map[string]bool      // copy running
 	booted  bool
+	// master without a majority: its protected VMs were switched off
+	quorumFenced bool
 	// worker side
 	lease    time.Time
 	leaseVMs []string
@@ -347,7 +350,7 @@ func (h *HA) view(ctx context.Context, c *HAVM) HAVMView {
 	h.mu.Unlock()
 	switch {
 	case c.Node == h.self():
-		v.Why = "it runs on the master; if the master dies, start the copy by hand on " + v.TargetName
+		v.Why = "it runs on the master; if the master dies, the other servers elect a new master which starts the copy (with 2 servers: start it by hand on " + v.TargetName + ")"
 	case c.Target != h.self() && !h.online(c.Target):
 		v.Why = "the server with the copy is offline"
 	default:
@@ -418,6 +421,13 @@ func (h *HA) Tick(ctx context.Context) {
 }
 
 func (h *HA) masterTick(ctx context.Context) {
+	if !h.C.M.HasQuorum() {
+		h.noQuorum(ctx)
+		return
+	}
+	h.mu.Lock()
+	h.quorumFenced = false
+	h.mu.Unlock()
 	now := h.now()
 	h.mu.Lock()
 	h.loadLocked()
@@ -1005,6 +1015,31 @@ func (h *HA) gatewayOK(ctx context.Context) bool {
 	return h.C.M.GatewayOK(ctx)
 }
 
+// noQuorum: this master reaches no majority of the servers. The others may
+// elect a new master and start copies of its protected VMs, so it switches
+// them off (once per outage), renews nobody's lease and fails nothing over.
+func (h *HA) noQuorum(ctx context.Context) {
+	h.mu.Lock()
+	h.loadLocked()
+	if h.quorumFenced {
+		h.mu.Unlock()
+		return
+	}
+	h.quorumFenced = true
+	var names []string
+	for name, c := range h.st.VMs {
+		if c.Node == h.self() {
+			names = append(names, name)
+		}
+	}
+	h.mu.Unlock()
+	sort.Strings(names)
+	stopped := h.Local.Fence(ctx, names)
+	h.event("critical", "this master can't reach most of the cluster: high availability paused"+
+		map[bool]string{true: ", switched off " + strings.Join(stopped, ", "), false: ""}[len(stopped) > 0],
+		"The other servers may choose a new master and start the copies there. This server follows the new master when the network is back.")
+}
+
 // --- worker side ---
 
 // Sync is the master's heartbeat: names are this server's protected VMs.
@@ -1029,7 +1064,13 @@ func (h *HA) workerTick(ctx context.Context) {
 	if lease.IsZero() || len(names) == 0 || sec <= 0 || h.now().Sub(lease) < time.Duration(sec)*time.Second {
 		return
 	}
-	if h.gatewayOK(ctx) {
+	if h.C.M.ClusterSize() >= 3 {
+		// with 3+ servers a majority decides: on the majority side the VMs
+		// keep running (a new master takes over); a cut-off server switches off
+		if h.gatewayOK(ctx) && h.C.M.ReachesMajority(ctx) {
+			return
+		}
+	} else if h.gatewayOK(ctx) {
 		return // the master is gone, not us: keep running (it can't fail us over without its network)
 	}
 	stopped := h.Local.Fence(ctx, names)

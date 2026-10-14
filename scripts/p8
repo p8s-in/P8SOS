@@ -118,6 +118,7 @@ p8 — manage P8S OS virtual machines
   p8 join MASTER_URL CODE          on a new server: join the master's cluster
   p8 cluster remove ID [--force]   on the master: drop a server (n2, n3 …)
   p8 cluster leave                 on a worker: stand alone again
+  p8 cluster promote [--force]     on a worker: become the master (the old one is gone for good)
   p8 status                        is p8sd healthy?
   p8 logs                          follow p8sd logs
   p8 test                          run the full automatic test
@@ -923,10 +924,19 @@ TXT
         body=$(call GET /cluster) || exit 1
         role=$(jq -r '.role' <<<"$body")
         [[ -z $role ]] && { echo "Not in a cluster. On the master: p8 cluster add"; exit 0; }
-        echo "This server is the cluster $role."
+        echo "This server is the cluster $role (term $(jq -r '.term // 0' <<<"$body"), $(jq -r '.size' <<<"$body") servers$( [[ $(jq -r .size <<<"$body") -ge 3 ]] && echo "; a new master is chosen automatically if this one is lost" ))."
+        seen=$(jq -r '.peer.master_seen_s // -1' <<<"$body")
+        [[ $role == worker && $seen -ge 45 ]] && red "The master hasn't answered for ${seen}s. If it is really gone: p8 cluster promote"
         jq -r '.nodes[] | [.id, .name, .role, .wg_ip, (if .status.online then "online" else "OFFLINE" end),
           "\((.status.capacity.mem_total_mib // 0) / 1024 | floor) GB RAM, \((.status.capacity.mem_used_mib // 0) / 1024 | floor) GB used, \(.status.capacity.vms // 0) VMs"] | @tsv' <<<"$body" |
           { command -v column >/dev/null && column -t -s $'\t' || cat; } ;;
+      promote)
+        if [[ ${YES:-0} != 1 ]]; then
+          read -r -p "Make this server the cluster master? Only when the old master is really gone. [y/N] " a; [[ $a == [yY]* ]] || exit 0
+        fi
+        force=false; [[ ${2:-} == --force ]] && force=true
+        body=$(call POST /cluster/promote "{\"force\":$force}") || exit 1
+        green "✔ $(jq -r .note <<<"$body")" ;;
       find)
         echo "Looking for P8S OS servers on this network…"
         body=$(call GET /cluster/discover) || exit 1

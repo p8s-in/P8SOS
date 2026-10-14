@@ -66,6 +66,8 @@ type Node struct {
 	Token   string `json:"token,omitempty"` // to call this node's API (kept by the master only)
 	CertSHA string `json:"cert_sha"`        // pinned TLS certificate (sha256 of DER)
 	Joined  string `json:"joined,omitempty"`
+	// Endpoint is where the others reach this server's tunnel (host:port; "" = it can't be dialed).
+	Endpoint string `json:"endpoint,omitempty"`
 }
 
 type joinCode struct {
@@ -83,6 +85,14 @@ type State struct {
 	Nodes    []Node     `json:"nodes"`              // master: workers; worker: [master]
 	Joins    []joinCode `json:"joins,omitempty"`    // master: unused join codes (hashed)
 	Accept   []string   `json:"accept,omitempty"`   // tokens (sha256) that may call this server as the cluster
+	// No single master (see quorum.go): the term of the current master, this
+	// server's key the others call it with, the other workers (worker side),
+	// and this server's vote.
+	Term      int    `json:"term,omitempty"`
+	SelfToken string `json:"self_token,omitempty"`
+	Mesh      []Node `json:"mesh,omitempty"`
+	VotedTerm int    `json:"voted_term,omitempty"`
+	VotedFor  string `json:"voted_for,omitempty"`
 }
 
 // Status is how a node is doing, as the master last saw it.
@@ -117,6 +127,13 @@ type Manager struct {
 	// LocalCapacity describes this server (for placement and the dashboard).
 	LocalCapacity func(ctx context.Context) Capacity
 	TestURL       string // tests: this server's API URL (no tunnel)
+	// DataDir and BookFiles: the master's settings (paths relative to DataDir)
+	// copied to every server, so another one can take over as master.
+	DataDir   string
+	BookFiles []string
+	// OnRoleChange runs when this server became the master or stopped being it
+	// (p8sd restarts itself to pick up the new role's settings).
+	OnRoleChange func(role string)
 	// OnTunnel runs after the tunnel is set up (this server's tunnel address)
 	// or taken down (""): libvirt listens there for live moves.
 	OnTunnel     func(ctx context.Context, ip string)
@@ -127,6 +144,9 @@ type Manager struct {
 	loaded bool
 	status map[string]*Status
 	inv    inviteBox
+	// elections (quorum.go)
+	lastMaster time.Time // worker: last book from the master
+	quorumAt   time.Time // master: last time it reached a majority
 }
 
 func (m *Manager) now() time.Time {
@@ -175,11 +195,16 @@ func (m *Manager) State() State {
 	defer m.mu.Unlock()
 	_ = m.load()
 	st := m.st
-	st.WGPriv, st.Joins, st.Accept = "", nil, nil
+	st.WGPriv, st.Joins, st.Accept, st.SelfToken = "", nil, nil, ""
 	st.Nodes = make([]Node, len(m.st.Nodes))
 	for i, n := range m.st.Nodes {
 		n.Token = ""
 		st.Nodes[i] = n
+	}
+	st.Mesh = make([]Node, len(m.st.Mesh))
+	for i, n := range m.st.Mesh {
+		n.Token = ""
+		st.Mesh[i] = n
 	}
 	return st
 }
@@ -358,6 +383,8 @@ type RegisterRequest struct {
 	CertSHA string `json:"cert_sha"`
 	APIPort string `json:"api_port"`
 	APIURL  string `json:"api_url,omitempty"` // tests only (no tunnel)
+	// FromIP is the joining server's address as the master saw it (set by the API, not the sender).
+	FromIP string `json:"-"`
 }
 
 // RegisterReply tells the new worker how to reach the master.
@@ -439,6 +466,9 @@ func (m *Manager) Register(ctx context.Context, r RegisterRequest) (RegisterRepl
 	node := Node{ID: fmt.Sprintf("n%d", n), Name: r.Name, WGIP: fmt.Sprintf("%s.%d", Subnet, n), WGPub: r.WGPub,
 		Token: r.Token, CertSHA: r.CertSHA, Joined: now.UTC().Format(time.RFC3339)}
 	node.API = "https://" + net.JoinHostPort(node.WGIP, port)
+	if ip := net.ParseIP(r.FromIP); ip != nil && !ip.IsLoopback() && !ip.IsUnspecified() {
+		node.Endpoint = net.JoinHostPort(ip.String(), fmt.Sprint(WGPort)) // the others can reach its tunnel there
+	}
 	if r.APIURL != "" && m.Run == nil { // tests: no tunnel
 		node.API = r.APIURL
 	}
@@ -576,6 +606,7 @@ func (m *Manager) Leave(ctx context.Context) error {
 		m.mu.Unlock()
 		return fmt.Errorf("%w: remove the other servers first", ErrRole)
 	}
+	_ = os.RemoveAll(m.standbyDir())
 	m.st = State{}
 	err := m.save()
 	m.mu.Unlock()

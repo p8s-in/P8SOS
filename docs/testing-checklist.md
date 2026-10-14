@@ -192,6 +192,15 @@ hardware**. Work through it on the new machine; tick each line and note problems
 - [ ] Damage a backup file (`truncate -s 1M …zfs.zst`) → Test fails with a clear message, and the alert/job shows it
 - [ ] Off-site: a "changes" backup brought back from the NAS brings its chain with it
 
+## 19. No single master (needs 3 servers; VMs in VirtualBox on the laptops work)
+
+- [ ] After update: `p8 cluster` on every server shows the same term and "a new master is chosen automatically"
+- [ ] Switch the master off: within ~1-2 minutes server n2 says it is the master (`p8 cluster`), its dashboard shows all servers, sign in with an account made on the old master works
+- [ ] A protected (HA) VM of the dead master starts on its copy a few minutes later
+- [ ] Switch the old master on: it becomes a worker of n2 (`p8 cluster`), its old HA VM stays off
+- [ ] Pull the network cable of the master only: it pauses HA ("can't reach most of the cluster"), its protected VMs go off; the other two elect a new master
+- [ ] Two servers: master off → worker shows "hasn't answered" + Make this server the master; `p8 cluster promote` works
+
 ## Add new features here as they are built
 
 (Every new feature adds its own lines above before it counts as done.)

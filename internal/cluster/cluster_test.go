@@ -69,8 +69,17 @@ func TestMasterTunnel(t *testing.T) {
 	}
 	// a worker's config dials the master and keeps NAT open
 	w := State{Role: "worker", WGPriv: "k", Endpoint: "203.0.113.5:51820", Nodes: []Node{{ID: "n1", WGPub: "p", WGIP: "10.250.0.1"}}}
-	if c := w.wgConfig(); !strings.Contains(c, "Endpoint = 203.0.113.5:51820") || !strings.Contains(c, "PersistentKeepalive = 25") || strings.Contains(c, "ListenPort") {
+	if c := w.wgConfig(); !strings.Contains(c, "Endpoint = 203.0.113.5:51820") || !strings.Contains(c, "PersistentKeepalive = 25") ||
+		!strings.Contains(c, "ListenPort = 51820") || !strings.Contains(c, "AllowedIPs = 10.250.0.0/24") {
 		t.Fatalf("worker conf:\n%s", c)
+	}
+	// with the book: direct to the workers it can dial; the rest through the master
+	w.Self = Node{ID: "n2"}
+	w.Mesh = []Node{{ID: "n3", WGPub: "p3", WGIP: "10.250.0.3", Endpoint: "192.168.0.7:51820"}, {ID: "n4", WGPub: "p4", WGIP: "10.250.0.4"}}
+	c := w.wgConfig()
+	if !strings.Contains(c, "AllowedIPs = 10.250.0.1/32, 10.250.0.4/32") || !strings.Contains(c, "AllowedIPs = 10.250.0.3/32\nEndpoint = 192.168.0.7:51820") ||
+		strings.Contains(c, "PublicKey = p4") {
+		t.Fatalf("mesh conf:\n%s", c)
 	}
 	// the code expires
 	m.Now = func() time.Time { return time.Now().Add(2 * time.Hour) }
