@@ -546,6 +546,10 @@ func (u *menus) progress(ctx context.Context, p *installer.Plan) {
 		_ = exec.Command("systemctl", "reboot").Run()
 		return
 	}
+	if b, e := os.ReadFile(p.Log); e == nil {
+		showText("The install stopped: " + ierr.Error() + "\n\nWhat that step printed (take a photo of this screen):\n\n" +
+			installer.FailedStep(string(b), 14) + "\n\nThe whole log is " + p.Log + ".")
+	}
 	for {
 		c, e := wt("--nocancel", "--menu", "The install stopped:\n\n"+ierr.Error()+"\n\nThe log has the details.", "18", "78", "3",
 			"log", "Show the log", "shell", "Command line", "menu", "Back to the start (fix it, then install again)")

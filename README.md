@@ -33,6 +33,7 @@ make build                # bin/p8sd, static binary
 
 **Try it: [USER.md](USER.md)** — Debian 13 VM in VMware/VirtualBox → `sudo bash install.sh /dev/sdb` → `p8 test`.
 Step-by-step manual version: [docs/testing-in-depth.md](docs/testing-in-depth.md).
+**Administrator Guide: [docs/guide/](docs/guide/)** — in every dashboard under Help (`https://<server>:8006/docs/`); as a website: `go run ./cmd/p8s-docs dist/docs-site`.
 **Install on real hardware: [docs/iso.md](docs/iso.md)** — build the P8S OS alpha ISO, write it to USB, install.
 VMs on your home network: [docs/networking.md](docs/networking.md).
 API reference: [docs/api.md](docs/api.md).

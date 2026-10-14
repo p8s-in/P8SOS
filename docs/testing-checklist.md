@@ -251,6 +251,17 @@ hardware**. Work through it on the new machine; tick each line and note problems
 - [ ] Cluster: template made on n2 shows "on n2" in New VM; a VM from it is created on n2
 - [ ] `p8 clone`, `p8 template-from`, `p8 templates`, `p8 templates rm` work
 
+## 23. Administrator Guide (web) and installer error screen
+
+- [ ] Dashboard header **Help** (and sidebar Help → Administrator Guide) opens `https://<server>:8006/docs/` in a new tab: contents page with 16 chapters
+- [ ] Open a chapter: sidebar shows where you are, "On this page" links jump to sections, ← / → links at the bottom go to the next chapter
+- [ ] 12. Cluster shows the HA failover picture; dark mode (system setting) is readable
+- [ ] Search "ceph": headings first, then chapters mentioning it; Esc clears
+- [ ] Phone width: ☰ opens the chapter list; tables scroll sideways
+- [ ] `/docs/` works without signing in; "← Dashboard" goes back
+- [ ] Static site: `go run ./cmd/p8s-docs -src docs/guide dist/docs-site` → open `dist/docs-site/index.html` from disk: same pages, links work
+- [ ] Installer: make a step fail (e.g. Command line → `zpool create busy ...` on a chosen disk first): the error screen shows the failed step's command and its last lines before the menu
+
 ## Add new features here as they are built
 
 (Every new feature adds its own lines above before it counts as done.)

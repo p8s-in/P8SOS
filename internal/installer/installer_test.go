@@ -3,6 +3,7 @@ package installer
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -554,5 +555,23 @@ func TestReadNICs(t *testing.T) {
 	}
 	if !got[2].Wireless || !got[0].Link {
 		t.Fatalf("%+v", got)
+	}
+}
+
+func TestFailedStep(t *testing.T) {
+	log := "\n### [1/3] One\n### a\nok\n\n### [2/3] Two\n### zpool export -a\n"
+	for i := 0; i < 30; i++ {
+		log += fmt.Sprintf("line %d\n", i)
+	}
+	log += "### FAILED: exit status 1\n"
+	got := FailedStep(log, 5)
+	if !strings.HasPrefix(got, "### [2/3] Two\n### zpool export -a\n  ...\n") || !strings.HasSuffix(got, "line 29\n### FAILED: exit status 1") {
+		t.Fatalf("got %q", got)
+	}
+	if strings.Contains(got, "line 20\n") || strings.Contains(got, "One") {
+		t.Fatalf("too much: %q", got)
+	}
+	if s := FailedStep("### [1/1] X\n### c\nboom\n", 5); s != "### [1/1] X\n### c\nboom" {
+		t.Fatalf("short: %q", s)
 	}
 }

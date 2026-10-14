@@ -6,6 +6,9 @@ import (
 	_ "embed"
 	"net/http"
 	"regexp"
+	"strings"
+
+	"p8sos/internal/guide"
 )
 
 var reHost = regexp.MustCompile(`^[A-Za-z0-9.\-\[\]:]{1,255}$`)
@@ -119,7 +122,12 @@ var manifest = []byte(`{"name":"P8S OS","short_name":"P8S OS","start_url":"/","d
 
 // Handler serves the embedded pages and 404s everything else.
 func Handler() http.Handler {
+	docs := guide.Handler()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/docs" || strings.HasPrefix(r.URL.Path, "/docs/") {
+			docs.ServeHTTP(w, r) // the Administrator Guide (public, like the sign-in page)
+			return
+		}
 		a, ok := assets[r.URL.Path]
 		if !ok {
 			http.NotFound(w, r)

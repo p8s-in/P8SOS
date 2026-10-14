@@ -136,6 +136,7 @@ dialog form.uform{padding:0}
 #side .btn,.tree-vm{display:flex;align-items:center;gap:9px;width:100%;border:0;background:transparent;padding:6px 10px;border-radius:6px;text-align:left;cursor:pointer;color:var(--text);font-size:13.5px}
 #side .btn:hover,.tree-vm:hover{background:var(--bar)}
 #side .btn.on{background:var(--bar);font-weight:600}
+a.btn{text-decoration:none;color:var(--text)}
 #side svg{width:16px;height:16px;flex:0 0 16px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;opacity:.75}
 .tree-vm{padding-left:30px;font-size:13px}
 .tree-vm .dot{flex:0 0 8px}
@@ -851,6 +852,7 @@ function renderShell(){
     <input id="vmFilter" type="search" placeholder="Search" aria-label="Search VMs and containers">
     <button class="btn primary" id="bNew">+ <span class="lg">Create </span>VM</button>
     <button class="btn primary" id="bNewCT" hidden>+ <span class="lg">Create </span>CT</button>
+    <a class="btn lg" href="/docs/" target="_blank" rel="noopener" title="Administrator Guide: how to install and use P8S OS">Help</a>
     <button class="btn" id="bMe" title="Your account: password, two-factor sign-in, keys"></button>
     <button class="btn" id="bOut">Sign out</button>
   </header>
@@ -876,6 +878,9 @@ function renderShell(){
     </div>
     <div class="side-group"><div class="side-h">Logs</div>
       <button class="btn" id="bAudit">${ic("activity")}<span>Activity</span></button>
+    </div>
+    <div class="side-group"><div class="side-h">Help</div>
+      <a class="btn" href="/docs/" target="_blank" rel="noopener">${ic("help")}<span>Administrator Guide</span></a>
     </div>
     <div class="side-group side-mobile"><div class="side-h">Account</div>
       <button class="btn" id="bMe2">${ic("users")}<span>My account</span></button>

@@ -73,6 +73,25 @@ func (r *Runner) Run(ctx context.Context) error {
 	return nil
 }
 
+// FailedStep returns the part of an install log that belongs to the last step
+// (its "### [n/N]" header, the command and up to max lines of its output), so
+// the error screen can show the real cause without scrolling the whole log.
+func FailedStep(log string, max int) string {
+	i := strings.LastIndex(log, "\n### [")
+	if i < 0 {
+		i = 0
+	} else {
+		i++
+	}
+	lines := strings.Split(strings.TrimRight(log[i:], "\n"), "\n")
+	if len(lines) <= max+2 {
+		return strings.Join(lines, "\n")
+	}
+	head := lines[:2] // title + command
+	tail := lines[len(lines)-max:]
+	return strings.Join(head, "\n") + "\n  ...\n" + strings.Join(tail, "\n")
+}
+
 func weight(s Step) int {
 	if s.Weight > 0 {
 		return s.Weight
