@@ -121,25 +121,27 @@ func serve(args []string) error {
 		Ceph: &storage.RBD{Run: run, Pool: ceph.Pool, MapsFile: "/etc/p8s/rbd-maps", Ready: cephMgr.PoolReady}}
 	pools := &ippool.Store{Path: filepath.Join(cfg.DataDir, "ippools.json")}
 	svc := &vm.Service{
-		HV:           &virt.Virsh{Run: run, URI: cfg.LibvirtURI},
-		Disks:        disks,
-		Seeds:        &cloudinit.Builder{Run: run, Dir: filepath.Join(cfg.DataDir, "seeds")},
-		Templates:    cfg.Templates,
-		Bridge:       cfg.Bridge,
-		LANBridge:    cfg.LANBridge,
-		BridgeUp:     func(n string) bool { _, err := os.Stat("/sys/class/net/" + n + "/bridge"); return err == nil },
-		TPMReady:     func() bool { _, err := exec.LookPath("swtpm"); return err == nil },
-		Limits:       vm.Limits{MaxVCPUs: cfg.MaxVCPUs, MaxMemoryMiB: cfg.MaxMemoryMiB, MaxDiskGB: cfg.MaxDiskGB},
-		SSHKeys:      cfg.SSHKeys,
-		Log:          log,
-		Backups:      &backup.Store{Dir: cfg.BackupDir, Dataset: cfg.VMDataset, Run: run, Parent: disks.Parent},
-		Jobs:         &jobs.Manager{Log: log},
-		ISOs:         &isos.Library{Dir: cfg.ISODir, Shelves: nets.ISOShelves},
-		ImportDir:    filepath.Join(cfg.DataDir, "import"),   // Proxmox backups, disk images to import
-		ReplicaDir:   filepath.Join(cfg.DataDir, "replicas"), // copies of other servers' VMs (high availability)
-		Pools:        pools,
-		ScheduleFile: filepath.Join(cfg.DataDir, "backup-schedule.json"),
-		FirewallFile: filepath.Join(cfg.DataDir, "firewall.json"),
+		HV:        &virt.Virsh{Run: run, URI: cfg.LibvirtURI},
+		Disks:     disks,
+		Seeds:     &cloudinit.Builder{Run: run, Dir: filepath.Join(cfg.DataDir, "seeds")},
+		Templates: cfg.Templates,
+		// templates made from VMs (VM → Make template)
+		TemplatesFile: filepath.Join(cfg.DataDir, "templates.json"),
+		Bridge:        cfg.Bridge,
+		LANBridge:     cfg.LANBridge,
+		BridgeUp:      func(n string) bool { _, err := os.Stat("/sys/class/net/" + n + "/bridge"); return err == nil },
+		TPMReady:      func() bool { _, err := exec.LookPath("swtpm"); return err == nil },
+		Limits:        vm.Limits{MaxVCPUs: cfg.MaxVCPUs, MaxMemoryMiB: cfg.MaxMemoryMiB, MaxDiskGB: cfg.MaxDiskGB},
+		SSHKeys:       cfg.SSHKeys,
+		Log:           log,
+		Backups:       &backup.Store{Dir: cfg.BackupDir, Dataset: cfg.VMDataset, Run: run, Parent: disks.Parent},
+		Jobs:          &jobs.Manager{Log: log},
+		ISOs:          &isos.Library{Dir: cfg.ISODir, Shelves: nets.ISOShelves},
+		ImportDir:     filepath.Join(cfg.DataDir, "import"),   // Proxmox backups, disk images to import
+		ReplicaDir:    filepath.Join(cfg.DataDir, "replicas"), // copies of other servers' VMs (high availability)
+		Pools:         pools,
+		ScheduleFile:  filepath.Join(cfg.DataDir, "backup-schedule.json"),
+		FirewallFile:  filepath.Join(cfg.DataDir, "firewall.json"),
 		Firewall: func(ctx context.Context, vms []firewall.VM) error {
 			return firewall.Apply(ctx, run, vms)
 		},
@@ -826,3 +828,6 @@ func (p cephPeers) Call(ctx context.Context, id, method, path string, in, out an
 	}
 	return fmt.Errorf("no server %q in the cluster", id)
 }
+
+// the cluster's VM service offers clones and templates to the API
+var _ api.TemplateVMs = (*cluster.VMs)(nil)

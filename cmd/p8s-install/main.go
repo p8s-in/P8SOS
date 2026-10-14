@@ -67,6 +67,9 @@ func main() {
 		}
 		m.configure(p, *target, *squash, *logPath)
 		fmt.Println(p.Summary())
+		if !a.Erase && !*dry {
+			fail(installer.ErrNotErase)
+		}
 		if *dry {
 			printSteps(p)
 			return

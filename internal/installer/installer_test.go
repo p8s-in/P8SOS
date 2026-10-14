@@ -227,7 +227,6 @@ func TestNewPlanChecks(t *testing.T) {
 		"live medium": func(a *Answers) { a.Disks = []string{"sdb", "sdd"} },
 		"mounted":     func(a *Answers) { a.Disks = []string{"sdb", "nvme0n1"} },
 		"twice":       func(a *Answers) { a.Disks = []string{"sdb", "/dev/sdb"} },
-		"no erase":    func(a *Answers) { a.Erase = false },
 		"no port":     func(a *Answers) { a.Network.Interface = "eth9" },
 		"wifi no ssid": func(a *Answers) {
 			a.Network.Interface = "wlo1"
@@ -238,8 +237,6 @@ func TestNewPlanChecks(t *testing.T) {
 		f(&a)
 		if _, err := NewPlan(a, disks, nics, true, nil); err == nil {
 			t.Errorf("%s: accepted", name)
-		} else if name == "no erase" && !errors.Is(err, ErrNotErase) {
-			t.Errorf("no erase: %v", err)
 		}
 	}
 	p, _ := NewPlan(good(), disks, nics, true, nil)
@@ -479,6 +476,13 @@ func TestRunner(t *testing.T) {
 	if len(chroot) < 4 || chroot[1] != p.Target || chroot[2] != "env" || chroot[3] != "DEBIAN_FRONTEND=noninteractive" {
 		t.Fatalf("chroot argv %v", chroot)
 	}
+
+	// nothing happens without "erase" (the menus set it after the person types ERASE)
+	p.A.Erase = false
+	if err := r.Run(context.Background()); !errors.Is(err, ErrNotErase) {
+		t.Fatalf("ran without erase: %v", err)
+	}
+	p.A.Erase = true
 
 	// a failing step stops the install
 	r.Progress = nil

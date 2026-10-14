@@ -324,6 +324,18 @@ dialog.as-page #mClose,dialog.as-page #cmClose{display:none}
     <div class="inline"><select id="mMoveTo"></select><button class="btn" id="mMoveGo">Move</button></div>
     <label id="mMoveStartL" style="display:flex;gap:8px;align-items:center;font-weight:400"><input id="mMoveStart" type="checkbox" style="width:auto" checked> Start it there when the move is done</label>
     <div class="hint" id="mMoveHint"></div></div>
+  <div id="mCloneBox" hidden><h3>Clone</h3>
+    <div class="inline"><input id="mCloneName" placeholder="name of the copy" maxlength="49" autocomplete="off" style="max-width:220px">
+      <button class="btn" id="mCloneGo">Clone</button></div>
+    <label style="display:flex;gap:8px;align-items:center;font-weight:400"><input id="mCloneStart" type="checkbox" style="width:auto"> Start the copy</label>
+    <div class="hint">A new VM with a full copy of every disk (taken at one instant, also while it runs), the same size, network and firewall.
+      It gets its own name, MAC and IP; VMs made from a template also get new SSH host keys. Installed from an ISO: an exact copy (Windows: sysprep first).</div></div>
+  <div id="mTplBox" hidden><h3>Make a template</h3>
+    <div class="inline"><input id="mTplName" placeholder="template name, e.g. web-base" maxlength="49" autocomplete="off" style="max-width:220px">
+      <input id="mTplLabel" placeholder="shown as (optional)" maxlength="60" autocomplete="off" style="max-width:220px">
+      <button class="btn" id="mTplGo">Make template</button></div>
+    <div class="hint">New VMs can then be made from this VM's disk in seconds (New VM → Operating system). If it runs, P8S first cleans it through
+      its guest agent (cloud-init, machine id, SSH host keys) and shuts it down; this VM stays and keeps working.</div></div>
   </div>
 
   <div data-tab="summary">
@@ -1043,8 +1055,11 @@ async function openCreate(){
     templates = (await call("GET", "/templates")).templates;
     isoList = (await call("GET", "/isos").catch(() => ({isos: []}))).isos;
   } catch (err) { return toast(err.message, true); }
+  const tplOpt = t => `<option value="${esc(t.name)}" data-min="${t.min_disk_gb}" data-user="${esc(t.default_user)}">${esc(t.label || t.name)}${t.node_name ? " — on " + esc(t.node_name) : ""}</option>`;
+  const mine = templates.filter(t => t.custom);
   $("#cTpl").innerHTML = `<optgroup label="Ready to use (cloud images)">` +
-    templates.map(t => `<option value="${esc(t.name)}" data-min="${t.min_disk_gb}" data-user="${esc(t.default_user)}">${esc(t.label || t.name)}</option>`).join("") +
+    templates.filter(t => !t.custom).map(tplOpt).join("") +
+    (mine.length ? `</optgroup><optgroup label="Made from your VMs">` + mine.map(tplOpt).join("") : "") +
     `</optgroup><optgroup label="Install from ISO (in the console)">` +
     (isoList.length ? isoList.map(i => `<option value="iso:${esc(i.name)}" data-min="1" data-boot="${esc(i.boot || "")}"${i.boot === "none" ? " disabled" : ""}>${esc(i.name)}${i.boot === "none" ? " — not bootable (drivers/data disc or incomplete download)" : ""}</option>`).join("")
       : `<option value="" disabled>No ISOs yet — add one with the ISOs button</option>`) + `</optgroup>`;
@@ -1252,6 +1267,8 @@ async function openManage(name){
   $("#mCharts").innerHTML = "";
   $("#mSites").innerHTML = ""; $("#mSiteName").value = ""; $("#mSitePort").value = 80; $("#mSiteTLS").checked = false;
   $("#mMoveBox").hidden = true; loadMove();
+  $("#mCloneBox").hidden = $("#mTplBox").hidden = !isAdmin();
+  $("#mCloneName").value = ""; $("#mTplName").value = ""; $("#mTplLabel").value = "";
   $("#mCPUBox").hidden = !isAdmin();
   $("#mCPU").value = v.cpu && v.cpu !== "host" ? "compatible" : "host";
   $("#mCPUHint").textContent = (v.cpu && v.cpu !== "host" ? `Now: ${v.cpu} (a model every server has). ` : "Now: this server's own CPU. ") +
@@ -1287,6 +1304,24 @@ $("#mCPUGo").onclick = async () => {
   try {
     const v = await call("PUT", `/vms/${encodeURIComponent(mName)}/cpu`, {type: $("#mCPU").value});
     toast(`CPU type set — shut ${mName} down and start it for it to take effect`);
+  } catch (err) { toast(err.message, true); }
+};
+$("#mCloneGo").onclick = async () => {
+  const n = $("#mCloneName").value.trim();
+  if (!n) return toast("Give the copy a name", true);
+  try {
+    trackJob(await call("POST", `/vms/${encodeURIComponent(mName)}/clone`, {name: n, start: $("#mCloneStart").checked}), refresh);
+    toast(`Copying ${mName} to ${n} …`);
+  } catch (err) { toast(err.message, true); }
+};
+$("#mTplGo").onclick = async () => {
+  const b = $("#mTplGo"), n = $("#mTplName").value.trim();
+  if (!n) return toast("Give the template a name", true);
+  const v = vms.find(x => x.name === mName);
+  if (v?.state === "running" && !armed(b, `Clean and shut down ${mName}?`)) return;
+  try {
+    trackJob(await call("POST", `/vms/${encodeURIComponent(mName)}/template`, {name: n, label: $("#mTplLabel").value.trim()}), () => { templates = []; refresh(); });
+    toast(`Making template ${n} …`);
   } catch (err) { toast(err.message, true); }
 };
 $("#mMoveGo").onclick = async () => {

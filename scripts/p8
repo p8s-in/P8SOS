@@ -98,6 +98,9 @@ p8 — manage P8S OS virtual machines
   p8 dashboard                     web dashboard address + how to sign in
   p8 storage                       pool size and what each VM disk uses
   p8 storage grow                  use the system disk's free space for VMs (file pool)
+  p8 clone VM NEW [--start]        copy a VM (all disks, also while it runs)
+  p8 template-from VM NAME ["label"]   make a template from a VM (new VMs: p8 create X --os NAME)
+  p8 templates rm NAME             delete a template made from a VM
   p8 storages                      network storage: NAS shares (NFS) and SAN disks (iSCSI)
   p8 storages add-nfs NAME SERVER EXPORT [--backups]    connect a NAS share (backup copies, ISOs)
   p8 storages find SERVER          list a SAN's iSCSI targets
@@ -413,6 +416,22 @@ case $cmd in
     j=$(call POST "/vms/$1/backups") || exit 1
     echo "Backing up $1 (job $(jq -r .id <<<"$j")). You can press Ctrl+C; it continues in the background."
     follow_job "$(jq -r .id <<<"$j")" ;;
+
+  clone)
+    [[ -n ${1:-} && -n ${2:-} ]] || { red "usage: p8 clone VM NEW-NAME [--start]"; exit 1; }
+    req=$(jq -nc --arg n "$2" --argjson s "$([[ ${3:-} == --start ]] && echo true || echo false)" '{name:$n, start:$s}')
+    j=$(call POST "/vms/$1/clone" "$req") || exit 1
+    echo "Copying $1 to $2 (job $(jq -r .id <<<"$j")). Ctrl+C is fine; it continues in the background."
+    follow_job "$(jq -r .id <<<"$j")" ;;
+
+  template-from|make-template)
+    [[ -n ${1:-} && -n ${2:-} ]] || { red "usage: p8 template-from VM TEMPLATE-NAME [\"label\"]"; exit 1; }
+    if [[ $(call GET "/vms/$1" | jq -r .state) == running && ${YES:-0} != 1 ]]; then
+      read -r -p "$1 runs: clean it (cloud-init, machine id, SSH host keys) and shut it down first? [y/N] " a; [[ $a == [yY]* ]] || exit 0
+    fi
+    j=$(call POST "/vms/$1/template" "$(jq -nc --arg n "$2" --arg l "${3:-}" '{name:$n, label:$l}')") || exit 1
+    echo "Making template $2 from $1 (job $(jq -r .id <<<"$j"))."
+    follow_job "$(jq -r .id <<<"$j")" && echo "Use it: p8 create NAME --os $2" ;;
 
   backups)
     path=/backups; [[ -n ${1:-} ]] && path="/vms/$1/backups"
@@ -816,15 +835,18 @@ TXT
     [[ -f $MT ]] || MT=$(dirname "$(readlink -f "$0")")/make-template.sh
     case ${1:-} in
       available|list) echo "Can be added with: p8 templates add NAME"; bash "$MT" --list ;;
+      rm|delete)
+        [[ -n ${2:-} ]] || { red "usage: p8 templates rm NAME   (templates made from VMs)"; exit 1; }
+        call DELETE "/templates/$2" >/dev/null && green "✔ template $2 deleted" ;;
       add)
         [[ -n ${2:-} ]] || { red "which one?  p8 templates available"; exit 1; }
         echo "Downloading and importing $2 (a few hundred MB, takes a few minutes)..."
         sudo bash "$MT" "$2" --register || exit 1 ;;
       *)
         body=$(call GET /templates) || exit 1
-        printf '%-14s %-24s %-10s %s\n' NAME OS LOGIN MIN_DISK
-        jq -r '.templates[] | [.name, .label, .default_user, "\(.min_disk_gb) GB"] | @tsv' <<<"$body" |
-          while IFS=$'\t' read -r n l u d; do printf '%-14s %-24s %-10s %s\n' "$n" "$l" "$u" "$d"; done
+        printf '%-14s %-30s %-10s %-9s %s\n' NAME OS LOGIN MIN_DISK FROM
+        jq -r '.templates[] | [.name, .label, .default_user, "\(.min_disk_gb) GB", (if .custom then "vm " + .from + (if .node_name then " on " + .node_name else "" end) else "-" end)] | @tsv' <<<"$body" |
+          while IFS=$'\t' read -r n l u d f; do printf '%-14s %-30s %-10s %-9s %s\n' "$n" "$l" "$u" "$d" "$f"; done
         echo; echo "More: p8 templates available" ;;
     esac ;;
 

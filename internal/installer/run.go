@@ -38,6 +38,9 @@ func (r *Runner) Argv(s Step) []string {
 
 // Run does every step; it stops at the first one that fails (unless the step may fail).
 func (r *Runner) Run(ctx context.Context) error {
+	if !r.Plan.A.Erase { // the menus set it after "type ERASE"; answers files must say so
+		return ErrNotErase
+	}
 	steps := r.Plan.Steps()
 	total := 0
 	for _, s := range steps {

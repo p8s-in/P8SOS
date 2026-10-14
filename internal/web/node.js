@@ -29,6 +29,7 @@ document.body.insertAdjacentHTML("beforeend", `
   <h3>OS templates</h3>
   <div class="sub">Images new VMs are made from. Adding one downloads it from the publisher (a few hundred MB) and checks its checksum.</div>
   <table class="snaps"><tbody id="ndTpl"></tbody></table>
+  <div id="ndMyTpl"></div>
 
   <div id="ndCTBox" hidden>
     <h3>Container templates</h3>
@@ -145,9 +146,25 @@ async function loadNode(quiet){
   loadMem(); loadHealth();
   if (!quiet && typeof loadNetStorage === "function") loadNetStorage();
   if (!quiet && typeof loadCeph === "function") loadCeph();
+  if (!quiet) loadMyTemplates();
   if (taskOpen) await showTask(taskOpen, true);
   clearTimeout(nodeTimer);
   if ($("#dlgNode").open && (node?.running || !node)) nodeTimer = setTimeout(() => loadNode(true), 3000);
+}
+
+// templates made from VMs (VM → Options → Make a template)
+async function loadMyTemplates(){
+  let l = [];
+  try { l = (await call("GET", "/templates")).templates.filter(t => t.custom); } catch { return; }
+  $("#ndMyTpl").innerHTML = l.length ? `<h4 style="margin:10px 0 4px">Made from VMs</h4><table class="snaps"><tbody>` + l.map(t =>
+    `<tr><td><b>${esc(t.label)}</b><div class="sub"><span class="mono">${esc(t.name)}</span> · from ${esc(t.from)} · ${t.min_disk_gb} GB${t.node_name ? " · on " + esc(t.node_name) : ""}</div></td>
+     <td style="text-align:right"><button class="btn danger" data-deltpl="${esc(t.name)}">Delete</button></td></tr>`).join("") + `</tbody></table>` : "";
+  for (const b of $("#ndMyTpl").querySelectorAll("[data-deltpl]")) b.onclick = async () => {
+    if (!armed(b, "Delete it?")) return;
+    try { await call("DELETE", "/templates/" + encodeURIComponent(b.dataset.deltpl)); toast("Template deleted"); templates = []; }
+    catch (e) { toast(e.message, true); }
+    loadMyTemplates();
+  };
 }
 
 function renderNode(){

@@ -53,8 +53,10 @@ type Service struct {
 	Disks     Disks
 	Seeds     Seeds
 	Templates []config.Template
-	Bridge    string // NAT bridge (network "nat", the default)
-	LANBridge string // bridge onto the home network (network "lan"); empty = not set up
+	// TemplatesFile keeps the templates made from VMs (JSON); "" = none.
+	TemplatesFile string
+	Bridge        string // NAT bridge (network "nat", the default)
+	LANBridge     string // bridge onto the home network (network "lan"); empty = not set up
 	// VLANs makes the bridges of tagged VLANs on the home network; nil = no VLANs.
 	VLANs VLANs
 	// BridgeUp reports whether a host bridge exists; nil means "assume yes".
@@ -256,7 +258,7 @@ func (s *Service) lock(name string) func() {
 }
 
 func (s *Service) template(name string) (config.Template, bool) {
-	for _, t := range s.Templates {
+	for _, t := range s.AllTemplates() {
 		if t.Name == name {
 			return t, true
 		}
@@ -393,6 +395,9 @@ func (s *Service) Create(ctx context.Context, r CreateRequest) (VM, error) {
 		ci.RootSSHPassword = r.SSHPasswordAuth == nil || *r.SSHPasswordAuth
 	}
 	mac := virt.RandomMAC()
+	if s.isCustomTemplate(t.Name) && ci.Static == nil {
+		ci.DHCPByMAC = mac // VMs from one image may share a machine id: ask DHCP by MAC
+	}
 	bridge, err := s.bridgeVLAN(ctx, r.Network, r.VLAN)
 	if err != nil {
 		rollback()

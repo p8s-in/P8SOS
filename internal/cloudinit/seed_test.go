@@ -57,3 +57,10 @@ ethernets:
 		t.Fatalf("routed /32 needs an on-link route:\n%s", nc)
 	}
 }
+
+func TestDHCPConfig(t *testing.T) {
+	c := DHCPConfig("52:54:00:AA:BB:CC")
+	if !strings.Contains(c, `macaddress: "52:54:00:aa:bb:cc"`) || !strings.Contains(c, "dhcp-identifier: mac") || !strings.Contains(c, "dhcp4: true") {
+		t.Fatal(c)
+	}
+}

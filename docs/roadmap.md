@@ -66,6 +66,7 @@ Each phase ships something usable on its own.
 - [x] Editions: Home / Standard / Enterprise / Datacenter (one ISO, the licence key decides)
 - [x] Proxmox-style dashboard: top bar, sidebar tree (server → VMs and containers), grouped menus, ⋯ action menus
 - [x] Server page in the dashboard: storage + grow, add OS templates, home-network setup, Debian updates, reboot, task log with live output
+- [x] Clone VMs (full copy of all disks, also while running) and make templates from VMs (guest cleaned via the agent) ([clones-templates.md](clones-templates.md))
 - [x] Ceph on the servers themselves: install, monitors, managers, disks (OSDs) and the VM pool from the dashboard; VMs on Ceph move without copying disks and fail over from the same disk ([ceph.md](ceph.md))
 - [x] Installer with the system on ZFS: pick the disks, then one disk / mirror / RAID 10 / RAID-Z1-2-3 (or ext4); boots from every disk; offline install from the ISO, unattended with an answers file ([installer.md](installer.md))
 - [x] No single master: cluster book on every server, elections by majority (3+ servers), old master steps down, fencing without quorum, `p8 cluster promote` for two servers; direct server-to-server tunnels

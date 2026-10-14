@@ -532,6 +532,9 @@ func (c *VMs) Create(ctx context.Context, r vm.CreateRequest) (vm.VM, error) {
 	if _, err := c.Get(ctx, r.Name); err == nil {
 		return vm.VM{}, fmt.Errorf("%w: vm %q", vm.ErrExists, r.Name)
 	}
+	if r.Node == "" { // a template made from a VM is on one server: the VM goes there
+		r.Node = c.templateNode(ctx, r.Template)
+	}
 	if r.Storage != "" && r.Storage != "local" && r.Node == "" {
 		// network storage is connected to one server: the one asked (this one by default)
 		v, err := c.Local.Create(ctx, r)

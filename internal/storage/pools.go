@@ -141,6 +141,12 @@ func poolOf(ds string) string { return strings.SplitN(ds, "/", 2)[0] }
 // copyTemplate copies a template snapshot to another pool (a clone can't
 // cross pools): zfs send | zfs receive. The copy's snapshot is dropped.
 func (z *ZFS) copyTemplate(ctx context.Context, snapshot, ds string) error {
+	return z.sendRecv(ctx, snapshot, ds, false)
+}
+
+// sendRecv makes ds a full, independent copy of snapshot (zfs send | zfs
+// receive); keepSnap keeps the copy's snapshot of the same name.
+func (z *ZFS) sendRecv(ctx context.Context, snapshot, ds string, keepSnap bool) error {
 	send := StreamCmd(ctx, "zfs", "send", snapshot)
 	recv := StreamCmd(ctx, "zfs", "receive", "-o", "volmode=dev", ds)
 	var es, er strings.Builder
@@ -159,7 +165,7 @@ func (z *ZFS) copyTemplate(ctx context.Context, snapshot, ds string) error {
 	if errR != nil {
 		return fmt.Errorf("zfs receive: %v %s", errR, strings.TrimSpace(er.String()))
 	}
-	if _, snap, ok := strings.Cut(snapshot, "@"); ok {
+	if _, snap, ok := strings.Cut(snapshot, "@"); ok && !keepSnap {
 		_, _ = z.Run.Run(ctx, "zfs", "destroy", ds+"@"+snap)
 	}
 	return nil

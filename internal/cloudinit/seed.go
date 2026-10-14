@@ -22,6 +22,15 @@ type Spec struct {
 	RootSSHPassword bool
 	// Static sets a fixed address (public IP from a pool) instead of DHCP.
 	Static *Static
+	// DHCPByMAC: DHCP with the network card's MAC as the client id. Clones
+	// share the original's machine id, which DHCP would otherwise use, so
+	// two VMs would ask for (and get) the same address.
+	DHCPByMAC string
+}
+
+// DHCPConfig renders network config v2: DHCP on the card with this MAC, identified by the MAC.
+func DHCPConfig(mac string) string {
+	return fmt.Sprintf("version: 2\nethernets:\n  nic0:\n    match:\n      macaddress: %q\n    dhcp4: true\n    dhcp-identifier: mac\n", strings.ToLower(mac))
 }
 
 // Static is a fixed IPv4 configuration for the VM's network card.
@@ -91,9 +100,16 @@ func (b *Builder) Build(ctx context.Context, vm string, s Spec) (string, error) 
 	}
 	out := b.Path(vm)
 	args := []string{out, udPath, mdPath}
-	if s.Static != nil {
+	nc := ""
+	switch {
+	case s.Static != nil:
+		nc = NetworkConfig(*s.Static)
+	case s.DHCPByMAC != "":
+		nc = DHCPConfig(s.DHCPByMAC)
+	}
+	if nc != "" {
 		ncPath := filepath.Join(tmp, "network-config")
-		if err := os.WriteFile(ncPath, []byte(NetworkConfig(*s.Static)), 0o600); err != nil {
+		if err := os.WriteFile(ncPath, []byte(nc), 0o600); err != nil {
 			return "", err
 		}
 		args = append([]string{"--network-config=" + ncPath}, args...)

@@ -209,6 +209,9 @@ func (s *Server) Handler() http.Handler {
 
 	auth := http.NewServeMux()
 	auth.HandleFunc("GET /api/v1/templates", s.listTemplates)
+	auth.HandleFunc("DELETE /api/v1/templates/{name}", s.deleteTemplate)
+	auth.HandleFunc("POST /api/v1/vms/{name}/clone", s.cloneVM)
+	auth.HandleFunc("POST /api/v1/vms/{name}/template", s.templateFromVM)
 	auth.HandleFunc("GET /api/v1/vms", s.listVMs)
 	auth.HandleFunc("POST /api/v1/vms", s.createVM)
 	auth.HandleFunc("GET /api/v1/vms/{name}", s.getVM)
@@ -446,22 +449,7 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listTemplates(w http.ResponseWriter, r *http.Request) {
-	type tpl struct {
-		Name        string `json:"name"`
-		Label       string `json:"label"`
-		MinDiskGB   int    `json:"min_disk_gb"`
-		OSVariant   string `json:"os_variant"`
-		DefaultUser string `json:"default_user"`
-	}
-	out := []tpl{}
-	for _, t := range s.Templates {
-		label := t.Label
-		if label == "" {
-			label = t.Name
-		}
-		out = append(out, tpl{t.Name, label, t.MinDiskGB, t.OSVariant, t.User()})
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"templates": out})
+	writeJSON(w, http.StatusOK, map[string]any{"templates": s.templateList(r.Context())})
 }
 
 func (s *Server) hostInfo(w http.ResponseWriter, r *http.Request) {
@@ -1209,7 +1197,7 @@ func (s *Server) diskFor(req vm.CreateRequest) int {
 	if req.DiskGB > 0 || req.ISO != "" {
 		return req.DiskGB
 	}
-	for i, t := range s.Templates {
+	for i, t := range s.templateList(context.Background()) {
 		if t.Name == req.Template || (req.Template == "" && i == 0) {
 			return t.MinDiskGB
 		}

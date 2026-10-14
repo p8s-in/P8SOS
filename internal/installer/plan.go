@@ -50,9 +50,6 @@ func NewPlan(a Answers, disks []Disk, nics []NIC, uefi bool, zoneOK func(string)
 		}
 		p.Disks = append(p.Disks, d)
 	}
-	if !a.Erase {
-		return nil, ErrNotErase
-	}
 	if a.Network.Interface == "auto" {
 		n, ok := PickNIC(nics)
 		if !ok {

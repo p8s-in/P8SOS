@@ -238,6 +238,19 @@ hardware**. Work through it on the new machine; tick each line and note problems
 - [ ] Remove a disk: first press = taken out (data moves), second press when healthy = removed and wiped
 - [ ] `p8 ceph`, `p8 ceph osd n2 /dev/sdb`, `p8 create x --storage ceph` work from the command line
 
+## 22. Clones and templates from VMs
+
+- [ ] Manage → Options → Clone `web2` of a running `web1` with a data disk: job finishes, web2 has both disks and web1's files, its own IP; `ssh` host key differs from web1's
+- [ ] Both run at the same time without an IP clash (`p8 list`); deleting web2 leaves web1 untouched
+- [ ] Clone a VM installed from an ISO: exact copy (note in the job result)
+- [ ] Make a template `web-base` from a running VM with the guest agent: VM is cleaned and shut down; it starts again fine
+- [ ] New VM → "Made from your VMs" → web-base: made in seconds, has the packages of the original, own hostname and IP
+- [ ] Two VMs from web-base at once: different IPs (DHCP by MAC)
+- [ ] Without a guest agent: making a template from the running VM fails with a clear message; shut down: works ("copied as it is")
+- [ ] Delete the template while a VM from it exists: refused; after deleting that VM: works
+- [ ] Cluster: template made on n2 shows "on n2" in New VM; a VM from it is created on n2
+- [ ] `p8 clone`, `p8 template-from`, `p8 templates`, `p8 templates rm` work
+
 ## Add new features here as they are built
 
 (Every new feature adds its own lines above before it counts as done.)

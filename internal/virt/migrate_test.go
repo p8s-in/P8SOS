@@ -84,3 +84,13 @@ func TestMigrate(t *testing.T) {
 		t.Fatalf("failure: %v", err)
 	}
 }
+
+func TestParseExecStatus(t *testing.T) {
+	done, code, out, err := ParseExecStatus([]byte(`{"return":{"exited":true,"exitcode":3,"out-data":"aGVsbG8K","err-data":"b29wcwo="}}`))
+	if err != nil || !done || code != 3 || out != "hello\noops\n" {
+		t.Fatalf("%v %d %q %v", done, code, out, err)
+	}
+	if done, _, _, _ := ParseExecStatus([]byte(`{"return":{"exited":false}}`)); done {
+		t.Fatal("still running")
+	}
+}
