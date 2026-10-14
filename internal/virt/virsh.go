@@ -182,6 +182,19 @@ func (v *Virsh) Reboot(ctx context.Context, name string) error {
 	return err
 }
 
+// SaveState writes a running VM's memory and devices to file and stops it
+// (virsh save). The VM is paused while its RAM is written. RestoreState
+// starts it again from that file, exactly where it was.
+func (v *Virsh) SaveState(ctx context.Context, name, file string) error {
+	_, err := v.virsh(ctx, "save", name, file, "--running")
+	return err
+}
+
+func (v *Virsh) RestoreState(ctx context.Context, file string) error {
+	_, err := v.virsh(ctx, "restore", file, "--running")
+	return err
+}
+
 func (v *Virsh) FSFreeze(ctx context.Context, name string) error {
 	_, err := v.virsh(ctx, "domfsfreeze", name)
 	return err

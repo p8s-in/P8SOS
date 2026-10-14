@@ -52,7 +52,8 @@ p8 create web1 --storage ceph
 | Move to another server (shut down) | instant: no disk is copied |
 | Move while running | only the memory moves |
 | High availability | starts from the same disk on another server; extra disks included |
-| Backups | **not yet** — use snapshots (Ceph keeps 3 copies) |
+| Backups | yes: whole disk images (`rbd export` of a snapshot), always full; restore over the VM, or as a new VM (on Ceph, or local when this server has no Ceph) |
+| Move its disks to local ZFS (or back) | Hardware → Disk storage (VM shut down) |
 
 How it works: each VM disk is an RBD image `<vm>-diskN` in the pool, opened as a block device
 (`/dev/rbd/p8s-vms/...`) on the server where the VM is defined. `/etc/p8s/rbd-maps` lists them and
@@ -71,7 +72,7 @@ other disks; press Remove again when Ceph is healthy, and it is removed and wipe
 
 ## Limits (v1)
 
-- Backups of VMs on Ceph (and restoring a backup over a VM on Ceph) aren't available yet.
+- Backups of VMs on Ceph are full every time (no "only the changes" backups yet).
 - Snapshots of a VM with several disks are taken one disk after the other (not at the same instant).
 - Ceph is managed from the master; after a master failover the new master manages it if Ceph is
   installed there (every Ceph server has the configuration). Ceph itself has no master and keeps running.

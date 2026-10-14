@@ -20,6 +20,11 @@ Snapshots are not backups: they live on the same disks. A backup is a full, comp
 | Restore as a new VM | Backups → Copy | `p8 restore web1 ID web1-copy` |
 | Test a backup without touching the VM | Backups → Verify | `p8 verify web1 ID` |
 | Delete one | Backups → Delete | `p8 rmbackup web1 ID` |
+| Take single files out | Backups → **Files**: browse the backup, Download | `p8 files web1 ID /etc`, `p8 files web1 ID /etc/nginx/nginx.conf` |
+
+VMs on Ceph are backed up too: a Ceph snapshot of every disk, saved as a whole disk image (always a full backup). Such a backup restores over the VM, or as a new VM — on Ceph when the server has it, otherwise on local ZFS.
+
+**Single files.** **Files** opens a backup read-only (restored into a scratch disk, closed after an hour) and lists its filesystems — ext4, XFS, Btrfs, FAT/EFI, NTFS (Windows). Click through the folders and **Download** what you need, then copy it back into the VM. LVM and encrypted disks inside the VM can't be opened this way: restore the backup as a new VM to get at them.
 
 ## Off-site copies (the 3-2-1 rule)
 

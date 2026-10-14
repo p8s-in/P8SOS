@@ -49,7 +49,11 @@ p8 ceph pool
 p8 create web1 --storage ceph
 ```
 
-Ceph VMs support snapshots, resize, extra disks, clones, instant moves and HA from the same disk. Not yet: backups to files (use snapshots) and making templates from them. A disk is never deleted while another server has it open. Use a separate 10 GbE network if you can.
+Ceph VMs support snapshots, resize, extra disks, clones, instant moves and HA from the same disk. Backups work too (whole disk images, always full). Not yet: making templates from them. A disk is never deleted while another server has it open. Use a separate 10 GbE network if you can.
+
+## Moving a VM's disks to another storage
+
+Manage → Hardware → **Disk storage** (VM shut down), or `p8 storage web1 ceph`: every disk of the VM is copied to the other storage — local ZFS, a NAS/SAN pool or Ceph — then the old ones are deleted. Only the used part is copied. Its snapshots can't come along (tick "delete its snapshots"; take a backup first if you need them). Typical: a VM grows important → move it to Ceph, so it can move between servers in seconds and restart elsewhere if its server dies.
 
 ## Encryption at rest
 

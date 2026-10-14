@@ -51,7 +51,8 @@ func (s *Server) getCluster(w http.ResponseWriter, r *http.Request) {
 	}
 	st := s.Cluster.State()
 	out := map[string]any{"role": st.Role, "endpoint": st.Endpoint, "term": st.Term,
-		"size": s.Cluster.ClusterSize(), "peer": s.Cluster.Peer(), "quorum": s.Cluster.HasQuorum()}
+		"size": s.Cluster.ClusterSize(), "peer": s.Cluster.Peer(), "quorum": s.Cluster.HasQuorum(),
+		"voters": s.Cluster.Voters(), "witness": s.Cluster.WitnessStatus(r.Context())}
 	nodes := []nodeView{}
 	if st.Role != "" {
 		self := nodeView{Node: st.Self, Role: st.Role, Self: true, Status: cluster.Status{Online: true}}

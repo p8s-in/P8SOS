@@ -323,6 +323,12 @@ function cloudAccount(){
     <div class="sub">For scripts and tools: <span class="mono">Authorization: Bearer p8sk_…</span> on <span class="mono">${esc(location.origin)}/api/v1/…</span> — acts as you. See docs/api.md.</div>
     <table class="snaps"><tbody id="tkList"></tbody></table>
     <div class="inline"><input id="tkName" placeholder="name, e.g. laptop script" maxlength="40"><button class="btn" id="tkGo">Create token</button></div>
+    <div class="row" style="grid-template-columns:auto 1fr 140px;align-items:end;margin-top:4px">
+      <label class="check" style="margin:0 0 10px"><input id="tkRO" type="checkbox"> Read-only</label>
+      <div><label for="tkVMs">Only these VMs (optional)</label><input id="tkVMs" placeholder="web1, db1 — empty = all yours" autocomplete="off"></div>
+      <div><label for="tkDays">Valid for (days)</label><input id="tkDays" type="number" min="1" max="3650" placeholder="forever"></div>
+    </div>
+    <div class="hint">Give scripts the least they need: a monitoring tool a read-only token, a deploy script one for its VMs only.</div>
     <div class="hint" id="tkNew" hidden></div>
   </div>`);
   $("#pfGo").onclick = async () => {
@@ -335,8 +341,9 @@ function cloudAccount(){
   };
   $("#tkGo").onclick = async () => {
     try {
-      const r = await call("POST", "/me/tokens", {name: $("#tkName").value.trim()});
-      $("#tkName").value = "";
+      const vmsList = $("#tkVMs").value.split(/[\s,]+/).map(x => x.trim()).filter(Boolean);
+      const r = await call("POST", "/me/tokens", {name: $("#tkName").value.trim(), read_only: $("#tkRO").checked, vms: vmsList, days: +$("#tkDays").value || 0});
+      $("#tkName").value = ""; $("#tkVMs").value = ""; $("#tkDays").value = ""; $("#tkRO").checked = false;
       $("#tkNew").hidden = false;
       $("#tkNew").innerHTML = `Copy it now — it won't be shown again: <span class="mono copy" data-copy="${esc(r.secret)}">${esc(r.secret)}</span>`;
       loadTokens();
@@ -347,7 +354,8 @@ function cloudAccount(){
 async function loadTokens(){
   try {
     const l = (await call("GET", "/me/tokens")).tokens;
-    $("#tkList").innerHTML = l.length ? l.map(t => `<tr data-tk="${esc(t.id)}"><td><b>${esc(t.name)}</b><div class="sub">created ${esc(fmtTime(t.created_at))} · ${t.last_used ? "used " + esc(fmtTime(t.last_used)) : "never used"}</div></td>
+    const scope = t => [t.read_only ? "read-only" : "", (t.vms || []).length ? "VMs " + t.vms.join(", ") : "", t.expires_at ? "until " + fmtTime(t.expires_at) : ""].filter(Boolean).join(" · ") || "full access (acts as you)";
+    $("#tkList").innerHTML = l.length ? l.map(t => `<tr data-tk="${esc(t.id)}"><td><b>${esc(t.name)}</b> <span class="sub">${esc(scope(t))}</span><div class="sub">created ${esc(fmtTime(t.created_at))} · ${t.last_used ? "used " + esc(fmtTime(t.last_used)) : "never used"}</div></td>
       <td><button class="btn danger" data-tkdel>Revoke</button></td></tr>`).join("") : `<tr><td class="muted">No tokens.</td></tr>`;
   } catch {}
 }

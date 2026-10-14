@@ -171,6 +171,8 @@ func (s *Service) MoveCheck(ctx context.Context, name string) (string, error) {
 		return "eject its CDs first (Manage → Installer CD)", nil
 	case len(v.Disks) > 0 && !s.shared(Prefix+name):
 		return "it has extra disks; moving those isn't supported yet (back it up and restore it on the other server instead)", nil
+	case len(v.PCI)+len(v.USB) > 0:
+		return "it has PCI/USB devices of this server; take them away first (Hardware → PCI and USB devices)", nil
 	}
 	return "", nil
 }

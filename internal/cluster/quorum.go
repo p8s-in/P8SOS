@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"p8sos/internal/witness"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -22,7 +23,8 @@ import (
 // than one master — and never a VM running twice.
 //
 // Two servers can't outvote each other: there, a server takes over only by
-// hand (`p8 cluster promote`, when you know the master is really gone).
+// hand (`p8 cluster promote`, when you know the master is really gone) —
+// unless the cluster has a witness (witness.go), the third vote.
 
 // Book is the replicated cluster state the master sends every server.
 type Book struct {
@@ -34,6 +36,8 @@ type Book struct {
 	// relative to the data directory.
 	Files map[string][]byte `json:"files,omitempty"`
 	At    string            `json:"at"`
+	// Witness: the two-server tie-breaker (every server needs it to campaign).
+	Witness *witness.Conf `json:"witness,omitempty"`
 }
 
 const (
@@ -93,6 +97,7 @@ func (m *Manager) buildBook() Book {
 	self.Token, self.API, self.Endpoint = m.st.SelfToken, m.selfAPI(), m.st.Endpoint
 	b := Book{Term: m.st.Term, MasterID: self.ID, Nodes: []Node{self}, At: m.now().UTC().Format(time.RFC3339)}
 	b.Nodes = append(b.Nodes, m.st.Nodes...)
+	b.Witness = m.st.Witness
 	b.Files = map[string][]byte{}
 	for _, f := range m.BookFiles {
 		p := filepath.Join(m.DataDir, f)
@@ -117,8 +122,21 @@ func (m *Manager) pushBook(ctx context.Context) {
 	}
 	b := m.buildBook()
 	workers := append([]Node(nil), m.st.Nodes...)
+	wit, voters := m.witness(), m.voters()
 	m.mu.Unlock()
 	reached := 1
+	if wit != nil {
+		cctx, cancel := context.WithTimeout(ctx, 4*time.Second)
+		r, err := wit.Beat(cctx, b.Term, b.MasterID)
+		cancel()
+		switch {
+		case err == nil && r.OK:
+			reached++
+		case err == nil && r.Term > b.Term: // a newer master told the witness first
+			m.demote(context.WithoutCancel(ctx), r.Term, "the witness follows a newer master")
+			return
+		}
+	}
 	for _, n := range workers {
 		cctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 		var r VoteReply
@@ -139,19 +157,19 @@ func (m *Manager) pushBook(ctx context.Context) {
 		}
 	}
 	m.mu.Lock()
-	if reached*2 > len(workers)+1 || len(workers)+1 < 3 {
+	if reached*2 > voters || voters < 3 {
 		m.quorumAt = m.now()
 	}
 	m.mu.Unlock()
 }
 
-// HasQuorum says whether this master still reaches a majority of the servers
-// (always true below 3 servers: there is nobody to outvote it).
+// HasQuorum says whether this master still reaches a majority of the voters
+// (always true below 3 voters: there is nobody to outvote it).
 func (m *Manager) HasQuorum() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	_ = m.load()
-	if m.st.Role != "master" || len(m.st.Nodes)+1 < 3 {
+	if m.st.Role != "master" || m.voters() < 3 {
 		return true
 	}
 	if m.quorumAt.IsZero() {
@@ -209,6 +227,7 @@ func (m *Manager) ReceiveBook(ctx context.Context, b Book) (VoteReply, error) {
 		m.st.Endpoint = master.Endpoint
 	}
 	m.st.Joins = nil
+	m.st.Witness = b.Witness
 	m.lastMaster = m.now()
 	m.saveStandby(b.Files)
 	err := m.save()
@@ -322,7 +341,7 @@ func (m *Manager) Watch(ctx context.Context, every time.Duration) {
 func (m *Manager) WatchOnce(ctx context.Context) {
 	m.mu.Lock()
 	_ = m.load()
-	role, total := m.st.Role, len(m.st.Nodes)+len(m.st.Mesh)+1
+	role, total := m.st.Role, m.voters()
 	if role == "worker" && m.lastMaster.IsZero() {
 		m.lastMaster = m.now() // just started: give the master time to send the book
 	}
@@ -348,10 +367,25 @@ func (m *Manager) campaign(ctx context.Context) {
 		masterID = m.st.Nodes[0].ID
 	}
 	nodes := m.allNodes()
+	wit, total := m.witness(), m.voters()
 	m.mu.Unlock()
-	total := len(nodes) + 1
 	var alive []Node
 	newest := term
+	witAlive := 0
+	if wit != nil {
+		cctx, cancel := context.WithTimeout(ctx, 4*time.Second)
+		r, err := wit.Ping(cctx)
+		cancel()
+		if err == nil {
+			if r.MasterSeen >= 0 && time.Duration(r.MasterSeen)*time.Second < MasterTimeout/2 {
+				return // the witness still hears the master: only this server is cut off
+			}
+			if r.Term > newest {
+				newest = r.Term
+			}
+			witAlive = 1
+		}
+	}
 	for _, n := range nodes {
 		if n.ID == masterID {
 			continue
@@ -371,7 +405,7 @@ func (m *Manager) campaign(ctx context.Context) {
 		}
 		alive = append(alive, n)
 	}
-	if (len(alive)+1)*2 <= total {
+	if (len(alive)+1+witAlive)*2 <= total {
 		return // this side has no majority: never take over
 	}
 	for _, n := range alive {
@@ -396,6 +430,16 @@ func (m *Manager) campaign(ctx context.Context) {
 		cancel()
 		if err == nil && r.Granted {
 			votes++
+		}
+	}
+	if witAlive == 1 {
+		cctx, cancel := context.WithTimeout(ctx, 4*time.Second)
+		r, err := wit.Vote(cctx, next, self.ID)
+		cancel()
+		if err == nil && r.OK {
+			votes++
+		} else if err == nil && m.Log != nil {
+			m.Log.Warn("cluster election: the witness said no", "why", r.Why)
 		}
 	}
 	if votes*2 <= total {
@@ -539,8 +583,16 @@ func (m *Manager) ReachesMajority(ctx context.Context) bool {
 	m.mu.Lock()
 	_ = m.load()
 	nodes := m.allNodes()
+	wit, total := m.witness(), m.voters()
 	m.mu.Unlock()
 	reached := 1
+	if wit != nil {
+		cctx, cancel := context.WithTimeout(ctx, 4*time.Second)
+		if _, err := wit.Ping(cctx); err == nil {
+			reached++
+		}
+		cancel()
+	}
 	for _, n := range nodes {
 		cctx, cancel := context.WithTimeout(ctx, 4*time.Second)
 		var p PeerInfo
@@ -549,5 +601,5 @@ func (m *Manager) ReachesMajority(ctx context.Context) bool {
 		}
 		cancel()
 	}
-	return reached*2 > len(nodes)+1
+	return reached*2 > total
 }

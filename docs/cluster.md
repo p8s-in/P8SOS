@@ -150,6 +150,17 @@ company sign-in). The master hands it out every 15 seconds.
   When the master is really gone: `p8 cluster promote` on the worker (or the
   button in Server → Cluster). Don't do this while the old master is only cut
   off — it would come back as a second master until it hears of the new term.
+- **Two servers and a witness:** `p8s-witness` (cmd/p8s-witness) on a third
+  box is the third vote, so the majority rules above apply. The master sends
+  it a heartbeat with every book; it counts toward the master's majority. A
+  worker that hears no master asks the witness first: if the witness heard the
+  master in the last 22 s, only the worker is cut off and nothing happens.
+  Otherwise the witness gives its vote (once per term, for a newer term only)
+  and the worker becomes master with 2 of 3 votes. An old master whose
+  heartbeat the witness refuses (older term) steps down. The witness's
+  certificate is pinned (sha256 printed by `p8s-witness init`), calls carry
+  its key, and its settings travel in the cluster book. If the witness is
+  down, the two servers carry on as before (2 of 3 votes).
 - **Tunnels:** servers now connect to each other directly (each listens on
   UDP 51820) where they can; pairs that can't (both behind NAT on other
   networks) still go through the master.
@@ -184,6 +195,7 @@ if their server dies. See [ha.md](ha.md).
 | `p8 join URL CODE` | on the new server: join with a command |
 | `p8 cluster remove n2 [--force]` | on the master: drop a server (refused while it has VMs unless `--force`; its VMs keep running there) |
 | `p8 cluster leave` | on a worker: stand alone again |
+| `p8 cluster witness URL KEY FINGERPRINT` / `off` | on the master of 2 servers: add / remove the tie-breaker; without arguments: is it answering |
 
 Files: `/var/lib/p8s/cluster/state.json` (roles, keys, tokens; root only),
 `wg.conf` (tunnel). `wg show p8s-wg` shows the tunnel and last handshakes.
@@ -191,7 +203,6 @@ Files: `/var/lib/p8s/cluster/state.json` (roles, keys, tokens; root only),
 ## Not yet
 
 - Moving containers; live moves of UEFI VMs and VMs on network storage
-- An external tie-breaker for two-server clusters (like Proxmox's QDevice)
 - Containers in high availability (VMs: see [ha.md](ha.md)); shared storage (Ceph/NFS)
 - Containers on workers (containers run on the master), ISO installs and public IPs on workers
 - One shared ISO library and template list

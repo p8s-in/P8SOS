@@ -54,7 +54,7 @@ Each recipe uses only the features described above. Pick the one closest to you.
 2. Server → Ceph: install on each, **Set up Ceph**, 3 monitors, 2 managers, one disk each, **Create the VM pool**.
 3. Create important VMs with **Storage: ceph** and turn on HA.
 4. Test: pull the power of one server; its VMs start on another within about 3 minutes, from the same disk. Ceph shows HEALTH\_WARN until the server returns.
-5. Keep local ZFS for VMs that need the fastest disks and back them up as usual (Ceph VMs: snapshots until file backups arrive).
+5. Keep local ZFS for VMs that need the fastest disks and back them up as usual (Ceph VMs too: their backups are full disk images).
 
 ## Other ideas
 

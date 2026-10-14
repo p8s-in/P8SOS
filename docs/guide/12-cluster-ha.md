@@ -41,6 +41,16 @@ Every server keeps the *cluster book* (servers, keys, accounts, settings). If th
 
 With **two servers** nobody can be outvoted: if the master is really gone, run `p8 cluster promote` on the worker (or the button in Server → Cluster). Only do this when the old master is off for good.
 
+### A witness for two servers
+
+Or add a **witness** (like Proxmox's QDevice): a tiny program on any always-on Linux box that is *not* one of the two servers — a Raspberry Pi, a NAS, a small VPS. It is the third vote, so two servers then behave like three: if the master dies, the other server takes over by itself after about a minute; a server cut off from both never does.
+
+1. Server → Cluster → **Add a witness…** → download `p8s-witness` (amd64 for a PC/VPS, arm64 for a Raspberry Pi). The servers also keep both in `/usr/local/share/p8s/witness/`.
+2. Copy it to the box and run `chmod +x p8s-witness-* && sudo ./p8s-witness-* install`. It starts at boot and prints an address, a key and a fingerprint.
+3. Paste the three into the dashboard (or `p8 cluster witness https://ADDRESS:8007 KEY FINGERPRINT` on the master). Both servers must reach the box on TCP 8007.
+
+`p8 cluster witness` shows whether it answers; `p8 cluster witness off` removes it.
+
 ## High availability (HA)
 
 Turn it on per VM: Manage → Options → **High availability**, pick the second server and the copy interval (default 15 minutes, 1–1440).

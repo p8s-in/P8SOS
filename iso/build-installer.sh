@@ -78,6 +78,8 @@ grub-efi-amd64-bin
 grub-pc-bin
 efibootmgr
 psmisc
+pciutils
+usbutils
 mokutil
 dosfstools
 gdisk

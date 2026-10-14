@@ -96,6 +96,11 @@ type Service struct {
 	TPMDir string
 	// ReplicaDir keeps the settings of VM copies held here for high availability.
 	ReplicaDir string
+	// HostDevs lists the server's PCI/USB devices for passthrough; nil = off.
+	HostDevs HostDevices
+	// StateDir keeps the saved memory of snapshots "with RAM" (one folder
+	// per VM); empty = memory snapshots off.
+	StateDir string
 
 	locks    sync.Map // name -> *sync.Mutex; serializes ops per VM
 	memSched sync.Map // backup schedules when ScheduleFile is empty (tests)
@@ -128,12 +133,22 @@ type VM struct {
 	UUID       string `json:"uuid"`
 	CreatedAt  string `json:"created_at"`
 	Owner      string `json:"owner,omitempty"` // P8S user it belongs to; empty = admins only
+	// Access is set by the API for a VM shared with the caller: "viewer" or "user".
+	Access string `json:"access,omitempty"`
 	// Public is the VM's address from an IP pool (network "public").
 	Public *ippool.Lease `json:"public,omitempty"`
 	// Disks are the data disks next to the root disk (DiskGB).
 	Disks []Disk `json:"disks,omitempty"`
 	// NICs are the network cards after the first one (MAC/Network/VLAN).
 	NICs []NIC `json:"nics,omitempty"`
+	// PCI and USB are the server's devices given to the VM (passthrough).
+	PCI []string `json:"pci,omitempty"`
+	USB []string `json:"usb,omitempty"`
+	// Hot-plug ceilings: vCPUs / RAM can be raised up to these while it runs (0 = off).
+	HotCPUs   int `json:"hot_cpus,omitempty"`
+	HotMemMiB int `json:"hot_mem_mib,omitempty"`
+	// IOLimits caps its disk and network speed (each disk, each card).
+	IOLimits *virt.IOLimits `json:"io_limits,omitempty"`
 	// Storage holds the VM's disks: empty = this server's own pool, else a
 	// network storage (iSCSI).
 	Storage string `json:"storage,omitempty"`
@@ -497,6 +512,15 @@ func (s *Service) get(ctx context.Context, dom string) (VM, error) {
 	}
 	v.OSType = spec.OSType
 	v.NICs = s.nicsOf(spec)
+	v.PCI = spec.PCI
+	v.HotCPUs, v.HotMemMiB = spec.HotCPUs, spec.HotMemMiB
+	if !spec.Limits.Zero() {
+		l := spec.Limits
+		v.IOLimits = &l
+	}
+	for _, u := range spec.USB {
+		v.USB = append(v.USB, u.ID())
+	}
 	v.Storage = s.storageOf(dom)
 	v.CPU = "host"
 	if spec.CPUModel != "" {
@@ -651,6 +675,7 @@ func (s *Service) remove(ctx context.Context, name string, keepDisk bool) error 
 	s.logErr("remove backup schedule", s.SetSchedule(name, Schedule{}))
 	s.logErr("remove firewall", s.dropFirewall(context.WithoutCancel(ctx), name))
 	s.releaseIP(context.WithoutCancel(ctx), name)
+	s.dropStates(dom) // memory of its snapshots: useless without the VM
 	if keepDisk {
 		return nil
 	}

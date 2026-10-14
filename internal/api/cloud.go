@@ -429,11 +429,21 @@ func (s *Server) newToken(w http.ResponseWriter, r *http.Request) {
 	}
 	var body struct {
 		Name string `json:"name"`
+		users.TokenScope
+		Days int `json:"days"` // shortcut for expires_at: valid for this many days
 	}
 	if !decode(w, r, &body) {
 		return
 	}
-	t, secret, err := s.Users.NewToken(who(r).Name, body.Name)
+	if body.Days > 0 && body.Expires == "" {
+		body.Expires = s.Users.Clock().Add(time.Duration(body.Days) * 24 * time.Hour).UTC().Format(time.RFC3339)
+	}
+	// a token can't do more than the request that makes it (no wider scope from a scoped token)
+	if sc := who(r).Scope; sc != nil {
+		writeErr(w, http.StatusForbidden, "forbidden", "a scoped API token can't make tokens")
+		return
+	}
+	t, secret, err := s.Users.NewScopedToken(who(r).Name, body.Name, body.TokenScope)
 	if err != nil {
 		s.fail(w, r, err)
 		return

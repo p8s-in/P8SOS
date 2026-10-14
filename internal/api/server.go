@@ -20,6 +20,7 @@ import (
 
 	"p8sos/internal/audit"
 	"p8sos/internal/billing"
+	"p8sos/internal/browse"
 	"p8sos/internal/ceph"
 	"p8sos/internal/cloud"
 	"p8sos/internal/cluster"
@@ -39,6 +40,7 @@ import (
 	"p8sos/internal/storages"
 	"p8sos/internal/support"
 	"p8sos/internal/tasks"
+	"p8sos/internal/tlsutil"
 	"p8sos/internal/tunnel"
 	"p8sos/internal/updates"
 	"p8sos/internal/users"
@@ -101,7 +103,13 @@ type Server struct {
 	Dial func(ctx context.Context, addr string) (net.Conn, error)
 
 	// Accounts. Users nil = only API tokens (one admin), as before v0.3.
-	Users    *users.Store
+	Users *users.Store
+	// DCFirewall is the datacenter firewall (IP sets, blocks, rules for all VMs); nil = off.
+	DCFirewall *firewall.GlobalStore
+	// Browse opens backups for file-level restore; nil = off.
+	Browse *browse.Manager
+	// Shares: VMs shared with users besides their owner (per-VM permissions); nil = off.
+	Shares   *users.Shares
 	Sessions *users.Sessions
 	Limiter  *users.Limiter  // failed sign-in lockout; nil = defaults
 	Audit    *audit.Log      // who changed what; nil = not kept
@@ -120,6 +128,10 @@ type Server struct {
 	Updates *updates.Manager
 	// Node is the Server page: host tasks (templates, storage, network, Debian updates); nil = none.
 	Node *tasks.Node
+	// CertInfo reports the Let's Encrypt certificate (ok=false: none); nil = off.
+	CertInfo func() (tlsutil.ACMEInfo, bool)
+	// CFIni is where the Cloudflare token for certificates is kept ("" = /etc/p8s/cloudflare.ini).
+	CFIni string
 	// CTs are the containers (LXC); nil = not available.
 	CTs *ct.Service
 	// RemoteMetrics serves charts of VMs on other cluster servers (ok=false: local).
@@ -225,6 +237,12 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("DELETE /api/v1/vms/{name}/disks/{index}", s.removeDisk)
 	auth.HandleFunc("POST /api/v1/vms/{name}/nics", s.addNIC)
 	auth.HandleFunc("DELETE /api/v1/vms/{name}/nics/{mac}", s.removeNIC)
+	auth.HandleFunc("PUT /api/v1/vms/{name}/limits", s.setLimits)
+	auth.HandleFunc("POST /api/v1/vms/{name}/storage", s.moveStorage)
+	auth.HandleFunc("POST /api/v1/vms/{name}/hotplug", s.setHotplug)
+	auth.HandleFunc("GET /api/v1/vms/{name}/devices", s.getDevices)
+	auth.HandleFunc("POST /api/v1/vms/{name}/devices", s.addDevice)
+	auth.HandleFunc("DELETE /api/v1/vms/{name}/devices/{kind}/{id}", s.removeDevice)
 	auth.HandleFunc("GET /api/v1/vms/{name}/snapshots", s.listSnapshots)
 	auth.HandleFunc("POST /api/v1/vms/{name}/snapshots", s.createSnapshot)
 	auth.HandleFunc("POST /api/v1/vms/{name}/snapshots/{snap}/rollback", s.rollback)
@@ -239,10 +257,16 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("DELETE /api/v1/backups/{name}/{id}", s.deleteBackup)
 	auth.HandleFunc("POST /api/v1/backups/{name}/{id}/restore", s.restoreBackup)
 	auth.HandleFunc("POST /api/v1/backups/{name}/{id}/verify", s.verifyBackup)
+	auth.HandleFunc("POST /api/v1/backups/{name}/{id}/browse", s.openBrowse)
+	auth.HandleFunc("GET /api/v1/browse/{sid}", s.getBrowse)
+	auth.HandleFunc("GET /api/v1/browse/{sid}/ls", s.lsBrowse)
+	auth.HandleFunc("GET /api/v1/browse/{sid}/file", s.fileBrowse)
+	auth.HandleFunc("DELETE /api/v1/browse/{sid}", s.closeBrowse)
 	auth.HandleFunc("GET /api/v1/vms/{name}/backup-schedule", s.getSchedule)
 	auth.HandleFunc("PUT /api/v1/vms/{name}/backup-schedule", s.putSchedule)
 	auth.HandleFunc("GET /api/v1/vms/{name}/metrics", s.vmMetrics)
 	auth.HandleFunc("GET /api/v1/host/metrics", s.hostMetrics)
+	auth.HandleFunc("GET /api/v1/prometheus", s.prometheus)
 	auth.HandleFunc("GET /api/v1/isos", s.listISOs)
 	auth.HandleFunc("PUT /api/v1/isos/{name}", s.uploadISO)
 	auth.HandleFunc("GET /api/v1/vms/{name}/move", s.moveInfo)
@@ -305,6 +329,8 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("PATCH /api/v1/users/{user}", s.updateUser)
 	auth.HandleFunc("DELETE /api/v1/users/{user}", s.deleteUser)
 	auth.HandleFunc("PUT /api/v1/vms/{name}/owner", s.setOwner)
+	auth.HandleFunc("GET /api/v1/vms/{name}/shares", s.listShares)
+	auth.HandleFunc("PUT /api/v1/vms/{name}/shares", s.putShare)
 	auth.HandleFunc("PUT /api/v1/me/profile", s.setProfile)
 	auth.HandleFunc("GET /api/v1/me/tokens", s.listTokens)
 	auth.HandleFunc("POST /api/v1/me/tokens", s.newToken)
@@ -341,6 +367,8 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("GET /api/v1/vms/{name}/sites", s.listSites)
 	auth.HandleFunc("POST /api/v1/vms/{name}/sites", s.addSite)
 	auth.HandleFunc("DELETE /api/v1/sites/{host}", s.deleteSite)
+	auth.HandleFunc("GET /api/v1/firewall", s.getDCFirewall)
+	auth.HandleFunc("PUT /api/v1/firewall", s.putDCFirewall)
 	auth.HandleFunc("GET /api/v1/vms/{name}/firewall", s.getFirewall)
 	auth.HandleFunc("PUT /api/v1/vms/{name}/firewall", s.putFirewall)
 	auth.HandleFunc("GET /api/v1/node/encryption", s.getEncryption)
@@ -401,6 +429,10 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("POST /api/v1/cluster/join", s.clusterJoin)
 	auth.HandleFunc("POST /api/v1/cluster/leave", s.clusterLeave)
 	auth.HandleFunc("DELETE /api/v1/cluster/nodes/{id}", s.clusterRemove)
+	auth.HandleFunc("GET /api/v1/cluster/witness", s.getWitness)
+	auth.HandleFunc("POST /api/v1/cluster/witness", s.setWitness)
+	auth.HandleFunc("DELETE /api/v1/cluster/witness", s.deleteWitness)
+	auth.HandleFunc("GET /api/v1/cluster/witness/download/{arch}", s.downloadWitness)
 	auth.HandleFunc("POST /api/v1/cluster/nodes/{id}/rename", s.clusterRename)
 	auth.HandleFunc("GET /api/v1/cluster/capacity", s.clusterCapacity)
 	auth.HandleFunc("GET /api/v1/cluster/candidates", s.clusterCandidates)
@@ -429,6 +461,9 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("GET /api/v1/ssh-ports", s.sshPorts)
 	auth.HandleFunc("GET /api/v1/node", s.getNode)
 	auth.HandleFunc("GET /api/v1/node/memory", s.getMemory)
+	auth.HandleFunc("GET /api/v1/node/acme", s.getACME)
+	auth.HandleFunc("POST /api/v1/node/acme", s.postACME)
+	auth.HandleFunc("DELETE /api/v1/node/acme", s.deleteACME)
 	auth.HandleFunc("GET /api/v1/node/tasks", s.listTasks)
 	auth.HandleFunc("POST /api/v1/node/shell", s.hostShellTicket)
 	auth.HandleFunc("POST /api/v1/node/tasks", s.startTask)
@@ -477,14 +512,20 @@ func (s *Server) listVMs(w http.ResponseWriter, r *http.Request) {
 	}
 	p, out := who(r), []vm.VM{}
 	for _, v := range vms {
-		if mayUse(p, v.Owner) {
-			if v.MemUsedMiB == 0 && s.Metrics != nil && v.State == "running" {
-				if pts := s.Metrics.VM(v.Name); len(pts) > 0 {
-					v.MemUsedMiB = pts[len(pts)-1].GuestMiB
-				}
-			}
-			out = append(out, v)
+		if !inScope(p, v.Name) {
+			continue
 		}
+		if !mayUse(p, v.Owner) {
+			if v.Access = s.Shares.Level(v.Name, p.Name); v.Access == "" {
+				continue
+			}
+		}
+		if v.MemUsedMiB == 0 && s.Metrics != nil && v.State == "running" {
+			if pts := s.Metrics.VM(v.Name); len(pts) > 0 {
+				v.MemUsedMiB = pts[len(pts)-1].GuestMiB
+			}
+		}
+		out = append(out, v)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"vms": out})
 }
@@ -636,6 +677,7 @@ func (s *Server) deleteVM(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = s.Creds.Delete("vm", r.PathValue("name"))
+	s.Shares.DropVM(r.PathValue("name"))
 	if s.Billing != nil { // stop charging
 		if err := s.Billing.Unsubscribe(r.PathValue("name")); err != nil && s.Log != nil {
 			s.Log.Error("stop billing of deleted vm", "vm", r.PathValue("name"), "err", err)
@@ -707,11 +749,25 @@ func (s *Server) createSnapshot(w http.ResponseWriter, r *http.Request) {
 	}
 	var body struct {
 		Name string `json:"name"`
+		RAM  bool   `json:"ram"` // also save the running VM's memory
 	}
 	if r.ContentLength != 0 && !decode(w, r, &body) {
 		return
 	}
-	sn, err := s.VMs.CreateSnapshot(r.Context(), r.PathValue("name"), body.Name)
+	var sn vm.Snapshot
+	var err error
+	if body.RAM {
+		rs, ok := s.VMs.(interface {
+			CreateSnapshotRAM(ctx context.Context, name, snap string) (vm.Snapshot, error)
+		})
+		if !ok {
+			s.fail(w, r, fmt.Errorf("%w: memory snapshots aren't available here", vm.ErrInvalid))
+			return
+		}
+		sn, err = rs.CreateSnapshotRAM(r.Context(), r.PathValue("name"), body.Name)
+	} else {
+		sn, err = s.VMs.CreateSnapshot(r.Context(), r.PathValue("name"), body.Name)
+	}
 	if err != nil {
 		s.fail(w, r, err)
 		return

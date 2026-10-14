@@ -41,6 +41,10 @@ const (
 	BondSetup    = "bond-setup" // arg: the extra network port, e.g. enp4s0 (failover)
 	IPv6On       = "ipv6-on"    // IPv6 for the private (NAT) network
 	IPv6Off      = "ipv6-off"
+	ACMEIssue    = "acme"        // Let's Encrypt certificate (spec in Dir/acme.json)
+	ACMERemove   = "acme-remove" // back to the server's own certificate; arg: the domain
+	IOMMUOn      = "iommu-on"    // PCI passthrough: kernel option + VFIO (reboot after)
+	IOMMUOff     = "iommu-off"
 )
 
 // Titles for the task log.
@@ -51,6 +55,8 @@ var Titles = map[string]string{
 	ZFSCache: "Set the ZFS cache limit", NetCheck: "Check the guest network", NetRepair: "Repair the guest network",
 	TailscaleUp: "Connect Tailscale (remote access)", TailscaleOff: "Disconnect Tailscale",
 	BondSetup: "Add a second network cable (bond)", IPv6On: "Turn on IPv6 for the private network", IPv6Off: "Turn off IPv6 for the private network",
+	IOMMUOn: "Turn on IOMMU (PCI passthrough)", IOMMUOff: "Turn off IOMMU",
+	ACMEIssue: "Get a Let's Encrypt certificate", ACMERemove: "Remove the Let's Encrypt certificate",
 }
 
 // Task is one run.
@@ -79,6 +85,15 @@ var (
 )
 
 // SpecPath is where the API puts the description of a template added by address.
+// ACMESpec is where the Let's Encrypt request is written for its task.
+func (m *Manager) ACMESpec() string { return filepath.Join(m.Dir, "acme.json") }
+
+// ReDomain is a host name for a certificate (lowercase, with a dot).
+var reDomain = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,62}\.)+[a-z]{2,63}$`)
+
+// ValidDomain checks a domain for a certificate.
+func ValidDomain(d string) bool { return len(d) <= 253 && reDomain.MatchString(d) }
+
 func (m *Manager) SpecPath(name string) string {
 	return filepath.Join(m.Dir, "template-"+name+".json")
 }
@@ -194,6 +209,17 @@ func (m *Manager) command(kind, arg string) ([]string, error) {
 		return sh("ipv6.sh", "on"), nil
 	case IPv6Off:
 		return sh("ipv6.sh", "off"), nil
+	case ACMEIssue:
+		return sh("acme.sh", "issue", m.ACMESpec()), nil
+	case ACMERemove:
+		if arg != "" && !reDomain.MatchString(arg) {
+			return nil, fmt.Errorf("%w: domain", ErrInvalid)
+		}
+		return sh("acme.sh", "remove", arg), nil
+	case IOMMUOn:
+		return sh("iommu.sh", "on"), nil
+	case IOMMUOff:
+		return sh("iommu.sh", "off"), nil
 	case ZFSCache:
 		if n, err := strconv.Atoi(arg); arg != "auto" && (err != nil || n < 256 || n > 1<<20) {
 			return nil, fmt.Errorf("%w: ZFS cache limit must be 256 MiB or more, or auto", ErrInvalid)

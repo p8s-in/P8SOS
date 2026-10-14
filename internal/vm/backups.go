@@ -41,8 +41,8 @@ type deviceWaiter interface {
 
 var errBackupsOff = fmt.Errorf("%w: backups are not configured on this host", ErrConflict)
 
-// errCephBackup: backups read ZFS disks; VMs on Ceph have snapshots (and three copies of every block).
-var errCephBackup = fmt.Errorf("%w: backups of VMs on Ceph aren't available yet; use snapshots (Ceph keeps 3 copies of every block)", ErrConflict)
+// errCephBackup: this server's disk backend can't read Ceph images.
+var errCephBackup = fmt.Errorf("%w: backups of VMs on Ceph aren't available on this server", ErrConflict)
 
 func (s *Service) backupsReady() error {
 	if s.Backups == nil || s.Jobs == nil {
@@ -61,12 +61,14 @@ func (s *Service) startBackup(ctx context.Context, name string, keep int) (Job, 
 	if err := s.backupsReady(); err != nil {
 		return Job{}, err
 	}
-	if v, err := s.Get(ctx, name); err != nil {
+	v, err := s.Get(ctx, name)
+	if err != nil {
 		return Job{}, err
-	} else if v.Storage == SharedStorage {
-		return Job{}, errCephBackup
 	}
 	j, err := s.Jobs.Start("backup", name, func(ctx context.Context, p jobs.Progress) (string, error) {
+		if v.Storage == SharedStorage { // Ceph: whole disk images (rbd export)
+			return s.runCephBackup(ctx, name, keep, p)
+		}
 		return s.runBackup(ctx, name, keep, p)
 	})
 	if errors.Is(err, jobs.ErrBusy) {
@@ -95,7 +97,7 @@ func (s *Service) runBackup(ctx context.Context, name string, keep int, p jobs.P
 	}
 	if v.Storage == SharedStorage {
 		unlock()
-		return "", errCephBackup
+		return s.runCephBackup(ctx, name, keep, p)
 	}
 	sp, err := s.spec(ctx, dom)
 	if err != nil {
@@ -350,7 +352,7 @@ func (s *Service) StartRestore(ctx context.Context, name, id, newName string) (J
 	switch {
 	case exists && target != name:
 		return Job{}, fmt.Errorf("%w: vm %q already exists; pick another name", ErrExists, target)
-	case exists && s.shared(dom):
+	case exists && s.shared(dom) && m.Format != backup.FormatRaw:
 		return Job{}, fmt.Errorf("%w: %q is on Ceph; restore the backup as a new VM (another name) instead", ErrConflict, target)
 	case exists && st != virt.Stopped:
 		return Job{}, fmt.Errorf("%w: stop vm %q before restoring over it (it is %s)", ErrConflict, target, st)
@@ -376,6 +378,13 @@ func (s *Service) restoreInPlace(ctx context.Context, name string, m Backup, p j
 		return "", fmt.Errorf("vm %q was started meanwhile; stop it and try again", name)
 	}
 	p("writing the disk back")
+	if m.Format == backup.FormatRaw { // disk images: written over the VM's disks
+		if _, _, err := s.restoreRawDisks(ctx, dom, m, true, ""); err != nil {
+			return "", err
+		}
+		s.dropStates(dom)
+		return fmt.Sprintf("%s is back at backup %s", name, m.ID), nil
+	}
 	if err := s.Backups.Restore(ctx, m, dom, true); err != nil {
 		return "", err
 	}
@@ -434,34 +443,49 @@ func (s *Service) restoreAsNew(ctx context.Context, name string, m Backup, p job
 	}
 	bg := context.WithoutCancel(ctx)
 	p("writing the disk")
-	if err := s.Backups.Restore(ctx, m, dom, false); err != nil {
-		return fail(err)
-	}
-	undo = append(undo, func() { s.logErr("rollback restored disk", s.Disks.DestroyDisk(bg, dom)) })
-	disk := "/dev/zvol/" + s.Backups.DiskDataset(dom, 0)
-	if w, ok := s.Disks.(deviceWaiter); ok {
-		d, err := w.WaitDevice(ctx, dom)
+	var disk string
+	var extra []virt.ExtraDisk
+	diskGB := m.DiskGB
+	if m.Format == backup.FormatRaw { // disk images (from Ceph): onto Ceph if here, else local
+		d, ex, err := s.restoreRawDisks(ctx, dom, m, false, s.rawStorage())
 		if err != nil {
 			return fail(err)
 		}
-		disk = d
-	}
-	for _, e := range m.Extra {
-		i := e.Index
-		undo = append(undo, func() {
-			if ed, ok := s.Disks.(extraDisks); ok {
-				s.logErr("rollback restored disk", ed.DestroyExtra(bg, dom, i))
+		undo = append(undo, func() { s.logErr("rollback restored disk", s.Disks.DestroyDisk(bg, dom)) })
+		disk, extra = d, ex
+		if m.ImageBytes > 0 {
+			diskGB = int((m.ImageBytes + 1<<30 - 1) >> 30)
+		}
+	} else {
+		if err := s.Backups.Restore(ctx, m, dom, false); err != nil {
+			return fail(err)
+		}
+		undo = append(undo, func() { s.logErr("rollback restored disk", s.Disks.DestroyDisk(bg, dom)) })
+		disk = "/dev/zvol/" + s.Backups.DiskDataset(dom, 0)
+		if w, ok := s.Disks.(deviceWaiter); ok {
+			d, err := w.WaitDevice(ctx, dom)
+			if err != nil {
+				return fail(err)
 			}
-		})
-	}
-	extra, err := s.restoredExtras(ctx, dom, m)
-	if err != nil {
-		return fail(err)
-	}
-	diskGB := m.DiskGB
-	if sd, err := s.snapDisks(); err == nil {
-		if gb, err := sd.DiskSizeGB(ctx, dom); err == nil && gb > 0 {
-			diskGB = gb
+			disk = d
+		}
+		for _, e := range m.Extra {
+			i := e.Index
+			undo = append(undo, func() {
+				if ed, ok := s.Disks.(extraDisks); ok {
+					s.logErr("rollback restored disk", ed.DestroyExtra(bg, dom, i))
+				}
+			})
+		}
+		ex, err := s.restoredExtras(ctx, dom, m)
+		if err != nil {
+			return fail(err)
+		}
+		extra = ex
+		if sd, err := s.snapDisks(); err == nil {
+			if gb, err := sd.DiskSizeGB(ctx, dom); err == nil && gb > 0 {
+				diskGB = gb
+			}
 		}
 	}
 	uuid := newUUID()

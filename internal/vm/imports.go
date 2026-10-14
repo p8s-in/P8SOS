@@ -54,7 +54,7 @@ func (s *Service) importPath(name string) (string, error) {
 		return "", fmt.Errorf("%w: imports are not set up on this host", ErrConflict)
 	}
 	if !reImportFile.MatchString(name) || strings.Contains(name, "..") || imports.KindOf(name) == "" {
-		return "", fmt.Errorf("%w: %q isn't an importable file name (.vma[.zst|.lzo|.gz], .qcow2, .vmdk, .vhd, .vhdx, .vdi, .img, .raw)", ErrInvalid, name)
+		return "", fmt.Errorf("%w: %q isn't an importable file name (.vma[.zst|.lzo|.gz], .ova, .qcow2, .vmdk, .vhd, .vhdx, .vdi, .img, .raw)", ErrInvalid, name)
 	}
 	return filepath.Join(s.ImportDir, name), nil
 }
@@ -288,7 +288,22 @@ func (s *Service) runImport(ctx context.Context, path string, pl imports.Plan, d
 	undo = append(undo, func() { s.logErr("rollback imported disk", s.Disks.DestroyDisk(bg, dom)) })
 
 	var nvram []byte
+	var extra []virt.ExtraDisk
 	switch pl.Kind {
+	case imports.KindOVA:
+		ex, err := s.fillFromOVA(ctx, path, pl, dom, disk, p)
+		if err != nil {
+			return fail(err)
+		}
+		extra = ex
+		for _, e := range ex {
+			i := e.Index
+			undo = append(undo, func() {
+				if ed, ok := s.Disks.(extraDisks); ok {
+					s.logErr("rollback imported disk", ed.DestroyExtra(bg, dom, i))
+				}
+			})
+		}
 	case imports.KindVMA:
 		nv, err := s.fillFromVMA(ctx, path, pl, disk, p)
 		if err != nil {
@@ -325,7 +340,7 @@ func (s *Service) runImport(ctx context.Context, path string, pl imports.Plan, d
 		Name: dom, UUID: newUUID(), VCPUs: pl.VCPUs, MemoryMiB: pl.MemoryMiB, DiskGB: diskGB, DiskPath: disk,
 		Bridge: s.bridgeFor(network), MAC: mac, OSType: pl.OSType, Template: "import:" + pl.File,
 		CreatedAt: time.Now().UTC().Format(time.RFC3339), Owner: owner,
-		DiskBus: pl.DiskBus, NICModel: pl.NICModel, Firmware: firmware,
+		DiskBus: pl.DiskBus, NICModel: pl.NICModel, Firmware: firmware, Extra: extra,
 	}
 	x, err := virt.DomainXML(spec)
 	if err != nil {
@@ -350,6 +365,49 @@ func (s *Service) runImport(ctx context.Context, path string, pl imports.Plan, d
 		msg += " and started — open its console to check it boots"
 	}
 	return msg, nil
+}
+
+// fillFromOVA unpacks an appliance's disks next to the .ova, writes the
+// first onto disk and the others onto new data disks.
+func (s *Service) fillFromOVA(ctx context.Context, path string, pl imports.Plan, dom, disk string, p jobs.Progress) ([]virt.ExtraDisk, error) {
+	tmp := filepath.Join(filepath.Dir(path), ".unpack-"+pl.Name)
+	defer os.RemoveAll(tmp)
+	files, err := imports.ExtractOVA(ctx, path, pl, tmp, func(m string) { p(m) })
+	if err != nil {
+		return nil, err
+	}
+	write := func(src, dev, what string) error {
+		last := -10.0
+		return imports.WriteDisk(ctx, src, dev, func(pct float64) {
+			if pct-last >= 2 {
+				last = pct
+				p(fmt.Sprintf("copying %s: %.0f%%", what, pct))
+			}
+		})
+	}
+	if err := write(files[pl.Disks[0].Href], disk, "the system disk"); err != nil {
+		return nil, err
+	}
+	var extra []virt.ExtraDisk
+	for k, d := range pl.Disks[1:] {
+		if k+1 > virt.MaxExtraDisks {
+			break
+		}
+		ed, ok := s.Disks.(extraDisks)
+		if !ok {
+			return extra, fmt.Errorf("this server can't add data disks; only the system disk was imported")
+		}
+		gb := int((d.Bytes + (1 << 30) - 1) >> 30)
+		dev, err := ed.CreateExtra(ctx, dom, k+1, max(gb, 1))
+		if err != nil {
+			return extra, err
+		}
+		extra = append(extra, virt.ExtraDisk{Index: k + 1, Path: dev, SizeGB: max(gb, 1)})
+		if err := write(files[d.Href], dev, fmt.Sprintf("disk %d", k+2)); err != nil {
+			return extra, err
+		}
+	}
+	return extra, nil
 }
 
 func (s *Service) fillFromVMA(ctx context.Context, path string, pl imports.Plan, disk string, p jobs.Progress) ([]byte, error) {

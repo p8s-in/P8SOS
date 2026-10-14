@@ -1,5 +1,5 @@
-// Import VMs (admins): Proxmox backups (vzdump .vma[.zst|.lzo|.gz]) and disk
-// images (qcow2, vmdk, vhd/vhdx, vdi, raw) from other hypervisors.
+// Import VMs (admins): Proxmox backups (vzdump .vma[.zst|.lzo|.gz]), OVA
+// appliances (VMware, VirtualBox) and disk images (qcow2, vmdk, vhd/vhdx, vdi, raw).
 // Uses the dashboard helpers ($, esc, call, toast, trackJob, fmtBytes, API, token).
 "use strict";
 
@@ -9,7 +9,7 @@ document.body.insertAdjacentHTML("beforeend", `
   <div class="sub">Bring virtual machines over from <b>Proxmox VE</b> (backup files made with <i>Backup now</i> / vzdump) or from
     <b>VMware, Hyper-V, VirtualBox</b> or anywhere else (a disk image). The original is not changed.</div>
   <h3>1. Put the file on this server</h3>
-  <div class="inline"><input id="impFile" type="file" accept=".vma,.zst,.lzo,.gz,.qcow2,.vmdk,.vhd,.vhdx,.vdi,.img,.raw"><button class="btn primary" id="impUp">Upload</button></div>
+  <div class="inline"><input id="impFile" type="file" accept=".vma,.zst,.lzo,.gz,.ova,.qcow2,.vmdk,.vhd,.vhdx,.vdi,.img,.raw"><button class="btn primary" id="impUp">Upload</button></div>
   <div class="meter" id="impBar" hidden><i></i></div><div class="hint" id="impUpTxt"></div>
   <div class="hint" id="impScp"></div>
   <h3>2. Pick a file</h3>
@@ -38,7 +38,7 @@ document.body.insertAdjacentHTML("beforeend", `
 </div></dialog>`);
 
 let impPlan = null;
-const impKind = {"proxmox-vma": "Proxmox backup", "disk-image": "disk image"};
+const impKind = {"proxmox-vma": "Proxmox backup", "disk-image": "disk image", "ova": "OVA appliance (VMware / VirtualBox)"};
 
 async function openImports(){
   impPlan = null; $("#impPlanBox").hidden = true;
@@ -109,7 +109,7 @@ $("#impUp").onclick = () => {
   const f = $("#impFile").files[0];
   if (!f) return toast("Choose a file first", true);
   const name = f.name.replace(/[^A-Za-z0-9._+ -]/g, "-");
-  if (!/\.(vma(\.(zst|lzo|gz))?|qcow2|vmdk|vhdx?|vdi|img|raw)$/i.test(name)) return toast("Use a Proxmox backup (.vma, .vma.zst, .vma.lzo, .vma.gz) or a disk image (.qcow2, .vmdk, .vhd, .vhdx, .vdi, .img, .raw)", true);
+  if (!/\.(vma(\.(zst|lzo|gz))?|ova|qcow2|vmdk|vhdx?|vdi|img|raw)$/i.test(name)) return toast("Use a Proxmox backup (.vma, .vma.zst, .vma.lzo, .vma.gz), an appliance (.ova) or a disk image (.qcow2, .vmdk, .vhd, .vhdx, .vdi, .img, .raw)", true);
   // XMLHttpRequest, because fetch() can't report upload progress.
   const x = new XMLHttpRequest(), bar = $("#impBar"), txt = $("#impUpTxt"), up = $("#impUp");
   x.open("PUT", API + "/imports/" + encodeURIComponent(name));

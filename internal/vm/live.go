@@ -133,6 +133,8 @@ func (s *Service) LiveCheck(ctx context.Context, name string) (string, error) {
 		return "its disks are on network storage " + v.Storage + " (not supported yet)", nil
 	case sp.OSType == "windows11" || sp.Firmware == "uefi":
 		return "UEFI VMs (Windows 11) can't move live yet; shut it down and move it", nil
+	case hostDevsNote(sp) != "":
+		return hostDevsNote(sp), nil
 	}
 	return "", nil
 }

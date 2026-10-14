@@ -88,11 +88,18 @@ func Validate(s Settings) (Settings, error) {
 		default:
 			return s, fmt.Errorf("%w: rule %d: protocol must be tcp, udp or icmp", ErrInvalid, n)
 		}
-		src, err := normSource(r.Source)
-		if err != nil {
-			return s, fmt.Errorf("%w: rule %d: %v", ErrInvalid, n, err)
+		if src := strings.TrimSpace(r.Source); strings.HasPrefix(src, "+") { // an IP set of the datacenter firewall
+			if !reSet.MatchString(src[1:]) {
+				return s, fmt.Errorf("%w: rule %d: %q isn't an IP set name", ErrInvalid, n, src)
+			}
+			r.Source = src
+		} else {
+			src, err := normSource(r.Source)
+			if err != nil {
+				return s, fmt.Errorf("%w: rule %d: %v", ErrInvalid, n, err)
+			}
+			r.Source = src
 		}
-		r.Source = src
 		out.Rules = append(out.Rules, r)
 	}
 	return out, nil
@@ -151,10 +158,38 @@ const Table = "p8s_fw"
 
 // Rules renders the whole table. VMs with the firewall off are left out
 // (everything passes). The script replaces the table atomically.
-func Rules(vms []VM) (string, error) {
+func Rules(vms []VM) (string, error) { return RulesWith(vms, Global{}) }
+
+// RulesWith renders the table with the datacenter firewall g.
+func RulesWith(vms []VM, g Global) (string, error) {
 	sort.Slice(vms, func(i, j int) bool { return vms[i].Name < vms[j].Name })
 	var b strings.Builder
 	fmt.Fprintf(&b, "table bridge %[1]s\ndelete table bridge %[1]s\ntable bridge %[1]s {\n", Table)
+	renderSets(&b, g.Sets)
+	rule := func(r Rule) {
+		if strings.HasPrefix(r.Source, "+") {
+			if _, ok := g.Sets[r.Source[1:]]; !ok {
+				fmt.Fprintf(&b, "\t\t# skipped: no IP set %s\n", r.Source)
+				return
+			}
+		}
+		for _, m := range matches(r.Source) {
+			b.WriteString("\t\t" + m)
+			if r.Proto == "icmp" {
+				if strings.HasPrefix(m, "ip6") {
+					b.WriteString("icmpv6 type echo-request accept\n")
+				} else {
+					b.WriteString("icmp type echo-request accept\n")
+				}
+				continue
+			}
+			ports := r.Ports
+			if strings.ContainsAny(ports, ",") {
+				ports = "{ " + strings.ReplaceAll(ports, ",", ", ") + " }"
+			}
+			fmt.Fprintf(&b, "meta l4proto %s th dport %s accept\n", r.Proto, ports)
+		}
+	}
 	var jumps, locks []string
 	n := 0
 	for _, v := range vms {
@@ -192,24 +227,11 @@ func Rules(vms []VM) (string, error) {
 		fmt.Fprintf(&b, "\t\tmeta l4proto ipv6-icmp accept comment \"IPv6 neighbor discovery\"\n")
 		fmt.Fprintf(&b, "\t\tmeta l4proto udp th sport 67 th dport 68 accept comment \"DHCP\"\n")
 		fmt.Fprintf(&b, "\t\tmeta l4proto udp th sport 547 th dport 546 accept comment \"DHCPv6\"\n")
+		for _, r := range g.Allow { // the datacenter's rules first
+			rule(r)
+		}
 		for _, r := range fw.Rules {
-			b.WriteString("\t\t")
-			if r.Source != "" {
-				if strings.Contains(r.Source, ":") {
-					fmt.Fprintf(&b, "ip6 saddr %s ", r.Source)
-				} else {
-					fmt.Fprintf(&b, "ip saddr %s ", r.Source)
-				}
-			}
-			if r.Proto == "icmp" {
-				b.WriteString("icmp type echo-request accept\n")
-				continue
-			}
-			ports := r.Ports
-			if strings.ContainsAny(ports, ",") {
-				ports = "{ " + strings.ReplaceAll(ports, ",", ", ") + " }"
-			}
-			fmt.Fprintf(&b, "meta l4proto %s th dport %s accept\n", r.Proto, ports)
+			rule(r)
 		}
 		fmt.Fprintf(&b, "\t\tcounter drop comment %q\n", "firewall of "+v.Name)
 		b.WriteString("\t}\n")
@@ -230,6 +252,14 @@ func Rules(vms []VM) (string, error) {
 	b.WriteString("\t}\n")
 	for _, hook := range []string{"forward", "output"} {
 		fmt.Fprintf(&b, "\tchain %s {\n\t\ttype filter hook %s priority 0; policy accept;\n", hook, hook)
+		for _, bl := range g.Block { // blocked for every VM, both ways
+			for _, m := range matches(bl) {
+				fmt.Fprintf(&b, "\t\t%scounter drop comment \"datacenter block\"\n", m)
+			}
+			for _, m := range matches(bl) { // what VMs send to it
+				fmt.Fprintf(&b, "\t\t%scounter drop comment \"datacenter block\"\n", strings.Replace(m, "saddr", "daddr", 1))
+			}
+		}
 		for _, j := range jumps {
 			b.WriteString(j)
 		}
@@ -241,7 +271,12 @@ func Rules(vms []VM) (string, error) {
 
 // Apply loads the table (bridge conntrack is needed for "replies are allowed").
 func Apply(ctx context.Context, run execx.Runner, vms []VM) error {
-	script, err := Rules(vms)
+	return ApplyWith(ctx, run, vms, Global{})
+}
+
+// ApplyWith loads the table with the datacenter firewall.
+func ApplyWith(ctx context.Context, run execx.Runner, vms []VM, g Global) error {
+	script, err := RulesWith(vms, g)
 	if err != nil {
 		return err
 	}

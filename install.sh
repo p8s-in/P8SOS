@@ -65,6 +65,7 @@ if zpool list -H "$POOL" >/dev/null 2>&1 && zfs list -H "$POOL/p8s/vms" >/dev/nu
   command -v lzop >/dev/null || apt-get install -y lzop >/dev/null 2>&1 || true  # importing .vma.lzo Proxmox backups
   command -v smartctl >/dev/null || apt-get install -y smartmontools >/dev/null 2>&1 || true  # disk health alerts
   command -v ping >/dev/null || apt-get install -y iputils-ping >/dev/null 2>&1 || true  # high availability: is the router reachable
+  command -v lspci >/dev/null || apt-get install -y pciutils usbutils >/dev/null 2>&1 || true  # PCI/USB passthrough: device names
 else
   P8S_BRIDGE=$BRIDGE bash "$REPO/scripts/bootstrap-debian13.sh" $DEV
 fi
@@ -161,6 +162,12 @@ V=$(tr -d ' \r\n' < "$REPO/VERSION" 2>/dev/null || true)  # release bundles carr
 (cd "$REPO" && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o bin/p8s-licensed ./cmd/p8s-licensed) || die "building p8s-licensed failed"
 install -m 0755 "$REPO/bin/p8s-licensed" /usr/local/bin/p8s-licensed
 install -m 0644 "$REPO/deploy/p8s-licensed.service" /etc/systemd/system/p8s-licensed.service
+# cluster witness (tie-breaker for 2 servers): copy to a Pi/NAS/VPS and run sudo ./p8s-witness install
+install -d -m 0755 /usr/local/share/p8s/witness
+for A in amd64 arm64; do
+  (cd "$REPO" && CGO_ENABLED=0 GOOS=linux GOARCH=$A go build -trimpath -ldflags "-s -w" -o "bin/p8s-witness-$A" ./cmd/p8s-witness) || die "building p8s-witness ($A) failed"
+  install -m 0755 "$REPO/bin/p8s-witness-$A" "/usr/local/share/p8s/witness/p8s-witness-$A"
+done
 systemctl daemon-reload
 chown -R "$USER_NAME": "$REPO/bin" 2>/dev/null || true
 install -m 0755 "$REPO/scripts/p8" /usr/local/bin/p8
@@ -175,6 +182,8 @@ install -m 0755 "$REPO/scripts/os-upgrade.sh" /usr/local/share/p8s/os-upgrade.sh
 install -m 0755 "$REPO/scripts/make-ct-template.sh" /usr/local/share/p8s/make-ct-template.sh
 install -m 0755 "$REPO/scripts/rename.sh" /usr/local/share/p8s/rename.sh
 install -m 0755 "$REPO/scripts/tune.sh" /usr/local/share/p8s/tune.sh
+install -m 0755 "$REPO/scripts/iommu.sh" /usr/local/share/p8s/iommu.sh
+install -m 0755 "$REPO/scripts/acme.sh" /usr/local/share/p8s/acme.sh
 install -m 0755 "$REPO/scripts/netcheck.sh" /usr/local/share/p8s/netcheck.sh
 install -m 0755 "$REPO/scripts/tailscale.sh" /usr/local/share/p8s/tailscale.sh
 install -m 0755 "$REPO/scripts/vlans.sh" /usr/local/share/p8s/vlans.sh

@@ -166,6 +166,10 @@ type Snapshot struct {
 	Name      string `json:"name"`
 	CreatedAt string `json:"created_at"` // RFC 3339
 	UsedBytes int64  `json:"used_bytes"` // space only this snapshot holds
+	// RAM: the VM's memory was saved with it (rollback resumes the VM where
+	// it was); RAMBytes is the size of that saved state. Filled by package vm.
+	RAM      bool  `json:"ram,omitempty"`
+	RAMBytes int64 `json:"ram_bytes,omitempty"`
 }
 
 // Snapshot takes a ZFS snapshot of the VM's disks (instant, copy-on-write).

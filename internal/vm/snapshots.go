@@ -58,6 +58,7 @@ func (s *Service) Snapshots(ctx context.Context, name string) ([]Snapshot, error
 			out = append(out, sn)
 		}
 	}
+	s.markRAM(dom, out)
 	return out, nil
 }
 
@@ -65,6 +66,11 @@ func (s *Service) Snapshots(ctx context.Context, name string) ([]Snapshot, error
 // frozen for the instant of the snapshot when its guest agent answers, so the
 // snapshot is clean; otherwise it is crash-consistent (like pulling the plug).
 func (s *Service) CreateSnapshot(ctx context.Context, name, snap string) (Snapshot, error) {
+	return s.createSnapshot(ctx, name, snap, nil)
+}
+
+// createSnapshot: ss != nil also saves the running VM's memory (memsnap.go).
+func (s *Service) createSnapshot(ctx context.Context, name, snap string, ss StateSaver) (Snapshot, error) {
 	sd, err := s.snapDisks()
 	if err != nil {
 		return Snapshot{}, err
@@ -91,21 +97,31 @@ func (s *Service) CreateSnapshot(ctx context.Context, name, snap string) (Snapsh
 	if len(snaps) >= MaxSnapshots {
 		return Snapshot{}, fmt.Errorf("%w: vm %q already has %d snapshots; delete old ones first", ErrConflict, name, len(snaps))
 	}
-	if st == virt.Running {
+	if ss != nil {
+		if st != virt.Running {
+			return Snapshot{}, fmt.Errorf("%w: vm %q isn't running, so there is no memory to save; take a normal snapshot", ErrConflict, name)
+		}
+		if err := s.saveRAMAndSnap(ctx, dom, snap, ss, func() error { return sd.Snapshot(context.WithoutCancel(ctx), dom, snap) }); err != nil {
+			return Snapshot{}, err
+		}
+	} else if st == virt.Running {
 		if err := s.HV.FSFreeze(ctx, dom); err == nil {
 			defer func() { s.logErr("thaw "+dom, s.HV.FSThaw(context.WithoutCancel(ctx), dom)) }()
 		} else if s.Log != nil {
 			s.Log.Info("guest agent freeze unavailable; snapshot is crash-consistent", "vm", name, "err", err)
 		}
 	}
-	if err := sd.Snapshot(ctx, dom, snap); err != nil {
-		return Snapshot{}, err
+	if ss == nil {
+		if err := sd.Snapshot(ctx, dom, snap); err != nil {
+			return Snapshot{}, err
+		}
 	}
 	snaps, err = sd.Snapshots(ctx, dom)
 	if i := findSnap(snaps, snap); err == nil && i >= 0 {
+		s.markRAM(dom, snaps[i:i+1])
 		return snaps[i], nil
 	}
-	return Snapshot{Name: snap, CreatedAt: time.Now().UTC().Format(time.RFC3339)}, nil
+	return Snapshot{Name: snap, CreatedAt: time.Now().UTC().Format(time.RFC3339), RAM: ss != nil}, nil
 }
 
 // Rollback returns a stopped VM's disk to a snapshot. ZFS can only roll back to
@@ -121,9 +137,6 @@ func (s *Service) Rollback(ctx context.Context, name, snap string, destroyNewer 
 	if err != nil {
 		return VM{}, err
 	}
-	if st != virt.Stopped {
-		return VM{}, fmt.Errorf("%w: stop vm %q before rolling back (it is %s)", ErrConflict, name, st)
-	}
 	snaps, err := sd.Snapshots(ctx, dom)
 	if err != nil {
 		return VM{}, err
@@ -131,6 +144,12 @@ func (s *Service) Rollback(ctx context.Context, name, snap string, destroyNewer 
 	i := findSnap(snaps, snap)
 	if i < 0 {
 		return VM{}, fmt.Errorf("%w: snapshot %q of vm %q", ErrNotFound, snap, name)
+	}
+	ss, _ := s.HV.(StateSaver)
+	withRAM := ss != nil && s.ramOf(dom, snap) > 0
+	// a snapshot with RAM replaces what runs now anyway: no need to stop first
+	if st != virt.Stopped && !withRAM {
+		return VM{}, fmt.Errorf("%w: stop vm %q before rolling back (it is %s)", ErrConflict, name, st)
 	}
 	if newer := snaps[i+1:]; len(newer) > 0 && !destroyNewer {
 		names := make([]string, len(newer))
@@ -140,8 +159,16 @@ func (s *Service) Rollback(ctx context.Context, name, snap string, destroyNewer 
 		return VM{}, fmt.Errorf("%w: rolling back to %q deletes the newer snapshots %s; confirm with destroy_newer",
 			ErrConflict, snap, strings.Join(names, ", "))
 	}
+	if st != virt.Stopped { // withRAM: power off, the saved memory takes over
+		if err := s.HV.Destroy(ctx, dom); err != nil {
+			return VM{}, err
+		}
+	}
 	if err := sd.Rollback(ctx, dom, snap, destroyNewer); err != nil {
 		return VM{}, err
+	}
+	for _, n := range snaps[i+1:] { // ZFS deleted the newer ones
+		s.dropState(dom, n.Name)
 	}
 	// The disk size comes back with the snapshot; keep the VM's record in step.
 	if gb, err := sd.DiskSizeGB(ctx, dom); err == nil {
@@ -160,6 +187,12 @@ func (s *Service) Rollback(ctx context.Context, name, snap string, destroyNewer 
 			}
 		}); err != nil {
 			return VM{}, err
+		}
+	}
+	if withRAM {
+		// resume where the snapshot was taken; the file stays for another rollback
+		if err := ss.RestoreState(context.WithoutCancel(ctx), s.stateFile(dom, snap)); err != nil {
+			return VM{}, fmt.Errorf("the disks are back to %q but its saved memory couldn't be loaded (%v): start the VM normally", snap, err)
 		}
 	}
 	return s.get(ctx, dom)
@@ -183,7 +216,11 @@ func (s *Service) DeleteSnapshot(ctx context.Context, name, snap string) error {
 	if findSnap(snaps, snap) < 0 {
 		return fmt.Errorf("%w: snapshot %q of vm %q", ErrNotFound, snap, name)
 	}
-	return sd.DestroySnapshot(ctx, dom, snap)
+	if err := sd.DestroySnapshot(ctx, dom, snap); err != nil {
+		return err
+	}
+	s.dropState(dom, snap)
+	return nil
 }
 
 // ResizeRequest changes a stopped VM. Zero fields stay as they are.
@@ -226,8 +263,29 @@ func (s *Service) Resize(ctx context.Context, name string, r ResizeRequest) (VM,
 	if len(errs) > 0 {
 		return VM{}, fmt.Errorf("%w: %s", ErrInvalid, strings.Join(errs, "; "))
 	}
+	if st == virt.Running {
+		sp, err := s.spec(ctx, dom)
+		if err != nil {
+			return VM{}, err
+		}
+		if sp.HotCPUs > 0 || sp.HotMemMiB > 0 { // hot-plug on: change it while it runs
+			if _, err := s.hotResize(ctx, dom, sp, r); err != nil {
+				return VM{}, err
+			}
+			return s.get(ctx, dom)
+		}
+	}
 	if st != virt.Stopped {
-		return VM{}, fmt.Errorf("%w: stop vm %q before resizing (it is %s)", ErrConflict, name, st)
+		return VM{}, fmt.Errorf("%w: stop vm %q before resizing (it is %s), or turn on hot-plug (Hardware → Hot-plug) to change CPUs and RAM while it runs", ErrConflict, name, st)
+	}
+	if r.MemoryMiB != 0 || r.VCPUs != 0 { // keep the hot-plug ceilings above the new size
+		if sp, err := s.spec(ctx, dom); err == nil && (sp.HotCPUs > 0 || sp.HotMemMiB > 0) {
+			if (r.VCPUs > sp.HotCPUs && sp.HotCPUs > 0) || (r.MemoryMiB > sp.HotMemMiB && sp.HotMemMiB > 0) {
+				_ = s.redefine(ctx, dom, func(x *virt.Spec) {
+					x.HotCPUs, x.HotMemMiB = max(x.HotCPUs, r.VCPUs), max(x.HotMemMiB, r.MemoryMiB)
+				})
+			}
+		}
 	}
 	if r.DiskGB > cur.DiskGB {
 		if err := sd.ResizeDisk(ctx, dom, r.DiskGB); err != nil {

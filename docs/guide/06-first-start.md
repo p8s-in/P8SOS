@@ -57,4 +57,8 @@ Add people under **Users** or `p8 user add NAME [--admin] [vms=2 cpus=4 ram=4096
 2. **Settings → Security**: limit who may open the dashboard (e.g. `192.168.0.0/24`), and require two-factor for staff.
 3. Company sign-in if you have one: **Company login** (Google, Microsoft Entra, Keycloak, any OpenID Connect) or **Company directory** (LDAP / Active Directory). Keep one local admin.
 
+**Sharing one VM.** A VM's owner (or an admin) can let someone else use it without giving it away: Manage → Options → **Shared with** (`p8 share web1 bob user`). As **user** they start, stop, use the console, snapshots and backups; as **viewer** they only look. Deleting, resizing and hardware stay with the owner, and the VM counts against the owner's plan.
+
+**API tokens for scripts** (your name, top right → API tokens): give each script the least it needs — **Read-only** (a monitoring tool), **Only these VMs** (a deploy script), and **Valid for N days** (a contractor). A token never does more than its user may.
+
 Locked yourself out by the address list? On the server: `sudo rm /var/lib/p8s/security.json && sudo systemctl restart p8sd`.

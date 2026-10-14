@@ -416,6 +416,8 @@ dialog.as-page #ndClose{display:none}
     <input id="mSnapName" placeholder="name, e.g. before-upgrade (optional)" autocomplete="off" pattern="[a-z0-9][a-z0-9._\-]{0,39}">
     <button class="btn" id="mSnapGo">Take snapshot</button>
   </div>
+  <label class="check"><input id="mSnapRAM" type="checkbox"> Include RAM — rolling back resumes the VM exactly where it was (open programs too)</label>
+  <div class="hint" style="margin-top:-4px">Running VMs only; it pauses about 1 s per GB of RAM while its memory is saved.</div>
   <table class="snaps"><tbody id="mSnaps"></tbody></table>
   </div>
 
@@ -1365,12 +1367,20 @@ function renderManage(){
   if (!v) { $("#dlgManage").close(); return; }
   const stopped = v.state === "stopped";
   $("#mSub").textContent = `${v.state} · ${v.vcpus} CPU · ${gb(v.memory_mib)} RAM · ${v.disk_gb} GB disk` + ((v.disks || []).length ? ` + ${v.disks.length} extra` : "") + (v.storage ? ` · on ${v.storage}` : "");
-  if ($("#mRzHint").dataset.st !== v.state + mName) $("#mRzHint").innerHTML = stopped ? "Change CPUs, memory or disk size. Takes effect when you start the VM."
-    : `Stop the VM first to resize it. <button class="btn" data-m="stop">Stop ${esc(v.name)}</button>`;
-  $("#mRzHint").dataset.st = v.state + mName;
+  const hot = !stopped && v.state === "running" && (v.hot_cpus || v.hot_mem_mib);
+  if ($("#mRzHint").dataset.st !== v.state + mName + hot) $("#mRzHint").innerHTML = stopped ? "Change CPUs, memory or disk size. Takes effect when you start the VM."
+    : hot ? `Hot-plug is on: raise CPUs up to ${v.hot_cpus || v.vcpus} and RAM up to ${gb(v.hot_mem_mib || v.memory_mib)} while it runs. The disk size changes when it is shut down.`
+    : `Stop the VM first to resize it (or turn on hot-plug below). <button class="btn" data-m="stop">Stop ${esc(v.name)}</button>`;
+  $("#mRzHint").dataset.st = v.state + mName + hot;
   $("#mPwGo").disabled = !(v.state === "running");
+  $("#mSnapRAM").disabled = v.state !== "running"; if (v.state !== "running") $("#mSnapRAM").checked = false;
   if (typeof renderDisks === "function") renderDisks(v);
   if (typeof renderNICs === "function") renderNICs(v);
+  if (typeof loadDevices === "function") loadDevices(devFor !== mName);
+  if (typeof renderLimits === "function") renderLimits(v);
+  if (typeof renderHot === "function") renderHot(v);
+  if (typeof renderStorage === "function") renderStorage(v);
+  if (typeof loadShares === "function") loadShares(v);
   $("#mPubBox").hidden = !v.public;
   if (v.public) {
     const p = v.public;
@@ -1384,7 +1394,8 @@ function renderManage(){
     $("#mEject").disabled = !stopped;
   }
   $("#mPwHint").textContent = v.state === "running" ? "Sets a login password inside the VM (needs it fully booted)." : "Start the VM to change a password.";
-  for (const id of ["#mCpu", "#mMem", "#mDisk", "#mRzGo"]) $(id).disabled = !stopped;
+  for (const id of ["#mCpu", "#mMem", "#mRzGo"]) $(id).disabled = !(stopped || hot);
+  $("#mDisk").disabled = !stopped;
   if (mVM && mVM.disk_gb !== v.disk_gb) { $("#mDisk").value = v.disk_gb; $("#mDisk").min = v.disk_gb; }
   if (mVM && mVM.state !== v.state) { renderBackups(); loadMove(); }
   mVM = v;
@@ -1394,8 +1405,8 @@ function renderManage(){
   $("#mSnaps").innerHTML = snaps.length ? snaps.slice().reverse().map((sn, i) => {
     const newer = i; // list is newest first
     return `<tr data-s="${esc(sn.name)}" data-newer="${newer}">
-      <td><b class="mono">${esc(sn.name)}</b><div class="sub">${esc(fmtTime(sn.created_at))} · ${fmtBytes(sn.used_bytes || 0)}</div></td>
-      <td><button class="btn" data-m="rollback" ${stopped ? "" : 'disabled title="Stop the VM first"'}>Roll back</button>
+      <td><b class="mono">${esc(sn.name)}</b>${sn.ram ? ' <span class="badge" title="Memory saved too: rolling back resumes the VM">with RAM</span>' : ""}<div class="sub">${esc(fmtTime(sn.created_at))} · ${fmtBytes(sn.used_bytes || 0)}${sn.ram ? " + " + fmtBytes(sn.ram_bytes) + " memory" : ""}</div></td>
+      <td><button class="btn" data-m="rollback" data-ram="${sn.ram ? 1 : ""}" ${stopped || sn.ram ? "" : 'disabled title="Stop the VM first"'}>Roll back</button>
           <button class="btn danger" data-m="unsnap">Delete</button></td></tr>`;
   }).join("") : `<tr><td class="muted">No snapshots yet.</td></tr>`;
 }
@@ -1417,7 +1428,7 @@ $("#dlgManage").addEventListener("click", async e => {
       if (!armed(btn, newer ? `Also deletes ${newer} newer — sure?` : "Undo all changes since — sure?")) return;
       btn.disabled = true;
       await call("POST", `/vms/${n}/snapshots/${encodeURIComponent(sn)}/rollback`, {destroy_newer: newer > 0});
-      toast(`${mName} rolled back to ${sn}. Start it when ready.`); await loadSnaps();
+      toast(btn.dataset.ram ? `${mName} is back at ${sn} and running from there.` : `${mName} rolled back to ${sn}. Start it when ready.`); await loadSnaps();
     } else if (m === "unsnap") {
       if (!armed(btn, "Delete — sure?")) return;
       btn.disabled = true;
@@ -1430,10 +1441,11 @@ $("#dlgManage").addEventListener("click", async e => {
 $("#mSnapGo").onclick = async () => {
   const name = $("#mSnapName").value.trim(), go = $("#mSnapGo");
   if (name && !$("#mSnapName").checkValidity()) return toast("Snapshot names: lowercase letters, digits, . _ -", true);
-  go.disabled = true; go.textContent = "Saving…";
+  const ram = $("#mSnapRAM").checked;
+  go.disabled = true; go.textContent = ram ? "Saving disk + RAM…" : "Saving…";
   try {
-    const sn = await call("POST", `/vms/${encodeURIComponent(mName)}/snapshots`, name ? {name} : {});
-    toast(`snapshot ${sn.name} saved`); $("#mSnapName").value = ""; await loadSnaps();
+    const sn = await call("POST", `/vms/${encodeURIComponent(mName)}/snapshots`, Object.assign(name ? {name} : {}, ram ? {ram: true} : {}));
+    toast(`snapshot ${sn.name} saved${sn.ram ? " with RAM" : ""}`); $("#mSnapName").value = ""; $("#mSnapRAM").checked = false; await loadSnaps();
   } catch (err) { toast(err.message, true); }
   go.disabled = false; go.textContent = "Take snapshot";
 };
@@ -1444,7 +1456,7 @@ $("#mRzGo").onclick = async () => {
   if (+$("#mDisk").value !== v.disk_gb) body.disk_gb = +$("#mDisk").value;
   if (!Object.keys(body).length) return toast("Nothing changed");
   const go = $("#mRzGo"); go.disabled = true;
-  try { await call("PATCH", `/vms/${encodeURIComponent(mName)}`, body); toast(`${mName} resized`); }
+  try { await call("PATCH", `/vms/${encodeURIComponent(mName)}`, body); toast(`${mName} resized${v.state === "running" ? " while it runs" : ""}`); }
   catch (err) { toast(err.message, true); }
   await refresh();
 };
@@ -1531,7 +1543,7 @@ function fwPanel(box, base, name, what){
     body.innerHTML = rules.length ? rules.map((r, i) => `<tr data-i="${i}">
     <td><select data-k="proto" aria-label="Protocol">${["tcp", "udp", "icmp"].map(p => `<option value="${p}" ${r.proto === p ? "selected" : ""}>${p === "icmp" ? "ping" : p.toUpperCase()}</option>`).join("")}</select></td>
     <td><input data-k="ports" value="${esc(r.ports || "")}" placeholder="22 or 80,443" aria-label="Ports" ${r.proto === "icmp" ? "disabled" : ""}></td>
-    <td><input data-k="source" value="${esc(r.source || "")}" placeholder="from anywhere" aria-label="Allowed source"></td>
+    <td><input data-k="source" value="${esc(r.source || "")}" placeholder="from anywhere (or +ipset)" aria-label="Allowed source"></td>
     <td><input data-k="comment" value="${esc(r.comment || "")}" placeholder="note" aria-label="Note"></td>
     <td><button class="btn danger" data-fwdel title="Remove rule">✕</button></td></tr>`).join("")
     : `<tr><td class="muted">No rules. With the firewall on, nothing can connect in (not even SSH).</td></tr>`;
@@ -1730,7 +1742,7 @@ function backupRow(b, opts){
   return `<tr data-vm="${esc(b.vm)}" data-id="${esc(b.id)}">
     <td><b>${esc(fmtTime(b.created_at))}</b><div class="sub">${opts.showVM ? esc(b.vm) + " · " : ""}${fmtBytes((b.bytes || 0) + (b.extra_disks || []).reduce((n, d) => n + (d.bytes || 0), 0))}${(b.extra_disks || []).length ? ` · ${1 + b.extra_disks.length} disks` : ""} · ${b.base ? "changes since " + esc(fmtTime(b.base.replace(/^(\d{4})(\d\d)(\d\d)-(\d\d)(\d\d)(\d\d)$/, "$1-$2-$3T$4:$5:$6Z"))) : "full"} · ${b.consistent ? "clean" : "crash-consistent"} · ${b.vcpus} CPU, ${gb(b.memory_mib)}${b.verify_error ? ` · <span style="color:var(--bad)">restore test failed</span>` : b.verified_at ? ` · <span style="color:var(--ok)">✔ restore tested</span>` : ""}</div>
       <div class="inline" data-copyrow hidden><input data-copyname placeholder="name of the new VM" autocomplete="off"><button class="btn primary" data-b="copygo">Create copy</button></div></td>
-    <td>${restore}<button class="btn" data-b="copy" title="Make a new VM from this backup">Copy</button><button class="btn" data-b="verify" title="Restore it into a scratch disk and check every block (the VM isn't touched)">Test</button><button class="btn danger" data-b="del">Delete</button></td></tr>`;
+    <td>${restore}<button class="btn" data-b="copy" title="Make a new VM from this backup">Copy</button><button class="btn" data-b="verify" title="Restore it into a scratch disk and check every block (the VM isn't touched)">Test</button><button class="btn" data-b="files" title="Look inside and download single files">Files</button><button class="btn danger" data-b="del">Delete</button></td></tr>`;
 }
 function renderBackups(){
   const v = vms.find(x => x.name === mName); if (!v) return;
@@ -1778,6 +1790,8 @@ async function backupAction(e, reload){
     } else if (a === "verify") {
       btn.disabled = true;
       trackJob(await call("POST", path + "/verify"), reload);
+    } else if (a === "files") {
+      if (typeof openFiles === "function") openFiles(vm, id);
     } else if (a === "restore") {
       if (!armed(btn, "Replace the disk — sure?")) return;
       btn.disabled = true;
@@ -2136,9 +2150,14 @@ document.addEventListener("DOMContentLoaded", render); // after cloud.js has loa
 <script src="/cluster.js"></script>
 <script src="/ha.js"></script>
 <script src="/security.js"></script>
+<script src="/dcfirewall.js"></script>
 <script src="/remote.js"></script>
+<script src="/acme.js"></script>
 <script src="/disks.js"></script>
 <script src="/nics.js"></script>
+<script src="/devices.js"></script>
+<script src="/shares.js"></script>
+<script src="/filerestore.js"></script>
 <script src="/storages.js"></script>
 <script src="/ceph.js"></script>
 <script src="/nodepage.js"></script>

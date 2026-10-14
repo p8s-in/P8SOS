@@ -32,6 +32,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"p8sos/internal/witness"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -93,6 +94,8 @@ type State struct {
 	Mesh      []Node `json:"mesh,omitempty"`
 	VotedTerm int    `json:"voted_term,omitempty"`
 	VotedFor  string `json:"voted_for,omitempty"`
+	// Witness is the tie-breaker of a two-server cluster (witness.go).
+	Witness *witness.Conf `json:"witness,omitempty"`
 }
 
 // Status is how a node is doing, as the master last saw it.

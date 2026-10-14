@@ -15,7 +15,7 @@ function nodeTabOf(title){
   if (/health|memory|debian|update|power/.test(t)) return "summary";
   if (/storage|ceph|disk|encrypt/.test(t)) return "storage";
   if (/template/.test(t)) return "templates";
-  if (/network|remote|public|internet/.test(t)) return "network";
+  if (/network|remote|public|internet|certificate|https/.test(t)) return "network";
   if (/cluster|high availability/.test(t)) return "cluster";
   if (/task/.test(t)) return "tasks";
   return "summary";
@@ -48,7 +48,7 @@ function nodeTabOf(title){
     card.appendChild(el);
   }
   // wide sections take the whole row
-  for (const c of panes.querySelectorAll(".nd-card")) if (/task|remote|cluster|network$/i.test(c.dataset.title)) c.classList.add("nd-wide");
+  for (const c of panes.querySelectorAll(".nd-card")) if (/task|remote|cluster|network$|certificate/i.test(c.dataset.title)) c.classList.add("nd-wide");
 
   // a card whose content is all hidden (e.g. Cluster for a viewer, HA when off) is hidden too
   const sync = () => {

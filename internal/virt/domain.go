@@ -61,7 +61,20 @@ type Spec struct {
 	// off) lets it move live between different CPUs.
 	CPUModel    string
 	CPUFeatures []string
+	// PCI devices of the host given to the VM ("0000:01:00.0") and USB
+	// devices (vendor:product); see hostdev.go.
+	PCI []string
+	USB []USBDev
+	// Limits caps the VM's disks (each) and network cards (each); zero = no limit.
+	Limits IOLimits
+	// HotCPUs / HotMemMiB are the hot-plug ceilings: vCPUs and RAM can be
+	// raised up to them while the VM runs (0 = hot-plug off).
+	HotCPUs   int
+	HotMemMiB int
 }
+
+// HotMemSlots is how many memory modules can be plugged into a running VM.
+const HotMemSlots = 16
 
 // ExtraDisk is a data disk. Index 1-8 stays the same for the disk's life, so
 // it keeps its place (vdb, vdc, ...) inside the guest when others are removed.
@@ -111,11 +124,20 @@ type domainXML struct {
 	Metadata struct {
 		VM metaXML `xml:"https://p8s.dev/xmlns/vm/1 vm"`
 	} `xml:"metadata"`
+	MaxMemory *struct {
+		Slots int    `xml:"slots,attr"`
+		Unit  string `xml:"unit,attr"`
+		Value int    `xml:",chardata"`
+	} `xml:"maxMemory"`
 	Memory struct {
 		Unit  string `xml:"unit,attr"`
 		Value int    `xml:",chardata"`
 	} `xml:"memory"`
-	VCPU      int `xml:"vcpu"`
+	VCPU struct {
+		Placement string `xml:"placement,attr,omitempty"`
+		Current   int    `xml:"current,attr,omitempty"`
+		Value     int    `xml:",chardata"`
+	} `xml:"vcpu"`
 	IOThreads int `xml:"iothreads,omitempty"`
 	OS        struct {
 		Firmware string `xml:"firmware,attr,omitempty"` // "efi" = UEFI (libvirt picks OVMF)
@@ -158,6 +180,9 @@ type domainXML struct {
 			Cores   int `xml:"cores,attr"`
 			Threads int `xml:"threads,attr"`
 		} `xml:"topology"`
+		NUMA *struct {
+			Cells []numaCell `xml:"cell"`
+		} `xml:"numa"`
 	} `xml:"cpu"`
 	OnPoweroff string     `xml:"on_poweroff"`
 	OnReboot   string     `xml:"on_reboot"`
@@ -217,6 +242,16 @@ type metaXML struct {
 	NICModel   string     `xml:"nic_model,omitempty"`
 	Firmware   string     `xml:"firmware,omitempty"`
 	Disks      []metaDisk `xml:"disk,omitempty"`
+	// hot-plug ceilings (0 = off)
+	HotCPUs   int `xml:"hot_cpus,omitempty"`
+	HotMemMiB int `xml:"hot_mem_mib,omitempty"`
+}
+
+type numaCell struct {
+	ID     int    `xml:"id,attr"`
+	CPUs   string `xml:"cpus,attr"`
+	Memory int    `xml:"memory,attr"`
+	Unit   string `xml:"unit,attr"`
 }
 
 type metaDisk struct {
@@ -241,6 +276,7 @@ type devicesXML struct {
 	Disks       []diskXML       `xml:"disk"`
 	Controllers []controllerXML `xml:"controller"`
 	Interfaces  []ifaceXML      `xml:"interface"`
+	Hostdevs    []hostdevXML    `xml:"hostdev"`
 	Inputs      []struct {
 		Type string `xml:"type,attr"`
 		Bus  string `xml:"bus,attr"`
@@ -327,7 +363,8 @@ type diskXML struct {
 		Dev string `xml:"dev,attr"`
 		Bus string `xml:"bus,attr"`
 	} `xml:"target"`
-	ReadOnly *struct{} `xml:"readonly"`
+	ReadOnly *struct{}  `xml:"readonly"`
+	IOTune   *ioTuneXML `xml:"iotune"`
 }
 
 type ifaceXML struct {
@@ -345,13 +382,14 @@ type ifaceXML struct {
 		Name   string `xml:"name,attr"`
 		Queues int    `xml:"queues,attr,omitempty"`
 	} `xml:"driver"`
+	Bandwidth *bandwidthXML `xml:"bandwidth"`
 }
 
 // MetadataXML is the P8S metadata element of a spec, for updating a running
 // domain in place (virsh metadata --live).
 func MetadataXML(s Spec) (string, error) {
 	m := metaXML{OSType: s.OSType, Template: s.Template, DiskGB: s.DiskGB, CreatedAt: s.CreatedAt, Owner: s.Owner,
-		DiskBus: s.DiskBus, NICModel: s.NICModel, Firmware: s.Firmware, Disks: metaDisks(s.Extra)}
+		DiskBus: s.DiskBus, NICModel: s.NICModel, Firmware: s.Firmware, Disks: metaDisks(s.Extra), HotCPUs: s.HotCPUs, HotMemMiB: s.HotMemMiB}
 	b, err := xml.Marshal(struct {
 		XMLName xml.Name `xml:"vm"`
 		metaXML
@@ -370,12 +408,15 @@ func DomainXML(s Spec) ([]byte, error) {
 	d.Name = s.Name
 	d.UUID = s.UUID
 	d.Metadata.VM = metaXML{DefVersion: DefVersion, OSType: s.OSType, Template: s.Template, DiskGB: s.DiskGB, CreatedAt: s.CreatedAt, Owner: s.Owner,
-		DiskBus: s.DiskBus, NICModel: s.NICModel, Firmware: s.Firmware, Disks: metaDisks(s.Extra)}
+		DiskBus: s.DiskBus, NICModel: s.NICModel, Firmware: s.Firmware, Disks: metaDisks(s.Extra), HotCPUs: s.HotCPUs, HotMemMiB: s.HotMemMiB}
 	win := s.OSType == "windows" || s.OSType == "windows11"
 	secure := s.OSType == "windows11"
 	uefi := secure || s.Firmware == "uefi"
 	d.Memory.Unit, d.Memory.Value = "MiB", s.MemoryMiB
-	d.VCPU = s.VCPUs
+	d.VCPU.Value = s.VCPUs
+	if s.HotCPUs > s.VCPUs { // CPU hot-plug: room for more vCPUs, s.VCPUs of them on
+		d.VCPU.Placement, d.VCPU.Value, d.VCPU.Current = "static", s.HotCPUs, s.VCPUs
+	}
 	d.OS.Type.Arch, d.OS.Type.Machine, d.OS.Type.Value = "x86_64", "q35", "hvm"
 	d.OS.Boot = append(d.OS.Boot, struct {
 		Dev string `xml:"dev,attr"`
@@ -443,7 +484,17 @@ func DomainXML(s Spec) ([]byte, error) {
 		Dies    int `xml:"dies,attr"`
 		Cores   int `xml:"cores,attr"`
 		Threads int `xml:"threads,attr"`
-	}{1, 1, max(s.VCPUs, 1), 1}
+	}{1, 1, max(d.VCPU.Value, 1), 1}
+	if s.HotMemMiB > s.MemoryMiB { // RAM hot-plug: memory modules can be added up to the ceiling (needs a NUMA cell)
+		d.MaxMemory = &struct {
+			Slots int    `xml:"slots,attr"`
+			Unit  string `xml:"unit,attr"`
+			Value int    `xml:",chardata"`
+		}{HotMemSlots, "MiB", s.HotMemMiB}
+		d.CPU.NUMA = &struct {
+			Cells []numaCell `xml:"cell"`
+		}{[]numaCell{{ID: 0, CPUs: fmt.Sprintf("0-%d", max(d.VCPU.Value, 1)-1), Memory: s.MemoryMiB, Unit: "MiB"}}}
+	}
 	d.OnPoweroff, d.OnReboot, d.OnCrash = "destroy", "restart", "restart"
 
 	root := diskXML{Type: "block", Device: "disk"}
@@ -469,6 +520,7 @@ func DomainXML(s Spec) ([]byte, error) {
 		d.IOThreads = 1
 		root.Driver.IO, root.Driver.IOThread, root.Driver.Queues = "native", 1, queues
 	}
+	root.IOTune = s.Limits.ioTune() // the data disks copy it: each gets the limit
 	d.Devices.Disks = append(d.Devices.Disks, root)
 	for _, e := range s.Extra {
 		x, err := extraDisk(root, e)
@@ -518,12 +570,19 @@ func DomainXML(s Spec) ([]byte, error) {
 			Queues int    `xml:"queues,attr,omitempty"`
 		}{"vhost", queues}
 	}
+	nic.Bandwidth = s.Limits.bandwidth()
 	d.Devices.Interfaces = []ifaceXML{nic}
 	for _, e := range s.NICs {
 		x := nic // same model and driver as the first card
 		x.MAC.Address, x.Source.Bridge = e.MAC, e.Bridge
 		d.Devices.Interfaces = append(d.Devices.Interfaces, x)
 	}
+
+	hd, err := s.hostdevs()
+	if err != nil {
+		return nil, err
+	}
+	d.Devices.Hostdevs = hd
 
 	// A tablet makes the mouse follow the pointer exactly in the browser console.
 	d.Devices.Inputs = append(d.Devices.Inputs, struct {
@@ -657,7 +716,9 @@ func ParseDomainXML(b []byte) (Spec, error) {
 	s := Spec{
 		Name:       d.Name,
 		UUID:       d.UUID,
-		VCPUs:      d.VCPU,
+		VCPUs:      d.VCPU.Value,
+		HotCPUs:    d.Metadata.VM.HotCPUs,
+		HotMemMiB:  d.Metadata.VM.HotMemMiB,
 		MemoryMiB:  toMiB(d.Memory.Value, d.Memory.Unit),
 		Template:   d.Metadata.VM.Template,
 		DiskGB:     d.Metadata.VM.DiskGB,
@@ -668,6 +729,9 @@ func ParseDomainXML(b []byte) (Spec, error) {
 		DiskBus:    d.Metadata.VM.DiskBus,
 		NICModel:   d.Metadata.VM.NICModel,
 		Firmware:   d.Metadata.VM.Firmware,
+	}
+	if d.VCPU.Current > 0 {
+		s.VCPUs = d.VCPU.Current
 	}
 	if d.Devices.Video != nil {
 		s.Video = d.Devices.Video.Model.Type
@@ -688,6 +752,7 @@ func ParseDomainXML(b []byte) (Spec, error) {
 		case "disk":
 			if s.DiskPath == "" {
 				s.DiskPath = disk.Source.Dev
+				s.Limits.read(disk.IOTune, nil)
 			} else if i := extraIndex(disk.Source.Dev); i > 0 {
 				e := ExtraDisk{Index: i, Path: disk.Source.Dev}
 				for _, m := range d.Metadata.VM.Disks {
@@ -710,10 +775,12 @@ func ParseDomainXML(b []byte) (Spec, error) {
 	if len(d.Devices.Interfaces) > 0 {
 		s.MAC = d.Devices.Interfaces[0].MAC.Address
 		s.Bridge = d.Devices.Interfaces[0].Source.Bridge
+		s.Limits.read(nil, d.Devices.Interfaces[0].Bandwidth)
 		for _, x := range d.Devices.Interfaces[1:] {
 			s.NICs = append(s.NICs, ExtraNIC{MAC: x.MAC.Address, Bridge: x.Source.Bridge})
 		}
 	}
+	s.readHostdevs(d.Devices.Hostdevs)
 	return s, nil
 }
 

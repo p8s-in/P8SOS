@@ -171,14 +171,36 @@ func (s *Store) UseCode(purpose, code string) (User, error) {
 
 var reTokName = regexp.MustCompile(`^[\pL\pN ._-]{1,40}$`)
 
+var reTokVM = regexp.MustCompile(`^[a-z][a-z0-9-]{0,47}[a-z0-9]$`)
+
 // NewToken makes an API token for the user; the secret is shown once.
 func (s *Store) NewToken(name, label string) (APIToken, string, error) {
+	return s.NewScopedToken(name, label, TokenScope{})
+}
+
+// NewScopedToken makes a token limited to scope.
+func (s *Store) NewScopedToken(name, label string, scope TokenScope) (APIToken, string, error) {
 	label = strings.TrimSpace(label)
 	if !reTokName.MatchString(label) {
 		return APIToken{}, "", fmt.Errorf("%w: token name: up to 40 letters, digits, spaces, . _ -", ErrInvalid)
 	}
+	if len(scope.VMs) > 50 {
+		return APIToken{}, "", fmt.Errorf("%w: at most 50 VMs per token", ErrInvalid)
+	}
+	for _, v := range scope.VMs {
+		if !reTokVM.MatchString(v) {
+			return APIToken{}, "", fmt.Errorf("%w: %q isn't a VM name", ErrInvalid, v)
+		}
+	}
+	if scope.Expires != "" {
+		t, err := time.Parse(time.RFC3339, scope.Expires)
+		if err != nil || !t.After(s.now()) {
+			return APIToken{}, "", fmt.Errorf("%w: expiry must be a future time (RFC 3339)", ErrInvalid)
+		}
+		scope.Expires = t.UTC().Format(time.RFC3339)
+	}
 	secret := "p8sk_" + randHex(32)
-	t := APIToken{ID: randHex(6), Name: label, SHA256: sum(secret), Created: s.now().UTC().Format(time.RFC3339)}
+	t := APIToken{ID: randHex(6), Name: label, SHA256: sum(secret), Created: s.now().UTC().Format(time.RFC3339), TokenScope: scope}
 	_, err := s.Update(name, func(u *User) error {
 		if len(u.Tokens) >= 20 {
 			return fmt.Errorf("%w: at most 20 API tokens", ErrInvalid)
@@ -212,29 +234,43 @@ func (s *Store) DeleteToken(name, id string) error {
 
 // TokenUser returns the (enabled) user an API token belongs to and notes its use.
 func (s *Store) TokenUser(secret string) (User, bool) {
+	u, _, ok := s.TokenOwner(secret)
+	return u, ok
+}
+
+// TokenOwner is TokenUser with the token's scope. Expired tokens don't work.
+func (s *Store) TokenOwner(secret string) (User, TokenScope, bool) {
 	if !strings.HasPrefix(secret, "p8sk_") {
-		return User{}, false
+		return User{}, TokenScope{}, false
 	}
 	h := sum(secret)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.load() != nil {
-		return User{}, false
+		return User{}, TokenScope{}, false
 	}
 	for _, u := range s.users {
 		for i, t := range u.Tokens {
 			if subtle.ConstantTimeCompare([]byte(t.SHA256), []byte(h)) == 1 {
 				if u.Disabled {
-					return User{}, false
+					return User{}, TokenScope{}, false
 				}
 				now := s.now().UTC()
+				if t.Expires != "" {
+					if ex, err := time.Parse(time.RFC3339, t.Expires); err != nil || !now.Before(ex) {
+						return User{}, TokenScope{}, false
+					}
+				}
 				if last, err := time.Parse(time.RFC3339, t.LastUsed); err != nil || now.Sub(last) > time.Hour {
 					u.Tokens[i].LastUsed = now.Format(time.RFC3339)
 					_ = s.save()
 				}
-				return *u, true
+				return *u, t.TokenScope, true
 			}
 		}
 	}
-	return User{}, false
+	return User{}, TokenScope{}, false
 }
+
+// Clock is the store's time (tests set it), for expiry dates made elsewhere.
+func (s *Store) Clock() time.Time { return s.now() }

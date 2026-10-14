@@ -42,9 +42,11 @@ type Plan struct {
 	EFIVars    bool     `json:"efi_vars"`
 	Devices    []Device `json:"devices,omitempty"`
 	Format     string   `json:"format,omitempty"` // disk images: qcow2, vmdk, ...
-	SourceInfo string   `json:"source_info,omitempty"`
-	Config     string   `json:"config,omitempty"` // Proxmox qemu-server.conf as in the backup
-	Warnings   []string `json:"warnings"`
+	// Disks of an .ova (the first is the system disk).
+	Disks      []OVADisk `json:"ova_disks,omitempty"`
+	SourceInfo string    `json:"source_info,omitempty"`
+	Config     string    `json:"config,omitempty"` // Proxmox qemu-server.conf as in the backup
+	Warnings   []string  `json:"warnings"`
 }
 
 // OVMF_VARS_4M.fd: the size of a 4m Proxmox efidisk and of Debian's UEFI
@@ -54,6 +56,7 @@ const efiVarsSize = 540672
 var (
 	reVMA  = regexp.MustCompile(`\.vma(\.zst|\.lzo|\.gz)?$`)
 	reDisk = regexp.MustCompile(`(?i)\.(qcow2|vmdk|vhd|vhdx|img|raw|vdi)$`)
+	reOVA  = regexp.MustCompile(`(?i)\.ova$`)
 	reName = regexp.MustCompile(`[^a-z0-9-]+`)
 )
 
@@ -64,6 +67,8 @@ func KindOf(name string) string {
 		return KindVMA
 	case reDisk.MatchString(name):
 		return KindDisk
+	case reOVA.MatchString(name):
+		return KindOVA
 	}
 	return ""
 }
@@ -143,8 +148,10 @@ func Inspect(path string) (Plan, error) {
 		return p, nil
 	case KindDisk:
 		return inspectDisk(path)
+	case KindOVA:
+		return inspectOVA(path)
 	}
-	return Plan{}, fmt.Errorf("%s: not a file P8S can import (.vma[.zst|.lzo|.gz], .qcow2, .vmdk, .vhd, .vhdx, .vdi, .img, .raw)", base)
+	return Plan{}, fmt.Errorf("%s: not a file P8S can import (.vma[.zst|.lzo|.gz], .ova, .qcow2, .vmdk, .vhd, .vhdx, .vdi, .img, .raw)", base)
 }
 
 // PlanFromVMA maps a Proxmox VM's config to P8S settings.

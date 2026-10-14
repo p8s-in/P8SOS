@@ -84,13 +84,23 @@ type User struct {
 	SSO string `json:"sso,omitempty"`
 }
 
-// APIToken is a personal API token (acts as its user).
+// APIToken is a personal API token (acts as its user, within its scope).
 type APIToken struct {
 	ID       string `json:"id"`
 	Name     string `json:"name"`
 	SHA256   string `json:"sha256"`
 	Created  string `json:"created_at"`
 	LastUsed string `json:"last_used,omitempty"`
+	TokenScope
+}
+
+// TokenScope narrows what a token may do (like Proxmox's privilege-separated
+// tokens): a monitoring script gets a read-only token, a deploy script one
+// for its own VMs only, a contractor one that stops working on a date.
+type TokenScope struct {
+	ReadOnly bool     `json:"read_only,omitempty"`  // looking only (GET)
+	VMs      []string `json:"vms,omitempty"`        // only these VMs (empty = all its user may use)
+	Expires  string   `json:"expires_at,omitempty"` // RFC 3339; empty = never
 }
 
 // Public is what the API shows about a user (no secrets).

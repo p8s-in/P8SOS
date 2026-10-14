@@ -10,6 +10,7 @@ SSH_OPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLeve
 
 red()   { printf '\033[31m%s\033[0m\n' "$*" >&2; }
 green() { printf '\033[32m%s\033[0m\n' "$*"; }
+yellow() { printf '\033[33m%s\033[0m\n' "$*"; }
 need()  { [[ -n ${1:-} ]] || { red "missing VM name.  Try: p8 help"; exit 1; }; }
 
 usage() {
@@ -42,12 +43,22 @@ p8 — manage P8S OS virtual machines
   p8 nics NAME                     a VM's network cards
   p8 nic-add NAME nat|lan [--vlan ID]  another network card (plugged in while it runs)
   p8 nic-rm NAME MAC               remove a network card (not the first)
+  p8 files NAME BACKUP_ID [PATH] [--part ID]   look inside a backup; with a file PATH: download it here
+  p8 storage NAME STORAGE [--drop-snapshots]   move a VM's disks to another storage (local, ceph, a NAS/SAN pool)
+  p8 share NAME USER user|viewer|off   let another user run (user) or look at (viewer) a VM;  p8 shares NAME
+  p8 hotplug NAME on [cpus=N ram=MB] | off   CPU/RAM hot-plug (then p8 resize works while it runs)
+  p8 limits NAME [read=MB/s write=MB/s iops=N down=Mbit up=Mbit | off]  disk/network speed limits
+  p8 devices NAME                  a VM's PCI/USB devices and the server's free ones (passthrough)
+  p8 dev-add NAME pci|usb ID       give the VM a PCI device (0000:01:00.0, VM off) or USB device (046d:c52b)
+  p8 dev-rm NAME pci|usb ID        take it away again
+  p8 cert [DOMAIN [--email ADDR] [--cloudflare TOKEN] | off]   Let's Encrypt certificate for the dashboard
+  p8 iommu on|off|status           CPU IOMMU for PCI passthrough on this server (reboot after)
   p8 disk-grow NAME N GB           grow extra disk N (stops the VM, starts it again)
   p8 disk-rm NAME N                remove extra disk N and everything on it
   p8 verify NAME BACKUP_ID         restore test of a backup (scratch disk; the VM isn't touched)
   p8 move NAME SERVER [--live]     move a VM to another cluster server (--live: while it runs)
   p8 cpu NAME host|compatible      CPU type (compatible: can move live between different CPUs)
-  p8 snap NAME [SNAPNAME]          take a snapshot of the VM's disk (instant)
+  p8 snap NAME [SNAPNAME] [--ram]  take a snapshot of the VM's disk (instant); --ram also saves its memory
   p8 snaps NAME                    list snapshots
   p8 rollback NAME SNAPNAME        undo everything since that snapshot (asks first)
   p8 unsnap NAME SNAPNAME          delete a snapshot
@@ -136,6 +147,9 @@ p8 — manage P8S OS virtual machines
   p8 cluster rename ID NEWNAME     on the master: give a server a new name
   p8 cluster leave                 on a worker: stand alone again
   p8 cluster promote [--force]     on a worker: become the master (the old one is gone for good)
+  p8 cluster witness URL TOKEN FINGERPRINT
+                                   on the master of 2 servers: add the tie-breaker (p8s-witness init prints it)
+  p8 cluster witness [off]         show / remove it
   p8 status                        is p8sd healthy?
   p8 rename NEWNAME                give this server a new name (hostname, /etc/hosts, p8sd)
   p8 logs                          follow p8sd logs
@@ -324,6 +338,12 @@ case $cmd in
     d=$(jq -r '.disk_gb // 0' <<<"$req")
     (( d == 0 || d >= $(jq -r .disk_gb <<<"$cur") )) ||
       { red "disks can only grow: $n has $(jq -r .disk_gb <<<"$cur") GB (shrinking would destroy data)"; exit 1; }
+    # hot-plug on, running, no disk change: no need to stop it
+    if [[ $(jq -r '.state' <<<"$cur") == running && $(jq -r '(.hot_cpus // 0) + (.hot_mem_mib // 0)' <<<"$cur") != 0 && $d == 0 ]]; then
+      body=$(call PATCH "/vms/$n" "$req") || exit 1
+      green "✔ $n is now $(jq -r '"\(.vcpus) CPU, \(.memory_mib) MB"' <<<"$body") — while it runs (hot-plug)"
+      exit 0
+    fi
     stop_for "$n" resize
     body=$(call PATCH "/vms/$n" "$req") || { start_again "$n"; exit 1; }
     green "✔ $n is now $(jq -r '"\(.vcpus) CPU, \(.memory_mib) MB, \(.disk_gb) GB"' <<<"$body")"
@@ -353,6 +373,120 @@ case $cmd in
     need "${1:-}"; [[ ${2:-} =~ ^[0-9a-fA-F:]{17}$ ]] || { red "usage: p8 nic-rm NAME MAC   (see: p8 nics NAME)"; exit 1; }
     call DELETE "/vms/$1/nics/$2" >/dev/null && green "✔ network card $2 removed from $1" ;;
 
+  files)
+    need "${1:-}"; [[ -n ${2:-} ]] || { red "usage: p8 files NAME BACKUP_ID [PATH] [--part ID]   (backup ids: p8 backups NAME)"; exit 1; }
+    vmn=$1 bid=$2; shift 2; want="/"; part=""
+    while [[ $# -gt 0 ]]; do case $1 in --part) part=${2:-}; shift 2 ;; *) want=$1; shift ;; esac; done
+    sess=$(call POST "/backups/$vmn/$bid/browse") || exit 1; sid=$(jq -r .id <<<"$sess")
+    echo -n "opening backup $bid of $vmn "
+    while :; do sess=$(call GET "/browse/$sid") || exit 1; st=$(jq -r .state <<<"$sess")
+      [[ $st == preparing ]] || break; echo -n .; sleep 2; done; echo
+    [[ $st == ready ]] || { red "✘ $(jq -r .error <<<"$sess")"; exit 1; }
+    jq -r '.parts[] | "  \(.id)  \(.fs)  \(.label)  \(.size)\(if .error then "  — " + .error else "" end)"' <<<"$sess"
+    [[ -n $part ]] || part=$(jq -r '[.parts[] | select(.error == null or .error == "")] | (map(select((.label // "") | test("efi|boot"; "i") | not)) + .)[0].id // empty' <<<"$sess")
+    [[ -n $part ]] || { red "no filesystem could be opened"; call DELETE "/browse/$sid" >/dev/null; exit 1; }
+    q="part=$part&path=$(jq -rn --arg p "$want" '$p|@uri')"
+    if l=$(call GET "/browse/$sid/ls?$q" 2>/dev/null); then
+      echo "$part:$want"; jq -r '.entries[] | "  \(if .dir then "d" else "-" end) \(.size)\t\(.name)"' <<<"$l"
+      echo "Download a file: p8 files $vmn $bid PATH --part $part"
+    else
+      out=$(basename "$want")
+      code=$(curl -ks -o "$out" -w '%{http_code}' -H "Authorization: Bearer $TOKEN" "$URL/browse/$sid/file?$q")
+      if [[ $code == 200 ]]; then green "✔ $want saved as ./$out"; else red "✘ couldn't get $want ($code)"; rm -f "$out"; fi
+    fi
+    call DELETE "/browse/$sid" >/dev/null ;;
+
+  storage)
+    need "${1:-}"; [[ -n ${2:-} ]] || { red "usage: p8 storage NAME local|ceph|STORAGE [--drop-snapshots]"; exit 1; }
+    ds=false; [[ ${3:-} == --drop-snapshots ]] && ds=true
+    stop_for "$1" "move its disks"
+    j=$(call POST "/vms/$1/storage" "$(jq -nc --arg s "$2" --argjson d "$ds" '{storage:$s,drop_snapshots:$d}')") || { start_again "$1"; exit 1; }
+    id=$(jq -r .id <<<"$j"); echo -n "moving the disks of $1 to $2 "
+    while :; do sleep 3; s=$(call GET "/jobs/$id") || break; st=$(jq -r .state <<<"$s")
+      [[ $st == running ]] && { echo -n .; continue; }; echo
+      [[ $st == done ]] && green "✔ $(jq -r .message <<<"$s")" || red "✘ $(jq -r .error <<<"$s")"; break; done
+    start_again "$1" ;;
+
+  shares)
+    need "${1:-}"; body=$(call GET "/vms/$1/shares") || exit 1
+    jq -r '.shares[] | "\(.user)\t\(.level)"' <<<"$body" | column -t
+    [[ $(jq '.shares | length' <<<"$body") == 0 ]] && echo "$1 isn't shared. Share it: p8 share $1 USER user" ;;
+
+  share)
+    need "${1:-}"; [[ -n ${2:-} && ${3:-} =~ ^(user|viewer|off)$ ]] || { red "usage: p8 share NAME USER user|viewer|off"; exit 1; }
+    lvl=$3; [[ $lvl == off ]] && lvl=""
+    call PUT "/vms/$1/shares" "$(jq -nc --arg u "$2" --arg l "$lvl" '{user:$u,level:$l}')" >/dev/null || exit 1
+    if [[ -n $lvl ]]; then green "✔ $2 may now use $1 as $lvl"; else green "✔ $2 can't use $1 any more"; fi ;;
+
+  hotplug)
+    need "${1:-}"; vmn=$1; on=${2:-}; [[ $on =~ ^(on|off)$ ]] || { red "usage: p8 hotplug NAME on [cpus=N ram=MB] | off"; exit 1; }
+    mc=0; mm=0
+    for a in "${@:3}"; do case ${a%%=*} in cpus|cpu) mc=${a#*=} ;; ram|mem) mm=${a#*=} ;; *) red "unknown $a"; exit 1 ;; esac; done
+    [[ $mc =~ ^[0-9]+$ && $mm =~ ^[0-9]+$ ]] || { red "numbers only"; exit 1; }
+    stop_for "$vmn" "change hot-plug"
+    body=$(call POST "/vms/$vmn/hotplug" "$(jq -nc --argjson o "$([[ $on == on ]] && echo true || echo false)" --argjson c "$mc" --argjson m "$mm" '{on:$o,max_vcpus:$c,max_mib:$m}')") || { start_again "$vmn"; exit 1; }
+    if [[ $on == on ]]; then green "✔ hot-plug on: $vmn can grow to $(jq -r '"\(.hot_cpus) CPUs and \(.hot_mem_mib) MB"' <<<"$body") while it runs (p8 resize $vmn cpus=N ram=MB)"
+    else green "✔ hot-plug off for $vmn"; fi
+    start_again "$vmn" ;;
+
+  limits)
+    need "${1:-}"; vmn=$1; shift
+    if [[ $# == 0 ]]; then
+      body=$(call GET "/vms/$vmn") || exit 1
+      jq -r '.io_limits // {} | "disk read  \(.read_mbs // "-") MB/s\ndisk write \(.write_mbs // "-") MB/s\ndisk IOPS  \(.iops // "-")\nnet in     \(.net_down_mbit // "-") Mbit/s\nnet out    \(.net_up_mbit // "-") Mbit/s"' <<<"$body"; exit 0
+    fi
+    req='{}'
+    if [[ $1 != off ]]; then
+      for a in "$@"; do
+        k=${a%%=*} v=${a#*=}
+        [[ $v =~ ^[0-9]+$ ]] || { red "bad value in $a (numbers only)"; exit 1; }
+        case $k in read) f=read_mbs ;; write) f=write_mbs ;; iops) f=iops ;; down) f=net_down_mbit ;; up) f=net_up_mbit ;;
+          *) red "unknown limit $k (read write iops down up)"; exit 1 ;; esac
+        req=$(jq -c --arg f "$f" --argjson v "$v" '.[$f] = $v' <<<"$req")
+      done
+    fi
+    call PUT "/vms/$vmn/limits" "$req" >/dev/null && green "✔ speed limits of $vmn $([[ $1 == off ]] && echo removed || echo saved)" ;;
+
+  devices|devs)
+    need "${1:-}"; body=$(call GET "/vms/$1/devices") || exit 1
+    echo "Given to $1:"
+    jq -r '(.pci[] as $a | (.available.pci[] | select(.addr == $a) | "  pci  \(.addr)  \(.name)") // "  pci  \($a)  (not on this server)"),
+           (.usb[] as $u | (.available.usb[] | select(.id == $u) | "  usb  \(.id)  \(.name)") // "  usb  \($u)  (not plugged in)")' <<<"$body"
+    [[ $(jq '(.pci|length)+(.usb|length)' <<<"$body") == 0 ]] && echo "  (none)"
+    [[ $(jq -r .available.iommu <<<"$body") == true ]] || yellow "IOMMU is off: PCI devices can't be given (sudo p8 iommu on, then reboot). USB works."
+    echo "This server's devices:"
+    jq -r '.used_by as $u | .available.pci[] | select(.bridge | not) | "  pci  \(.addr)  \(.name)  [\(.kind)]\(if $u[.addr] then "  in VM " + $u[.addr] else "" end)\(if .others then "  group: " + (.others|join(",")) else "" end)\(if .warn then "  ⚠ " + .warn else "" end)"' <<<"$body"
+    jq -r '.used_by as $u | .available.usb[] | "  usb  \(.id)  \(.name)\(if $u[.id] then "  in VM " + $u[.id] else "" end)"' <<<"$body" ;;
+
+  dev-add|dev-rm)
+    need "${1:-}"; [[ ${2:-} =~ ^(pci|usb)$ && -n ${3:-} ]] || { red "usage: p8 $cmd NAME pci|usb ID   (see: p8 devices NAME)"; exit 1; }
+    if [[ $cmd == dev-add ]]; then
+      body=$(call POST "/vms/$1/devices" "$(jq -nc --arg k "$2" --arg i "$3" '{kind:$k,id:$i}')") || exit 1
+      green "✔ $(jq -r .note <<<"$body")"
+    else
+      call DELETE "/vms/$1/devices/$2/$3" >/dev/null && green "✔ $3 taken away from $1"
+    fi ;;
+
+  cert)
+    if [[ $# == 0 ]]; then
+      body=$(call GET /node/acme) || exit 1
+      if [[ $(jq -r '.cert' <<<"$body") == null ]]; then echo "The dashboard uses the server's own certificate. Get one: p8 cert p8s.example.com"
+      else jq -r '.cert | "\(.names|join(", ")) — \(.issuer), valid until \(.not_after)"' <<<"$body"; fi
+      exit 0
+    fi
+    if [[ $1 == off ]]; then body=$(call DELETE /node/acme) || exit 1; green "✔ $(jq -r .title <<<"$body") started (see the Server page → Tasks)"; exit 0; fi
+    d=$1; shift; em=""; cf=""
+    while [[ $# -gt 0 ]]; do case $1 in --email) em=${2:-}; shift 2 ;; --cloudflare) cf=${2:-}; shift 2 ;; *) red "unknown $1"; exit 1 ;; esac; done
+    req=$(jq -nc --arg d "$d" --arg e "$em" --arg c "$cf" '{domain:$d,email:$e,method:(if $c != "" then "cloudflare" else "http" end)} + (if $c != "" then {cf_token:$c} else {} end)')
+    body=$(call POST /node/acme "$req") || exit 1
+    green "✔ $(jq -r .title <<<"$body") started — follow it on the Server page → Tasks" ;;
+
+  iommu)
+    a=${1:-status}; [[ $a =~ ^(on|off|status)$ ]] || { red "usage: p8 iommu on|off|status"; exit 1; }
+    s=/usr/local/share/p8s/iommu.sh
+    [[ -x $s ]] || { red "iommu.sh missing: run update.sh"; exit 1; }
+    if [[ $a == status ]]; then bash "$s" status; else sudo bash "$s" "$a"; fi ;;
+
   disk-add)
     need "${1:-}"; [[ ${2:-} =~ ^[0-9]+$ ]] || { red "usage: p8 disk-add NAME GB"; exit 1; }
     body=$(call POST "/vms/$1/disks" "{\"size_gb\":$2}") || exit 1
@@ -375,16 +509,19 @@ case $cmd in
 
   snap|snapshot)
     need "${1:-}"
-    req='{}'; [[ -n ${2:-} ]] && req=$(jq -nc --arg s "$2" '{name:$s}')
-    body=$(call POST "/vms/$1/snapshots" "$req") || exit 1
-    green "✔ snapshot $(jq -r .name <<<"$body") of $1 saved. Undo later with: p8 rollback $1 $(jq -r .name <<<"$body")" ;;
+    vmn=$1; shift; sn=""; ram=false
+    for a in "$@"; do case $a in --ram) ram=true ;; *) sn=$a ;; esac; done
+    req=$(jq -nc --arg s "$sn" --argjson r "$ram" '(if $s != "" then {name:$s} else {} end) + (if $r then {ram:true} else {} end)')
+    $ram && echo "Saving $vmn's disk and RAM (it pauses about 1 s per GB of RAM)…"
+    body=$(call POST "/vms/$vmn/snapshots" "$req") || exit 1
+    green "✔ snapshot $(jq -r .name <<<"$body") of $vmn saved$($ram && echo " with RAM"). Undo later with: p8 rollback $vmn $(jq -r .name <<<"$body")" ;;
 
   snaps|snapshots)
     need "${1:-}"; body=$(call GET "/vms/$1/snapshots") || exit 1
     [[ $(jq '.snapshots | length' <<<"$body") == 0 ]] && { echo "No snapshots of $1 yet. Take one: p8 snap $1 before-upgrade"; exit 0; }
-    printf '%-30s %-24s %s\n' NAME CREATED SIZE
-    jq -r '.snapshots[] | [.name, (.created_at | sub("T"; " ") | sub("Z"; " UTC")), .used_bytes] | @tsv' <<<"$body" |
-      while IFS=$'\t' read -r sn c u; do printf '%-30s %-24s %s\n' "$sn" "$c" "$(human "$u")"; done ;;
+    printf '%-30s %-24s %-10s %s\n' NAME CREATED SIZE RAM
+    jq -r '.snapshots[] | [.name, (.created_at | sub("T"; " ") | sub("Z"; " UTC")), .used_bytes, (.ram_bytes // 0)] | @tsv' <<<"$body" |
+      while IFS=$'\t' read -r sn c u r; do printf '%-30s %-24s %-10s %s\n' "$sn" "$c" "$(human "$u")" "$([[ $r != 0 ]] && human "$r" || echo -)"; done ;;
 
   rollback)
     need "${1:-}"; [[ -n ${2:-} ]] || { red "which snapshot?  p8 snaps $1"; exit 1; }
@@ -396,8 +533,14 @@ case $cmd in
       [[ -n $newer ]] && echo "These newer snapshots are deleted too: $newer"
       read -r -p "Continue? [y/N] " a; [[ $a == [yY]* ]] || { echo "cancelled"; exit 0; }
     fi
-    YES=1 stop_for "$1" "roll back"
     req=$(jq -nc --argjson d "$([[ -n $newer ]] && echo true || echo false)" '{destroy_newer:$d}')
+    if [[ $(jq -r --arg s "$2" '.snapshots[] | select(.name == $s) | .ram // false' <<<"$body") == true ]]; then
+      # with RAM: no need to stop; the VM resumes where the snapshot was taken
+      call POST "/vms/$1/snapshots/$2/rollback" "$req" >/dev/null || exit 1
+      green "✔ $1 is back at snapshot '$2' and running from there"
+      exit 0
+    fi
+    YES=1 stop_for "$1" "roll back"
     call POST "/vms/$1/snapshots/$2/rollback" "$req" >/dev/null || { start_again "$1"; exit 1; }
     green "✔ $1 is back at snapshot '$2'"
     start_again "$1" ;;
@@ -1051,12 +1194,30 @@ TXT
         body=$(call GET /cluster) || exit 1
         role=$(jq -r '.role' <<<"$body")
         [[ -z $role ]] && { echo "Not in a cluster. On the master: p8 cluster add"; exit 0; }
-        echo "This server is the cluster $role (term $(jq -r '.term // 0' <<<"$body"), $(jq -r '.size' <<<"$body") servers$( [[ $(jq -r .size <<<"$body") -ge 3 ]] && echo "; a new master is chosen automatically if this one is lost" ))."
+        echo "This server is the cluster $role (term $(jq -r '.term // 0' <<<"$body"), $(jq -r '.size' <<<"$body") servers$( [[ $(jq -r '.witness != null' <<<"$body") == true ]] && echo " + a witness" )$( [[ $(jq -r '.voters // .size' <<<"$body") -ge 3 ]] && echo "; a new master is chosen automatically if this one is lost" ))."
         seen=$(jq -r '.peer.master_seen_s // -1' <<<"$body")
         [[ $role == worker && $seen -ge 45 ]] && red "The master hasn't answered for ${seen}s. If it is really gone: p8 cluster promote"
         jq -r '.nodes[] | [.id, .name, .role, .wg_ip, (if .status.online then "online" else "OFFLINE" end),
           "\((.status.capacity.mem_total_mib // 0) / 1024 | floor) GB RAM, \((.status.capacity.mem_used_mib // 0) / 1024 | floor) GB used, \(.status.capacity.vms // 0) VMs"] | @tsv' <<<"$body" |
           { command -v column >/dev/null && column -t -s $'\t' || cat; } ;;
+      witness)
+        case ${2:-} in
+          "")
+            body=$(call GET /cluster/witness) || exit 1
+            if [[ $(jq -r '.witness == null' <<<"$body") == true ]]; then
+              echo "No witness. With 2 servers, add one so a new master is chosen automatically:"
+              echo "  on any always-on Linux box: p8s-witness init, then here: p8 cluster witness URL TOKEN FINGERPRINT"
+            else
+              jq -r '.witness | "Witness \(.url): \(if .online then "online (term \(.term), heard the master \(.master_seen_s) s ago)" else "NOT ANSWERING — \(.error)" end)"' <<<"$body"
+            fi ;;
+          off|remove)
+            call DELETE /cluster/witness >/dev/null || exit 1
+            green "✔ witness removed: with 2 servers a takeover is by hand again (p8 cluster promote)" ;;
+          *)
+            [[ -n ${3:-} && -n ${4:-} ]] || { red "usage: p8 cluster witness URL TOKEN FINGERPRINT   (p8s-witness init prints all three)"; exit 1; }
+            body=$(call POST /cluster/witness "$(jq -nc --arg u "$2" --arg t "$3" --arg p "$4" '{url:$u, token:$t, pin:$p}')") || exit 1
+            green "✔ $(jq -r .note <<<"$body")" ;;
+        esac ;;
       promote)
         if [[ ${YES:-0} != 1 ]]; then
           read -r -p "Make this server the cluster master? Only when the old master is really gone. [y/N] " a; [[ $a == [yY]* ]] || exit 0

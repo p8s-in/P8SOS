@@ -41,12 +41,17 @@ Command line: `p8 create web1 2 2048 20 --os debian-13 [--lan] [--vlan 20] [--st
 | Change CPUs, RAM, disk | Manage → Options → Resize | `p8 resize NAME cpus=4 ram=4096 disk=40` |
 | Extra disks | Manage → Disks | `p8 disk-add NAME 50`, `p8 disk-grow NAME 1 100`, `p8 disk-rm NAME 1` |
 | More network cards (up to 8) | Manage → Network & firewall → **Add network card** | `p8 nic-add NAME lan --vlan 20`, `p8 nics NAME`, `p8 nic-rm NAME MAC` |
+| Add CPUs / RAM while it runs | Manage → Hardware → **Hot-plug** (once, VM off), then Resize while it runs | `p8 hotplug NAME on cpus=8 ram=16384`, `p8 resize NAME cpus=6 ram=8192` |
+| Limit disk / network speed | Manage → Hardware → **Speed limits** (applies at once) | `p8 limits NAME read=200 write=100 iops=5000 down=100 up=50`, `p8 limits NAME off` |
+| Give it a graphics card, NVMe, USB device (passthrough) | Manage → Hardware → **PCI and USB devices** | `p8 devices NAME`, `p8 dev-add NAME pci 0000:01:00.0`, `p8 dev-add NAME usb 046d:c52b` |
 | Snapshot / roll back | Manage → Snapshots | `p8 snap NAME before-upgrade`, `p8 rollback NAME before-upgrade` |
 | Password inside the VM | Manage → Login | `p8 passwd NAME [USER]` |
 | Firewall | Manage → Firewall | `p8 fw NAME allow tcp 22 from 203.0.113.0/24` |
 | Delete | Manage → Delete (type the name) | `p8 delete NAME` |
 
 Snapshots are instant and free until data changes. Take one before every upgrade; roll back undoes everything since.
+
+**Include RAM** (Manage → Snapshots, or `p8 snap NAME before-upgrade --ram`) also saves the running VM's memory: rolling back then resumes the VM exactly where it was, with its programs open, without stopping it first. The VM pauses about 1 s per GB of RAM while its memory is written. The memory file takes as much space as the VM's RAM (in /var/lib/p8s/vmstate) and stays on this server: after a move, the snapshot rolls back the disk only.
 
 ## Installing from an ISO, and Windows
 
@@ -82,4 +87,21 @@ The image must have cloud-init (all official cloud images do), so P8S can set th
 
 ## Importing VMs from other platforms
 
-**Storage → Import VMs** (admins): Proxmox backups (`.vma`, `.vma.zst`), VMware `.vmdk`, Hyper-V `.vhdx`, VirtualBox `.vdi`, or `.qcow2` / `.raw`. Upload the file (or `scp` big files to `/var/lib/p8s/import/`), click **Check** to see the VM it would make, then **Import**. Keep the original disk type and BIOS/UEFI; keep the MAC only if the old VM is gone for good.
+**Storage → Import VMs** (admins): Proxmox backups (`.vma`, `.vma.zst`), **OVA appliances** (VMware / VirtualBox export: CPUs, RAM, firmware, network card and every disk come from it), VMware `.vmdk`, Hyper-V `.vhdx`, VirtualBox `.vdi`, or `.qcow2` / `.raw`. Upload the file (or `scp` big files to `/var/lib/p8s/import/`), click **Check** to see the VM it would make, then **Import**. Keep the original disk type and BIOS/UEFI; keep the MAC only if the old VM is gone for good.
+
+## PCI and USB passthrough
+
+A VM can own one of the server's devices like real hardware: a **graphics card** (gaming, AI, video encoding), a **network card**, an **NVMe disk**, a **USB controller**, or a single **USB device** (stick, dongle, printer, licence key).
+
+1. **PCI needs the CPU's IOMMU.** Manage → Hardware shows if it is off: press **Turn on IOMMU** (or `sudo p8 iommu on`) and reboot the server. If it stays off, turn on **VT-d** (Intel) or **AMD-Vi / IOMMU** (AMD) in the BIOS. USB devices work without it.
+2. **Shut the VM down**, choose the device under **PCI and USB devices**, **Give to VM**. Devices that share an IOMMU group (a graphics card and its sound part) go together. USB devices can be given while the VM runs.
+3. Start the VM and install the device's own driver inside it (e.g. the NVIDIA driver). The browser console keeps showing the VM's standard screen; a monitor on the card shows the card's output.
+
+| Careful with | Why |
+| --- | --- |
+| The server's own screen (laptop GPU) | The server's monitor goes dark while the VM runs (the dashboard keeps working) |
+| The network card the server uses | The server goes offline |
+| A disk controller with the server's disks | The server loses its disks |
+
+The dashboard marks these with ⚠ and asks twice. A device belongs to one VM at a time. VMs with PCI or USB devices can't move to another server (take the devices away first), can't save their RAM in a snapshot, and clones don't get the devices.
+

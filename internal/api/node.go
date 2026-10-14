@@ -49,6 +49,9 @@ func (s *Server) startTask(w http.ResponseWriter, r *http.Request) {
 	case tasks.TemplateURL:
 		writeErr(w, http.StatusBadRequest, "invalid", "use POST /api/v1/node/templates/custom")
 		return
+	case tasks.ACMEIssue, tasks.ACMERemove:
+		writeErr(w, http.StatusBadRequest, "invalid", "use POST / DELETE /api/v1/node/acme")
+		return
 	case tasks.CTFromImage:
 		l, err := s.Node.CTImages(r.Context())
 		if err != nil {

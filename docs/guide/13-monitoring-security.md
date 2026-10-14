@@ -22,6 +22,33 @@ Alerts go out once when they start, again if worse, and once when fixed. Channel
 
 **Power cuts:** with *On a power cut, shut down cleanly* on (default), P8S shuts every VM down and powers off when the battery is nearly empty. Servers need a UPS over USB and `sudo apt install nut`.
 
+## A real HTTPS certificate (Let's Encrypt)
+
+With a domain that points to the server (an A record, e.g. `p8s.example.com`), the dashboard can get a free Let's Encrypt certificate: Server page → Network → **HTTPS certificate** (or `p8 cert p8s.example.com`). Two ways to prove the domain is yours:
+
+| Way | Needs | Behind CGNAT |
+| --- | --- | --- |
+| **Port 80** | TCP 80 forwarded from the router to the server | No |
+| **Cloudflare DNS** | The domain's DNS at Cloudflare and an API token with *Zone → DNS → Edit* (`p8 cert DOMAIN --cloudflare TOKEN`) | Yes |
+
+It renews by itself (certbot's timer). Browsers stop warning at `https://DOMAIN:8006`. Opening the server by its IP still shows its own certificate — that is the one the cluster servers check, so a new certificate never breaks the cluster. `p8 cert off` goes back.
+
+## Prometheus and Grafana
+
+Every server gives its numbers in Prometheus format at `https://SERVER:8006/api/v1/prometheus`: the server's CPU, RAM, pool space and uptime, and every VM's state, size, CPU, RAM, disk and network speed (on the master: the VMs of all servers). Make an API token (Settings → API tokens) and add to `prometheus.yml`:
+
+```
+scrape_configs:
+  - job_name: p8s
+    scheme: https
+    tls_config: {insecure_skip_verify: true}
+    authorization: {credentials: "p8s_YOUR_TOKEN"}
+    metrics_path: /api/v1/prometheus
+    static_configs: [{targets: ["192.168.0.106:8006"]}]
+```
+
+Metric names start with `p8s_` (`p8s_vm_cpu_percent{vm="web1",server="p8s-node"}`, `p8s_host_pool_free_bytes`, …). In Grafana, add Prometheus as a data source and graph them.
+
 ## Security checklist
 
 1. Two-factor on every admin; Settings → Security → *Two-factor for staff*.

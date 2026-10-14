@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"p8sos/internal/firewall"
+	"p8sos/internal/virt"
 	"p8sos/internal/vm"
 )
 
@@ -310,6 +311,23 @@ func (c *VMs) CreateSnapshot(ctx context.Context, name, snap string) (vm.Snapsho
 	}
 	var s vm.Snapshot
 	err := c.call(ctx, n, "POST", vpath(name, "/snapshots"), map[string]string{"name": snap}, &s)
+	return s, err
+}
+
+// CreateSnapshotRAM also saves the VM's memory, on the server it runs on.
+func (c *VMs) CreateSnapshotRAM(ctx context.Context, name, snap string) (vm.Snapshot, error) {
+	n, ok := c.locate(ctx, name)
+	if !ok {
+		rs, ok := c.Local.(interface {
+			CreateSnapshotRAM(ctx context.Context, name, snap string) (vm.Snapshot, error)
+		})
+		if !ok {
+			return vm.Snapshot{}, fmt.Errorf("%w: memory snapshots aren't available here", vm.ErrInvalid)
+		}
+		return rs.CreateSnapshotRAM(ctx, name, snap)
+	}
+	var s vm.Snapshot
+	err := c.call(ctx, n, "POST", vpath(name, "/snapshots"), map[string]any{"name": snap, "ram": true}, &s)
 	return s, err
 }
 
@@ -929,6 +947,105 @@ func (c *VMs) AddNIC(ctx context.Context, name, network string, vlan int) (vm.VM
 		return vm.VM{}, "", err
 	}
 	return c.tag(out.VM, n), out.Note, nil
+}
+
+// deviceLocal is the passthrough part of the local VM service.
+type deviceLocal interface {
+	Devices(ctx context.Context, name string) (vm.Devices, error)
+	AddDevice(ctx context.Context, name, kind, id string) (vm.VM, string, error)
+	RemoveDevice(ctx context.Context, name, kind, id string) (vm.VM, error)
+}
+
+var errNoDevs = fmt.Errorf("%w: passthrough isn't available on this server", vm.ErrInvalid)
+
+// Devices lists a VM's PCI/USB devices and those of the server it runs on.
+func (c *VMs) Devices(ctx context.Context, name string) (vm.Devices, error) {
+	n, ok := c.locate(ctx, name)
+	if !ok {
+		l, ok := c.Local.(deviceLocal)
+		if !ok {
+			return vm.Devices{}, errNoDevs
+		}
+		return l.Devices(ctx, name)
+	}
+	var out vm.Devices
+	err := c.call(ctx, n, "GET", vpath(name, "/devices"), nil, &out)
+	return out, err
+}
+
+// AddDevice gives a VM a PCI/USB device of the server it runs on.
+func (c *VMs) AddDevice(ctx context.Context, name, kind, id string) (vm.VM, string, error) {
+	n, ok := c.locate(ctx, name)
+	if !ok {
+		l, ok := c.Local.(deviceLocal)
+		if !ok {
+			return vm.VM{}, "", errNoDevs
+		}
+		v, note, err := l.AddDevice(ctx, name, kind, id)
+		return c.selfTag(v), note, err
+	}
+	var out struct {
+		vm.VM
+		Note string `json:"note"`
+	}
+	if err := c.call(ctx, n, "POST", vpath(name, "/devices"), map[string]string{"kind": kind, "id": id}, &out); err != nil {
+		return vm.VM{}, "", err
+	}
+	return c.tag(out.VM, n), out.Note, nil
+}
+
+// RemoveDevice takes one away.
+func (c *VMs) RemoveDevice(ctx context.Context, name, kind, id string) (vm.VM, error) {
+	return c.remoteVM(ctx, name, func() (vm.VM, error) {
+		l, ok := c.Local.(deviceLocal)
+		if !ok {
+			return vm.VM{}, errNoDevs
+		}
+		return l.RemoveDevice(ctx, name, kind, id)
+	}, "DELETE", vpath(name, "/devices/", url.PathEscape(kind), "/", url.PathEscape(id)), nil)
+}
+
+// MoveStorage moves a VM's disks to another storage on its server (a job there).
+func (c *VMs) MoveStorage(ctx context.Context, name, target string, dropSnaps bool) (vm.Job, error) {
+	n, ok := c.locate(ctx, name)
+	if !ok {
+		ms, ok := c.Local.(interface {
+			MoveStorage(ctx context.Context, name, target string, dropSnaps bool) (vm.Job, error)
+		})
+		if !ok {
+			return vm.Job{}, fmt.Errorf("%w: moving disks isn't available on this server", vm.ErrInvalid)
+		}
+		return ms.MoveStorage(ctx, name, target, dropSnaps)
+	}
+	var j vm.Job
+	err := c.call(ctx, n, "POST", vpath(name, "/storage"), map[string]any{"storage": target, "drop_snapshots": dropSnaps}, &j)
+	return j, err
+}
+
+// SetIOLimits changes a VM's disk/network speed limits on its server.
+func (c *VMs) SetIOLimits(ctx context.Context, name string, l virt.IOLimits) (vm.VM, error) {
+	return c.remoteVM(ctx, name, func() (vm.VM, error) {
+		lv, ok := c.Local.(interface {
+			SetIOLimits(ctx context.Context, name string, l virt.IOLimits) (vm.VM, error)
+		})
+		if !ok {
+			return vm.VM{}, fmt.Errorf("%w: speed limits aren't available on this server", vm.ErrInvalid)
+		}
+		return lv.SetIOLimits(ctx, name, l)
+	}, "PUT", vpath(name, "/limits"), l)
+}
+
+// SetHotplug turns CPU/RAM hot-plug on or off on the VM's server.
+func (c *VMs) SetHotplug(ctx context.Context, name string, on bool, maxVCPUs, maxMiB int) (vm.VM, error) {
+	return c.remoteVM(ctx, name, func() (vm.VM, error) {
+		hv, ok := c.Local.(interface {
+			SetHotplug(ctx context.Context, name string, on bool, maxVCPUs, maxMiB int) (vm.VM, error)
+		})
+		if !ok {
+			return vm.VM{}, fmt.Errorf("%w: hot-plug isn't available on this server", vm.ErrInvalid)
+		}
+		return hv.SetHotplug(ctx, name, on, maxVCPUs, maxMiB)
+	}, "POST", vpath(name, "/hotplug"), map[string]any{"on": on, "max_vcpus": maxVCPUs, "max_mib": maxMiB})
 }
 
 // RemoveNIC takes a network card out of a VM.

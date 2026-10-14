@@ -34,6 +34,53 @@ type principal struct {
 	Role     string // users.Admin, Operator, Auditor or Customer (API tokens: admin)
 	HasTOTP  bool   // two-factor sign-in is on
 	ExtMFA   bool   // signs in with the company login (its 2FA is the provider's)
+	// Scope narrows a personal API token (read-only, some VMs); nil = none.
+	Scope *users.TokenScope
+}
+
+// scopeOK says whether a scoped token may make this request (the message
+// says why not).
+func scopeOK(p principal, r *http.Request) (bool, string) {
+	sc := p.Scope
+	if sc == nil {
+		return true, ""
+	}
+	read := r.Method == http.MethodGet || r.Method == http.MethodHead
+	if sc.ReadOnly && !read {
+		return false, "this API token is read-only"
+	}
+	if len(sc.VMs) == 0 {
+		return true, ""
+	}
+	path := strings.TrimSuffix(r.URL.Path, "/")
+	switch path {
+	case "/api/v1/me", "/api/v1/vms":
+		return read, "this API token may only list VMs here"
+	}
+	rest, ok := strings.CutPrefix(path, "/api/v1/vms/")
+	if !ok {
+		return false, "this API token is only for the VMs " + strings.Join(sc.VMs, ", ")
+	}
+	name, _, _ := strings.Cut(rest, "/")
+	for _, v := range sc.VMs {
+		if v == name {
+			return true, ""
+		}
+	}
+	return false, "this API token is only for the VMs " + strings.Join(sc.VMs, ", ")
+}
+
+// inScope: may p (a scoped token) see this VM at all?
+func inScope(p principal, vmName string) bool {
+	if p.Scope == nil || len(p.Scope.VMs) == 0 {
+		return true
+	}
+	for _, v := range p.Scope.VMs {
+		if v == vmName {
+			return true
+		}
+	}
+	return false
 }
 
 type ctxKey struct{}
@@ -59,8 +106,11 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 				}
 			}
 			if p.Name == "" && s.Users != nil {
-				if u, ok := s.Users.TokenUser(tok); ok {
+				if u, sc, ok := s.Users.TokenOwner(tok); ok {
 					p = principal{Name: u.Name, Admin: users.Staff(u.Role), Role: u.Role, Quota: u.Quota, User: true, ViaToken: true}
+					if sc.ReadOnly || len(sc.VMs) > 0 {
+						p.Scope = &sc
+					}
 				}
 			}
 			if p.Name == "" {
@@ -75,6 +125,10 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 		if p.Name == "" {
 			w.Header().Set("WWW-Authenticate", `Bearer realm="p8sd"`)
 			writeErr(w, http.StatusUnauthorized, "unauthorized", "please sign in again")
+			return
+		}
+		if ok, why := scopeOK(p, r); !ok {
+			writeErr(w, http.StatusForbidden, "forbidden", why)
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, p)))
@@ -154,13 +208,45 @@ func (s *Server) vmFor(w http.ResponseWriter, r *http.Request) (vm.VM, bool) {
 	name := r.PathValue("name")
 	v, err := s.VMs.Get(r.Context(), name)
 	if err == nil && !mayUse(who(r), v.Owner) {
-		err = fmt.Errorf("%w: vm %q", vm.ErrNotFound, name)
+		// shared with this user? (per-VM permissions)
+		switch lvl := s.Shares.Level(name, who(r).Name); {
+		case lvl == "":
+			err = fmt.Errorf("%w: vm %q", vm.ErrNotFound, name)
+		case !shareAllows(lvl, r):
+			writeErr(w, http.StatusForbidden, "forbidden", fmt.Sprintf("vm %q is shared with you as %s: %s", name, lvl,
+				map[string]string{users.ShareViewer: "you can look but not change it", users.ShareUser: "you can run it, but deleting, resizing and its hardware stay with its owner"}[lvl]))
+			return vm.VM{}, false
+		default:
+			v.Access = lvl
+		}
 	}
 	if err != nil {
 		s.fail(w, r, err)
 		return vm.VM{}, false
 	}
 	return v, true
+}
+
+// shareAllows: what a shared user may do with the VM. Viewers only look;
+// users run it (power, console, password, snapshots, backups, firewall view),
+// but deleting, resizing and hardware stay with the owner (whose plan pays).
+func shareAllows(level string, r *http.Request) bool {
+	read := r.Method == http.MethodGet || r.Method == http.MethodHead
+	if level == users.ShareViewer {
+		return read
+	}
+	if level != users.ShareUser {
+		return false
+	}
+	_, rest, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/api/v1/vms/"), "/")
+	what, _, _ := strings.Cut(rest, "/")
+	switch what {
+	case "start", "stop", "reboot", "console", "password", "login", "snapshots", "backups", "eject", "screenshot", "metrics":
+		return true
+	case "", "shares", "owner", "firewall", "sites", "backup-schedule":
+		return read
+	}
+	return read
 }
 
 func mayUse(p principal, owner string) bool { return p.Admin || (owner != "" && owner == p.Name) }

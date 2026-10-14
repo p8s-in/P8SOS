@@ -62,9 +62,25 @@ async function loadCluster(){
       : `This server is a <b>worker</b> of <b>${esc(nodes.find(n => n.role === "master")?.name || "the master")}</b>. Manage its VMs from the master's dashboard.`;
   if (role) {
     const seen = cluster.peer?.master_seen_s ?? -1;
-    $("#clSub").innerHTML += `<div class="hint">${cluster.size >= 3
-      ? `No single master: if the master is gone for about a minute, the other servers choose a new one (they need a majority: ${Math.floor(cluster.size / 2) + 1} of ${cluster.size}).`
-      : "With 3 or more servers the cluster also survives losing its master. With 2, a worker can take over by hand."}${cluster.term ? ` Term ${cluster.term}.` : ""}</div>` +
+    const voters = cluster.voters || cluster.size, wit = cluster.witness;
+    $("#clSub").innerHTML += `<div class="hint">${voters >= 3
+      ? `No single master: if the master is gone for about a minute, the other servers choose a new one (they need a majority: ${Math.floor(voters / 2) + 1} of ${voters} votes${wit ? ", the witness counts as one" : ""}).`
+      : "With 3 or more servers the cluster also survives losing its master. With 2, a worker can take over by hand — or add a witness below and it happens by itself."}${cluster.term ? ` Term ${cluster.term}.` : ""}</div>` +
+      (wit ? `<div class="hint">Witness <span class="mono">${esc(wit.url)}</span>: ${wit.online
+          ? `<span style="color:var(--ok)">online</span>${wit.master_seen_s >= 0 ? ` · heard the master ${wit.master_seen_s} s ago` : ""}`
+          : `<span style="color:var(--bad)">not answering</span> — ${esc(wit.error || "")}`}
+          ${role === "master" ? ` <button class="btn" id="clWitRm" type="button">Remove witness</button>` : ""}</div>`
+        : role === "master" && cluster.size === 2 ? `<div class="hint"><button class="btn" id="clWitOpen" type="button">Add a witness…</button>
+          a tie-breaker on any always-on Linux box (Raspberry Pi, NAS, small VPS) so a new master is chosen by itself.</div>
+          <div id="clWitBox" hidden class="card" style="margin-top:8px">
+            <div class="sub">1. Copy the witness program to that box: <button class="btn" data-witget="amd64" type="button">p8s-witness for a PC / VPS (amd64)</button>
+              <button class="btn" data-witget="arm64" type="button">for a Raspberry Pi (arm64)</button><br>
+              2. On it: <span class="mono">chmod +x p8s-witness-* && sudo ./p8s-witness-* install</span> — it prints three values.<br>3. Paste them here:</div>
+            <label for="clWitURL">Address</label><input id="clWitURL" placeholder="https://192.168.0.50:8007">
+            <label for="clWitTok">Key</label><input id="clWitTok" class="mono" autocomplete="off">
+            <label for="clWitPin">Fingerprint</label><input id="clWitPin" class="mono" autocomplete="off">
+            <div class="inline"><span class="spacer"></span><button class="btn primary" id="clWitSave" type="button">Add witness</button></div>
+          </div>` : "") +
       (role === "master" && cluster.quorum === false ? `<div class="hint" style="color:var(--bad)">This master can't reach most of the servers: high availability is paused here.</div>` : "") +
       (role === "worker" && seen >= 45 ? `<div class="hint" style="color:var(--warn)">The master hasn't answered for ${seen < 100000 ? seen + " s" : "a long time"}.
         ${cluster.size >= 3 ? "The servers will choose a new master if most of them agree." : ""}
@@ -94,6 +110,29 @@ async function loadCluster(){
   if ($("#clPromote")) $("#clPromote").onclick = async () => {
     if (!confirm("Make this server the cluster master? Only do this when the old master is really gone (switched off or broken); it becomes a worker when it comes back.")) return;
     try { const r = await call("POST", "/cluster/promote", {}); toast(r.note); setTimeout(() => location.reload(), 4000); } catch (e) { toast(e.message, true); }
+  };
+  if ($("#clWitOpen")) $("#clWitOpen").onclick = () => { $("#clWitBox").hidden = false; $("#clWitURL").focus(); };
+  for (const b of document.querySelectorAll("[data-witget]")) b.onclick = async () => {
+    b.disabled = true;
+    try { // with the sign-in token, so not a plain link
+      const r = await fetch(`${API}/cluster/witness/download/${b.dataset.witget}`, {headers: {"Authorization": "Bearer " + token}});
+      if (!r.ok) throw new Error((await r.json().catch(() => ({})))?.error?.message || "HTTP " + r.status);
+      const url = URL.createObjectURL(await r.blob()), a = document.createElement("a");
+      a.href = url; a.download = "p8s-witness-" + b.dataset.witget; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch (e) { toast(e.message, true); }
+    b.disabled = false;
+  };
+  if ($("#clWitSave")) $("#clWitSave").onclick = async () => {
+    const b = $("#clWitSave"); b.disabled = true;
+    try {
+      const r = await call("POST", "/cluster/witness", {url: $("#clWitURL").value.trim(), token: $("#clWitTok").value.trim(), pin: $("#clWitPin").value.trim()});
+      toast(r.note); loadCluster();
+    } catch (e) { toast(e.message, true); } finally { b.disabled = false; }
+  };
+  if ($("#clWitRm")) $("#clWitRm").onclick = async () => {
+    if (!confirm("Remove the witness? With 2 servers a new master is then only chosen by hand.")) return;
+    try { await call("DELETE", "/cluster/witness"); toast("Witness removed."); loadCluster(); } catch (e) { toast(e.message, true); }
   };
   if ($("#clLeave")) $("#clLeave").onclick = async () => {
     if (!confirm("Leave the cluster? This server's VMs keep running here; the master won't show them any more.")) return;

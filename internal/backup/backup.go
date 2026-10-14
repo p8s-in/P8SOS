@@ -39,10 +39,15 @@ type Meta struct {
 	VCPUs       int    `json:"vcpus"`
 	MemoryMiB   int    `json:"memory_mib"`
 	DiskGB      int    `json:"disk_gb"`
-	Bytes       int64  `json:"bytes"`          // size of the backup file
-	Compression string `json:"compression"`    // zstd or gzip
-	Consistent  bool   `json:"consistent"`     // guest filesystems were frozen (or the VM was off)
-	Node        string `json:"node,omitempty"` // cluster server that keeps it (filled in by the master)
+	Bytes       int64  `json:"bytes"`       // size of the backup file
+	Compression string `json:"compression"` // zstd or gzip
+	Consistent  bool   `json:"consistent"`  // guest filesystems were frozen (or the VM was off)
+	// Format "" = ZFS send streams (VMs on ZFS, can build on each other);
+	// "raw" = whole disk images (VMs on Ceph: rbd export), always full.
+	Format string `json:"format,omitempty"`
+	// ImageBytes is the root disk's exact size (raw backups: the restored disk is made this big).
+	ImageBytes int64  `json:"image_bytes,omitempty"`
+	Node       string `json:"node,omitempty"` // cluster server that keeps it (filled in by the master)
 	// Hardware of VMs imported from other hypervisors (empty = what OSType implies).
 	DiskBus  string `json:"disk_bus,omitempty"`
 	NICModel string `json:"nic_model,omitempty"`
@@ -65,9 +70,10 @@ var ErrInUse = errors.New("other backups build on it")
 
 // ExtraDisk is a data disk in a backup.
 type ExtraDisk struct {
-	Index  int   `json:"index"`
-	SizeGB int   `json:"size_gb"`
-	Bytes  int64 `json:"bytes"`
+	Index      int   `json:"index"`
+	SizeGB     int   `json:"size_gb"`
+	Bytes      int64 `json:"bytes"`
+	ImageBytes int64 `json:"image_bytes,omitempty"` // raw backups: the disk's exact size
 }
 
 var (
@@ -156,11 +162,34 @@ func (s *Store) paths(vm, id, comp string) (data, meta string) {
 }
 
 // Files returns where a backup's data and metadata live.
-func (s *Store) Files(m Meta) (data, meta string) { return s.paths(m.VM, m.ID, m.Compression) }
+func (s *Store) Files(m Meta) (data, meta string) {
+	data, meta = s.paths(m.VM, m.ID, m.Compression)
+	if m.Format == FormatRaw {
+		data = s.rawPath(m, 0)
+	}
+	return data, meta
+}
 
 // ExtraFile is where data disk i of a backup lives.
 func (s *Store) ExtraFile(m Meta, i int) string {
+	if m.Format == FormatRaw {
+		return s.rawPath(m, i)
+	}
 	return filepath.Join(s.Dir, m.VM, fmt.Sprintf("%s-%s-d%d%s", m.VM, m.ID, i, ext(m.Compression)))
+}
+
+// FormatRaw marks backups that hold whole disk images.
+const FormatRaw = "raw"
+
+func (s *Store) rawPath(m Meta, i int) string {
+	e := ".raw.zst"
+	if m.Compression == "gzip" {
+		e = ".raw.gz"
+	}
+	if i == 0 {
+		return filepath.Join(s.Dir, m.VM, m.VM+"-"+m.ID+e)
+	}
+	return filepath.Join(s.Dir, m.VM, fmt.Sprintf("%s-%s-d%d%s", m.VM, m.ID, i, e))
 }
 
 // ExtraFiles are the files of all its data disks.
@@ -354,7 +383,7 @@ func (s *Store) List(vm string) ([]Meta, error) {
 			if json.Unmarshal(b, &m) != nil || !reID.MatchString(m.ID) || !reVM.MatchString(m.VM) {
 				continue
 			}
-			if data, _ := s.paths(m.VM, m.ID, m.Compression); fileExists(data) {
+			if data, _ := s.Files(m); fileExists(data) {
 				out = append(out, m)
 			}
 		}
@@ -399,7 +428,7 @@ func (s *Store) Delete(vm, id string) error {
 			return fmt.Errorf("%w: backup %s of %s holds only the changes since %s; delete the newer backups first", ErrInUse, o.ID, vm, id)
 		}
 	}
-	data, meta := s.paths(m.VM, m.ID, m.Compression)
+	data, meta := s.Files(m)
 	if err := os.Remove(data); err != nil {
 		return err
 	}
@@ -472,6 +501,9 @@ func (s *Store) Chain(m Meta) ([]Meta, error) {
 
 // diskFile is the file of disk i (0 = root) in a backup.
 func (s *Store) diskFile(m Meta, i int) string {
+	if m.Format == FormatRaw {
+		return s.rawPath(m, i)
+	}
 	if i == 0 {
 		data, _ := s.paths(m.VM, m.ID, m.Compression)
 		return data
@@ -553,8 +585,14 @@ func (s *Store) Restore(ctx context.Context, m Meta, dom string, replace bool) e
 // checksum on the way, so a damaged or incomplete file fails. The result is
 // written into the backup's description.
 func (s *Store) Verify(ctx context.Context, m Meta) (Meta, error) {
-	chain, err := s.Chain(m)
-	if err == nil {
+	var chain []Meta
+	var err error
+	if m.Format == FormatRaw {
+		err = s.verifyRaw(ctx, m)
+	} else {
+		chain, err = s.Chain(m)
+	}
+	if err == nil && m.Format != FormatRaw {
 		scratch := "p8s-verify-" + m.VM
 		idx := []int{0}
 		for _, e := range m.Extra {

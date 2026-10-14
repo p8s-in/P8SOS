@@ -1064,8 +1064,8 @@ func (h *HA) workerTick(ctx context.Context) {
 	if lease.IsZero() || len(names) == 0 || sec <= 0 || h.now().Sub(lease) < time.Duration(sec)*time.Second {
 		return
 	}
-	if h.C.M.ClusterSize() >= 3 {
-		// with 3+ servers a majority decides: on the majority side the VMs
+	if h.C.M.Voters() >= 3 {
+		// with 3+ voters (servers, or 2 servers and a witness) a majority decides: on the majority side the VMs
 		// keep running (a new master takes over); a cut-off server switches off
 		if h.gatewayOK(ctx) && h.C.M.ReachesMajority(ctx) {
 			return

@@ -10,6 +10,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -33,6 +34,7 @@ import (
 	"p8sos/internal/audit"
 	"p8sos/internal/backup"
 	"p8sos/internal/billing"
+	"p8sos/internal/browse"
 	"p8sos/internal/ceph"
 	"p8sos/internal/cloud"
 	"p8sos/internal/cloudinit"
@@ -42,6 +44,7 @@ import (
 	"p8sos/internal/execx"
 	"p8sos/internal/firewall"
 	"p8sos/internal/guard"
+	"p8sos/internal/hostdevs"
 	"p8sos/internal/hostinfo"
 	"p8sos/internal/ippool"
 	"p8sos/internal/isos"
@@ -112,6 +115,7 @@ func serve(args []string) error {
 	}
 
 	run := execx.System{}
+	dcFirewall := &firewall.GlobalStore{Path: filepath.Join(cfg.DataDir, "firewall-dc.json")}
 	// network storages (NFS shares, iSCSI disks with a ZFS pool for VM disks)
 	nets := &storages.Manager{Run: run, File: filepath.Join(cfg.DataDir, "storages.json")}
 	// Ceph across the cluster's servers (Server → Ceph): VM disks every server sees
@@ -139,11 +143,13 @@ func serve(args []string) error {
 		ISOs:          &isos.Library{Dir: cfg.ISODir, Shelves: nets.ISOShelves},
 		ImportDir:     filepath.Join(cfg.DataDir, "import"),   // Proxmox backups, disk images to import
 		ReplicaDir:    filepath.Join(cfg.DataDir, "replicas"), // copies of other servers' VMs (high availability)
+		StateDir:      filepath.Join(cfg.DataDir, "vmstate"),  // memory of snapshots "with RAM"
+		HostDevs:      &hostdevs.Lister{Run: run},             // PCI/USB passthrough
 		Pools:         pools,
 		ScheduleFile:  filepath.Join(cfg.DataDir, "backup-schedule.json"),
 		FirewallFile:  filepath.Join(cfg.DataDir, "firewall.json"),
 		Firewall: func(ctx context.Context, vms []firewall.VM) error {
-			return firewall.Apply(ctx, run, vms)
+			return firewall.ApplyWith(ctx, run, vms, dcFirewall.Load()) // with the datacenter's sets, blocks and rules
 		},
 	}
 	if cfg.LANBridge != "" { // tagged VLANs on the home / datacenter network
@@ -383,22 +389,24 @@ func serve(args []string) error {
 			in.Storages = svc.Storages()
 			return in
 		},
-		UI:       web.Handler(),
-		Users:    &users.Store{Path: filepath.Join(cfg.DataDir, "users.json")},
-		Sessions: sessions,
-		Tunnel:   tun,
-		Pools:    pools,
-		Cloud:    cloudStore,
-		Billing:  &billing.Store{Dir: filepath.Join(cfg.DataDir, "billing")},
-		Mail:     mailer,
-		Support:  &support.Store{Path: filepath.Join(cfg.DataDir, "tickets.json")},
-		Audit:    &audit.Log{Path: filepath.Join(cfg.DataDir, "audit.log"), RetainDays: cfg.AuditRetainDays},
-		Issuer:   issuer(),
-		License:  lic,
-		Updates:  upd,
-		CTs:      cts,
-		Offsite:  off,
-		Monitor:  mon,
+		UI:         web.Handler(),
+		Users:      &users.Store{Path: filepath.Join(cfg.DataDir, "users.json")},
+		Shares:     &users.Shares{Path: filepath.Join(cfg.DataDir, "vm-shares.json")}, // per-VM permissions
+		DCFirewall: dcFirewall,
+		Sessions:   sessions,
+		Tunnel:     tun,
+		Pools:      pools,
+		Cloud:      cloudStore,
+		Billing:    &billing.Store{Dir: filepath.Join(cfg.DataDir, "billing")},
+		Mail:       mailer,
+		Support:    &support.Store{Path: filepath.Join(cfg.DataDir, "tickets.json")},
+		Audit:      &audit.Log{Path: filepath.Join(cfg.DataDir, "audit.log"), RetainDays: cfg.AuditRetainDays},
+		Issuer:     issuer(),
+		License:    lic,
+		Updates:    upd,
+		CTs:        cts,
+		Offsite:    off,
+		Monitor:    mon,
 		// root passwords made for new VMs/containers, shown to their owners
 		Creds:         &creds.Store{File: filepath.Join(cfg.DataDir, "credentials.json")},
 		AutoPasswords: cfg.AutoRootPasswordsOn(),
@@ -510,7 +518,7 @@ func serve(args []string) error {
 		}}
 	// no single master: every server keeps the master's settings and can take over
 	clu.DataDir = cfg.DataDir
-	clu.BookFiles = []string{"users.json", "cluster/ha.json", "ippools.json", "security.json", "ldap.json", "sso.json"}
+	clu.BookFiles = []string{"users.json", "vm-shares.json", "firewall-dc.json", "cluster/ha.json", "ippools.json", "security.json", "ldap.json", "sso.json"}
 	clu.OnRoleChange = func(role string) {
 		log.Warn("cluster role changed; restarting p8sd to take it up", "role", role)
 		go func() { time.Sleep(2 * time.Second); os.Exit(3) }() // systemd starts it again (VMs keep running)
@@ -575,7 +583,31 @@ func serve(args []string) error {
 		}
 	}
 	clu.CertFile = cfg.TLSCert // pinned by the other cluster servers
-	go func() {                // answer "which P8S OS servers are on this network?" (UDP 51821)
+	// Let's Encrypt (scripts/acme.sh) for its domain; the own cert for the rest
+	certs := &tlsutil.Certs{DefaultCert: cfg.TLSCert, DefaultKey: cfg.TLSKey,
+		ACMECert: filepath.Join(cfg.DataDir, "tls", "acme.crt"), ACMEKey: filepath.Join(cfg.DataDir, "tls", "acme.key")}
+	apiSrv.CertInfo = certs.Info
+	// file-level restore: backups opened read-only, closed after an hour
+	if svc.Backups != nil {
+		br := &browse.Manager{Run: run, Backups: svc.Backups, Dir: filepath.Join(cfg.DataDir, "browse"),
+			Dataset: filepath.Dir(cfg.VMDataset) + "/p8s-browse"}
+		br.Cleanup(ctx)
+		apiSrv.Browse = br
+		go func() {
+			t := time.NewTicker(5 * time.Minute)
+			defer t.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+					br.Expire()
+				}
+			}
+		}()
+	}
+	srv.TLSConfig = &tls.Config{GetCertificate: certs.GetCertificate, MinVersion: tls.VersionTLS12}
+	go func() { // answer "which P8S OS servers are on this network?" (UDP 51821)
 		if err := clu.Respond(ctx, version); err != nil {
 			log.Warn("cluster discovery off", "err", err)
 		}
@@ -584,7 +616,7 @@ func serve(args []string) error {
 	go func() {
 		log.Info("p8sd listening", "addr", cfg.Listen, "version", version, "tls", cfg.TLSCert != "")
 		if cfg.TLSCert != "" {
-			errc <- srv.ListenAndServeTLS(cfg.TLSCert, cfg.TLSKey)
+			errc <- srv.ListenAndServeTLS("", "") // certificates from certs.GetCertificate
 		} else {
 			errc <- srv.ListenAndServe()
 		}

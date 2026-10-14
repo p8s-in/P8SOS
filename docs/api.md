@@ -75,7 +75,8 @@ customers only a reference (`ref 1a2b3c4d`); the details are in p8sd's log.
 | `POST /verify`, `/verify/resend` | anyone | confirm email with the link's code (→ token) / send it again |
 | `POST /password/forgot`, `/password/reset` | anyone | email a reset link / `{"code","password"}` |
 | `PUT /me/profile` | user | email, full_name, phone, company, gstin, address |
-| `GET/POST /me/tokens`, `DELETE /me/tokens/{id}` | user (signed in) | personal API tokens `p8sk_…` |
+| `GET/POST /me/tokens`, `DELETE /me/tokens/{id}` | user (signed in) | personal API tokens `p8sk_…`. `POST {"name","read_only":true,"vms":["web1"],"days":30}` (or `"expires_at"`): a scoped token — read-only answers `403` to changes; a VM-scoped token sees only `GET /vms` (filtered), `/vms/{name}/…` of its VMs and `GET /me`; expired tokens get `401` |
+| `GET/PUT /vms/{name}/shares` | owner or staff | per-VM permissions `{"user":"bob","level":"user"\|"viewer"\|""}`; shared users see the VM in `GET /vms` with `"access"`. **user**: power, console, password, snapshots, backups, eject, screenshots; reads everything else. **viewer**: GET only. Never: delete, resize, hardware, owner, sharing further |
 | `GET /plans`; `PUT/DELETE /plans/{id}` | all; admin | sizes and monthly prices (`hourly` = price/730 rounded up) |
 | `POST /vms` with `"plan"` | customer, admin | size from the plan; billing starts; needs a day of credit |
 | `GET /billing` (`?user=` admin) | signed in | balance, hourly burn, billed servers, suspended, payment info |
@@ -279,15 +280,19 @@ A snapshot is a ZFS snapshot of the VM's disks (instant, copy-on-write; all disk
 same moment). Only the disks are saved — CPU/RAM settings are not. At most 30 per VM.
 
 `GET /vms/{name}/snapshots` → `200 {"snapshots":[{"name":"before-upgrade","created_at":"2026-10-12T10:00:00Z","used_bytes":1048576}]}`
-(oldest first; `used_bytes` = space only that snapshot holds).
+(oldest first; `used_bytes` = space only that snapshot holds; `"ram":true, "ram_bytes":N` when the
+VM's memory was saved with it).
 
 `POST /vms/{name}/snapshots` `{"name":"before-upgrade"}` → `201` snapshot. Name optional
 (default `snap-YYYYMMDD-HHMMSS`), `^[a-z0-9][a-z0-9._-]{0,39}$`. Works on running VMs:
 the guest's filesystems are frozen for the instant of the snapshot when the guest agent
-answers (clean snapshot), otherwise it is crash-consistent.
+answers (clean snapshot), otherwise it is crash-consistent. `{"ram":true}` also saves the running
+VM's memory (`virsh save`, then the ZFS snapshot, then `virsh restore`): the VM pauses about 1 s per GB
+of RAM; `409` if it isn't running or there isn't RAM + 512 MB free in `data_dir/vmstate`.
 
 `POST /vms/{name}/snapshots/{snap}/rollback` `{"destroy_newer":true}` → `200` VM. The VM
-must be stopped. ZFS can only roll back to the newest snapshot, so rolling back further
+must be stopped — except for a snapshot with RAM: then a running VM is powered off, the disks go
+back and the VM resumes from the saved memory (state `running`). ZFS can only roll back to the newest snapshot, so rolling back further
 deletes the newer ones — without `destroy_newer` that is a `409` listing them.
 
 `DELETE /vms/{name}/snapshots/{snap}` → `204`.
@@ -362,7 +367,7 @@ Details: [alerts.md](alerts.md).
 ### Importing VMs (admins)
 
 `GET /imports`, `PUT /imports/{file}` (upload), `GET /imports/{file}/plan`, `POST /imports/{file}/start`
-(→ job), `DELETE /imports/{file}`. Proxmox vzdump backups (`.vma[.zst|.lzo|.gz]`) and disk images
+(→ job), `DELETE /imports/{file}`. Proxmox vzdump backups (`.vma[.zst|.lzo|.gz]`), OVA appliances (`.ova`: settings from the OVF, every disk; the first is the system disk) and disk images
 (qcow2, vmdk, vhd/vhdx, vdi, raw). Details: [import.md](import.md).
 
 ### Subscription (admins)
@@ -468,6 +473,18 @@ Names are shared with VMs (a container and a VM can't have the same name). See [
 | GET | `/api/v1/node/ct-images` | every container image on the image server: `{"images":[{"id":"kali/current","label":"Kali current","installed":false}]}` (cached 1 h); add one with task `ct-image` (arg `DIST/RELEASE`) |
 | POST | `/api/v1/vms/{name}/nics` | staff: another network card `{"network":"nat"\|"lan","vlan":N}` → VM + `note` (201; plugged in live) |
 | DELETE | `/api/v1/vms/{name}/nics/{mac}` | staff: remove a card (not the first; unplugged live) |
+| POST | `/api/v1/vms/{name}/storage` | staff: move the (shut down) VM's disks `{"storage":"ceph"\|"local"\|NAS,"drop_snapshots":true}` → job (202). `409` running / has snapshots without `drop_snapshots` |
+| POST | `/api/v1/backups/{name}/{id}/browse` | backup owner or staff: open it read-only for single files → session `{"id","state":"preparing"\|"ready"\|"failed","parts":[{"id":"d0p1","fs","label","size","error"}],"expires_at"}` (202; max 4 open, 1 hour) |
+| GET | `/api/v1/browse/{sid}`, `/browse/{sid}/ls?part=&path=`, `/browse/{sid}/file?part=&path=` | the session; a folder `{"entries":[{name,dir,link,size,mod_time}]}`; a file (download). Symbolic links never lead out of the backup's filesystem |
+| DELETE | `/api/v1/browse/{sid}` | close it (unmount, delete the scratch copy) |
+| PUT | `/api/v1/vms/{name}/limits` | staff: speed limits `{"read_mbs","write_mbs","iops","net_down_mbit","net_up_mbit"}` (0 = none; each disk / each card) → VM with `io_limits`; a running VM gets them at once |
+| POST | `/api/v1/vms/{name}/hotplug` | staff: `{"on":true,"max_vcpus":8,"max_mib":16384}` (0 = twice now; VM shut down) → VM with `hot_cpus`, `hot_mem_mib`. Then `PATCH /vms/{name}` raises vCPUs / RAM of the running VM up to them (RAM in 128 MiB steps, not lower while it runs) |
+| GET/POST/DELETE | `/api/v1/node/acme` | admin: Let's Encrypt for the dashboard. GET → `{"cert":{names,not_after,issuer}\|null,"request":…}`; POST `{"domain","email","method":"http"\|"cloudflare","cf_token"}` → task (202); DELETE → task (back to the own certificate). Served by SNI: the domain gets it, connections by IP keep the pinned own certificate |
+| GET/PUT | `/api/v1/firewall` | datacenter firewall (GET staff/auditors, PUT admins): `{"sets":{"office":["203.0.113.0/24"]},"block":["192.0.2.66","+bad"],"allow":[{proto,ports,source,comment}]}`; a VM rule's `source` may be `+setname`. The master sends it to every worker → `{"firewall":…,"note"}` |
+| GET | `/api/v1/prometheus` | staff/auditors: Prometheus text format (`p8s_up`, `p8s_host_*`, `p8s_vm_*{vm,server,owner}`) — scrape with an API token as bearer |
+| GET | `/api/v1/vms/{name}/devices` | staff: passthrough — `{"pci":[…],"usb":[…],"available":{"iommu":bool,"cpu":"intel","pci":[{"addr","class","name","kind","driver","group","others","warn","bridge"}],"usb":[{"id","name","port"}]},"used_by":{dev: vm}}` (devices of the VM's server) |
+| POST | `/api/v1/vms/{name}/devices` | admin: `{"kind":"pci","id":"0000:01:00.0"}` (VM shut down; its IOMMU group comes along) or `{"kind":"usb","id":"046d:c52b"}` (live) → VM + `note` (201). `409` IOMMU off / VM running / device in another VM |
+| DELETE | `/api/v1/vms/{name}/devices/{kind}/{id}` | admin: take it away (PCI: VM shut down; USB: unplugged live) |
 | POST | `/api/v1/node/rename` | `{"name":"p8s-vm1"}` → task `rename` (202): /etc/hosts, hostname, p8sd restart; VMs keep running |
 | POST | `/api/v1/cluster/nodes/{id}/rename` | master: `{"name"}` → asks that worker to rename itself (202) |
 | POST | `/api/v1/node/templates/custom` | VM template from any cloud image: `{"name","label","url","login","variant","checksum"}` (checksum = SUMS file URL, `sha256:HEX`, `sha512:HEX` or empty) → task `template-url` (202) |

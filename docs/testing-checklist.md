@@ -235,7 +235,7 @@ hardware**. Work through it on the new machine; tick each line and note problems
 - [ ] Protect it (HA), switch its server off: it starts on another server from the same disk (no data lost); switch the old server on: its old definition is gone, the disk still there
 - [ ] Reboot a server with Ceph VMs on autostart: they start (p8s-rbd opened their disks first)
 - [ ] Delete the VM: `rbd ls p8s-vms` no longer lists its disks
-- [ ] Backup of a Ceph VM: refused with "use snapshots"
+- [ ] Backup of a Ceph VM: works (a disk-image backup, "from Ceph"); Verify passes; restore over it and as a new VM (lands on Ceph); off-site copy of it works
 - [ ] Switch one Ceph server off: alert "Ceph needs attention", VMs on Ceph keep running; back on → healthy
 - [ ] Remove a disk: first press = taken out (data moves), second press when healthy = removed and wiped
 - [ ] `p8 ceph`, `p8 ceph osd n2 /dev/sdb`, `p8 create x --storage ceph` work from the command line
@@ -311,6 +311,114 @@ hardware**. Work through it on the new machine; tick each line and note problems
 - [ ] Stop p8sd on the worker: within about 30 s its dot turns red (offline); start it: green again (amber "connecting…" right after joining)
 - [ ] Click a worker in the sidebar: the Server page opens on Cluster (Shell / Rename / Remove for it)
 - [ ] Standalone server: no extra entries, sidebar as before
+
+## 28. Memory snapshots (snapshot with RAM)
+
+- [ ] Running Debian VM: open an SSH session and run `top`; Manage → Snapshots → tick **Include RAM** → Take snapshot: the VM pauses a few seconds, the list shows "with RAM" and the memory size
+- [ ] Change something in the VM (create a file, close `top`); **Roll back** while it runs: the VM is back with `top` still running and the file gone, without a reboot (`uptime` continues from before)
+- [ ] Windows VM: same with Notepad open
+- [ ] Stopped VM: the RAM box is greyed out; a normal snapshot still rolls back only when stopped
+- [ ] Delete the snapshot: its file in /var/lib/p8s/vmstate/p8s-NAME/ is gone; delete the VM: the folder is gone
+- [ ] Not enough free space (fill the disk or use a VM with more RAM than free space): clear refusal, the VM keeps running
+- [ ] `p8 snap web1 test --ram`, `p8 snaps web1` (RAM column), `p8 rollback web1 test`
+- [ ] Worker server: the same from the master's dashboard
+
+## 29. PCI / GPU / USB passthrough (laptop: NVIDIA GTX 1650 + a USB stick)
+
+- [ ] Manage → Hardware → PCI and USB devices on a VM: IOMMU "off" note with **Turn on IOMMU**; press it, reboot the server, the note is gone (`p8 iommu status`; else VT-d in the BIOS)
+- [ ] The list groups the devices (graphics, network, disk controllers, USB); the laptop's own Intel graphics and its network card show ⚠ and ask twice; bridges aren't listed
+- [ ] Shut a Windows/Linux VM down; give it the NVIDIA card: its sound part (same IOMMU group) comes along; start: in the VM `lspci` shows it, the NVIDIA driver installs; stop: `lspci -k` on the server shows the host driver again
+- [ ] While the VM runs: PCI picks are greyed out ("shut the VM down first"); **Take away** only when stopped
+- [ ] Plug in a USB stick; give it to a running VM: it appears in the VM at once; take it away: gone at once
+- [ ] A USB device that isn't plugged in: clear note; the VM won't start until it is plugged in or taken away
+- [ ] The same device for a second VM: refused, names the VM that has it
+- [ ] VM with a device: Move / Move while running refused with the reason; clone has no devices; Include RAM snapshot refused
+- [ ] Operator: sees the list, can't give devices (admin only); customer: no section
+- [ ] `p8 devices web1`, `p8 dev-add web1 usb 0781:5567`, `p8 dev-rm web1 usb 0781:5567`, `sudo p8 iommu on`
+- [ ] VM on the worker (p8s-vm1): its own devices are listed (from that server)
+
+## 30. Speed limits, hot-plug, Prometheus
+
+- [ ] Manage → Hardware → Speed limits on a running VM: write 50 MB/s → inside `dd if=/dev/zero of=t bs=1M count=500 oflag=direct` shows ~50 MB/s at once; empty the field + Save: full speed again
+- [ ] Network out 20 Mbit/s: `iperf3`/a download from the VM tops out near 20 Mbit/s; the limit stays after a restart
+- [ ] Customer: limit fields greyed out, API `PUT /limits` → 403
+- [ ] Hot-plug: shut the VM down, tick CPU + RAM hot-plug, Save (empty = twice now), start; Resize to 4 CPUs / more RAM while it runs: Apply works without a restart; inside `nproc` and `free -m` show the new values (Debian onlines them by itself)
+- [ ] Lowering RAM or growing the disk while it runs: clear refusal; going above the ceiling: refusal naming the ceiling
+- [ ] Windows Server VM: more CPUs while running appear in Task Manager
+- [ ] `p8 hotplug web1 on cpus=8`, `p8 resize web1 cpus=6` (no shutdown asked), `p8 limits web1 write=100`, `p8 limits web1 off`
+- [ ] Prometheus: `curl -k -H "Authorization: Bearer $(cat ~/.p8s-token)" https://127.0.0.1:8006/api/v1/prometheus` lists `p8s_up 1`, `p8s_host_*` and one `p8s_vm_up` per VM (master: also the worker's VMs); add it to Prometheus/Grafana and graph `p8s_vm_cpu_percent`
+
+## 31. Scoped API tokens and sharing a VM
+
+- [ ] Your name → API tokens: make one **Read-only**: `curl -k -H "Authorization: Bearer p8sk_…" https://SERVER:8006/api/v1/vms` works, `-X POST …/vms/web1/stop` → 403 "read-only"
+- [ ] A token for **only web1**: `GET /vms` lists only web1; `GET /vms/db1` and `GET /users` → 403
+- [ ] **Valid for 1 day**: works now; the list shows "until …"; after the date → 401
+- [ ] Customer alice shares her VM with bob as **user** (Manage → Options → Shared with): bob sees it in his list with a note on its Summary, can start/stop/console/snapshot, gets 403 on Delete / Resize / adding disks, and can't share it further
+- [ ] alice shares with carol as **viewer**: carol sees it, every button that changes something answers 403
+- [ ] Stop sharing: bob doesn't see it any more; deleting the VM removes its shares
+- [ ] `p8 share shop bob user`, `p8 shares shop`, `p8 share shop bob off`
+- [ ] Cluster: share a VM on the worker from the master: works the same
+
+## 32. Let's Encrypt certificate
+
+- [ ] A domain (e.g. a free duckdns.org name) points to your public IP; forward TCP 80 to the laptop; Server page → Network → HTTPS certificate → Get certificate: the task log shows certbot, then "✔"; the card shows the domain and "valid 89 more days"
+- [ ] `https://DOMAIN:8006` (port 8006 forwarded too, or from inside with the name in the hosts file) opens with no browser warning; `https://192.168.0.106:8006` still shows the old warning (own certificate)
+- [ ] The cluster keeps working afterwards (worker online; Cluster page)
+- [ ] Cloudflare way: domain at Cloudflare, token with DNS edit → works without any forwarded port
+- [ ] `sudo certbot renew --dry-run` succeeds; `systemctl list-timers certbot.timer` is active
+- [ ] **Remove** / `p8 cert off`: back to the own certificate within a minute; `p8 cert` shows the state
+- [ ] Wrong domain (not pointing here): the task fails with certbot's explanation; nothing changes
+
+## 33. Move disks between storages, Ceph backups
+
+- [ ] VM on local ZFS (shut down), Hardware → Disk storage → ceph → Move disks: the job copies the disks (Tasks bar), the VM starts from Ceph (`p8 show NAME` storage ceph), `zfs list` has no old zvol any more
+- [ ] With snapshots: refused until "delete its snapshots" is ticked
+- [ ] Back to local; also a VM with an extra disk (both move); a NAS/SAN storage if you have one
+- [ ] `p8 storage web1 ceph` (asks to shut it down, starts it again)
+- [ ] Ceph VM → Back up now: "disk image(s) from Ceph"; Verify passes; Restore over it; Copy as new VM: it lands on Ceph
+- [ ] A Ceph backup restored on a server without Ceph: it lands on local ZFS and boots
+
+## 34. File-level restore
+
+- [ ] Backups → **Files** on a Debian VM's backup: "Opening…", then tabs for its filesystems (root ext4, EFI vfat); browse /etc, Download /etc/hostname: the file is right
+- [ ] An incremental backup (not the first): opens too (its chain is restored)
+- [ ] Windows VM backup: the NTFS partition opens; download a file from C:\Users
+- [ ] A Ceph VM's backup (disk image) opens too
+- [ ] Symbolic links (e.g. /etc/os-release → ../usr/lib/os-release) don't lead out of the backup (no host files)
+- [ ] Close: `zfs list | grep p8s-browse` and `losetup -a` show nothing left; without Close it closes after an hour; after a p8sd restart leftovers are removed
+- [ ] Customer: only their own VMs' backups; another user's session id → 404
+- [ ] `p8 files web1 ID /etc`, `p8 files web1 ID /etc/hostname` (saved in the current folder)
+
+## 35. OVA import
+
+- [ ] Export a VM from VirtualBox (File → Export Appliance, OVF 2.0, .ova); upload it under Storage → Import VMs: Check shows its name, CPUs, RAM, disks; Import: it boots
+- [ ] An OVA from a VMware appliance (e.g. a vendor's virtual appliance): firmware EFI and vmxnet3 come along
+- [ ] An OVA with two disks: the second is a data disk (Hardware → Extra disks)
+- [ ] A Windows OVA: SATA disk + e1000e, boots; then install virtio drivers
+- [ ] The unpacked .vmdk files are gone from /var/lib/p8s/import afterwards (only the .ova stays until you delete it)
+
+## 36. Datacenter firewall and IP sets
+
+- [ ] Settings → Datacenter firewall: an IP set `office: <your PC's IP>`; a VM's firewall on with rule tcp 22 from `+office`: SSH from your PC works, from another PC (or phone hotspot) not
+- [ ] Allowed rule for every VM: tcp 9100 from `+office` → every VM with its firewall on accepts it (`nc -zv VM 9100` with a listener)
+- [ ] Blocked: your phone's IP → the phone can't reach any VM (ping / web), and VMs can't reach the phone; remove it: works again
+- [ ] Saved on the master: `sudo nft list table bridge p8s_fw` on the worker shows the same sets and blocks
+- [ ] A VM rule using a set that was deleted: the rule is skipped (`# skipped` in nft), nothing breaks
+- [ ] Operator/auditor: can see it, can't save (admin only)
+
+## 37. Witness (two-server tie-breaker)
+
+Needs a third always-on Linux box (a Raspberry Pi, another PC, a small VM on your Windows PC with bridged network — not p8s-node or p8s-vm1).
+
+- [ ] Server → Cluster → Add a witness… → download the right p8s-witness; on the box `sudo ./p8s-witness-* install` prints address, key, fingerprint; `systemctl status p8s-witness` is running
+- [ ] Wrong key or wrong fingerprint in the dashboard → refused with a clear message; right values → "Witness … online", `p8 cluster` says "2 servers + a witness"
+- [ ] `p8 cluster witness` on the worker also shows it online (the setting travelled in the book)
+- [ ] Unplug the worker's network from the master only (or `nft`-block 10.250.0.1 on the worker): after 2 minutes the worker is still a worker (the witness still hears the master)
+- [ ] Switch the master (p8s-node) off: within about a minute p8s-vm1 says it is the master (term +1); an HA-protected VM starts on it
+- [ ] Switch p8s-node back on: it becomes a worker of p8s-vm1 by itself
+- [ ] Stop the witness (`systemctl stop p8s-witness`): the cluster keeps working; the dashboard shows "not answering"; start it again: online
+- [ ] Witness down and the master switched off: the worker does NOT take over (only 1 of 3 votes) — `p8 cluster promote` still works by hand
+- [ ] Remove witness → `p8 cluster` back to "2 servers", no automatic takeover
 
 ## Add new features here as they are built
 

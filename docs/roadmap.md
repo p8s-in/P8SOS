@@ -62,6 +62,17 @@ Each phase ships something usable on its own.
   task bar at the bottom (backups, restores, downloads, off-site copies, server tasks)
 - [x] Off-site backups: folder / S3-compatible / SSH targets, optional encryption, retention per place, bring back ([offsite-backups.md](offsite-backups.md))
 - [x] Several network cards per VM (nat / home network / VLAN, hot-plug, firewall on every card, kept on moves and failover, new MACs on clones)
+- [x] Disk and network speed limits per VM (MB/s, IOPS, Mbit/s; live), CPU and RAM hot-plug (ceilings, live resize)
+- [x] Witness for two-server clusters (like Proxmox's QDevice): `p8s-witness` on a Pi / NAS / VPS is the third vote, so the surviving server takes over by itself (`p8 cluster witness`)
+- [x] Datacenter firewall: IP sets, blocked addresses and rules for every VM on every server
+- [x] OVA import (VMware / VirtualBox appliances: settings from the OVF, all disks)
+- [x] File-level restore: browse a backup (ext4/XFS/Btrfs/FAT/NTFS) and download single files (`p8 files`)
+- [x] Move a VM's disks between storages (local ZFS ↔ NAS/SAN pool ↔ Ceph) and backups of Ceph VMs (disk images; restore onto Ceph or local)
+- [x] Let's Encrypt certificate for the dashboard (port 80 or Cloudflare DNS; auto-renew; the cluster keeps its pinned certificate)
+- [x] Scoped API tokens (read-only, only some VMs, expiry) and per-VM permissions (share a VM as user or viewer)
+- [x] Prometheus export (`/api/v1/prometheus`) for Grafana
+- [x] PCI / GPU / USB passthrough (VFIO, IOMMU groups, warnings for the server's own screen/network/disks, `p8 iommu on`, `p8 dev-add`)
+- [x] Memory snapshots ("include RAM"): the running VM's memory saved with the disk snapshot; rollback resumes it where it was (`p8 snap NAME --ram`)
 - [x] Speed: VM disks with an I/O thread, native AIO and multi-queue; vhost-net multi-queue NICs; host tuning
   (ZFS ARC capped at 10% of RAM, KSM, vhost_net, swappiness 10); faster, flicker-free dashboard polling
 - [x] Editions: Home / Standard / Enterprise / Datacenter (one ISO, the licence key decides)

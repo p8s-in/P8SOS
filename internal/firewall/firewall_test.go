@@ -2,6 +2,7 @@ package firewall
 
 import (
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -114,5 +115,56 @@ func TestRulesCoverEveryCard(t *testing.T) {
 	}
 	if _, err := Rules([]VM{{Name: "x", MAC: "52:54:00:aa:bb:01", MACs: []string{"bad"}, FW: Settings{Enabled: true}}}); err == nil {
 		t.Fatal("bad MAC accepted")
+	}
+}
+
+func TestGlobalFirewall(t *testing.T) {
+	g, err := ValidateGlobal(Global{
+		Sets:  map[string][]string{"office": {"203.0.113.7", "198.51.100.0/24", "2001:db8::/32", "203.0.113.7"}, "bad": {"192.0.2.66"}},
+		Block: []string{"+bad", "100.64.0.1"},
+		Allow: []Rule{{Proto: "tcp", Ports: "9100", Source: "+office", Comment: "monitoring"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(g.Sets["office"]) != 3 || g.Block[1] != "100.64.0.1/32" {
+		t.Fatalf("%+v", g)
+	}
+	for _, bad := range []Global{
+		{Block: []string{"+nope"}},
+		{Block: []string{"0.0.0.0/0"}},
+		{Sets: map[string][]string{"Bad Name": {"1.2.3.4"}}},
+		{Allow: []Rule{{Proto: "tcp", Ports: "22", Source: "+missing"}}},
+	} {
+		if _, err := ValidateGlobal(bad); err == nil {
+			t.Errorf("accepted %+v", bad)
+		}
+	}
+	vms := []VM{{Name: "web1", MAC: "52:54:00:00:00:01", FW: Settings{Enabled: true, Rules: []Rule{{Proto: "tcp", Ports: "22", Source: "+office"}, {Proto: "tcp", Ports: "80"}}}}}
+	out, err := RulesWith(vms, g)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"set ipset_office_4 {", "elements = { 198.51.100.0/24, 203.0.113.7/32 }", "set ipset_office_6 {", "elements = { 2001:db8::/32 }",
+		"ip saddr @ipset_bad_4 counter drop", "ip daddr @ipset_bad_4 counter drop", "ip saddr 100.64.0.1/32 counter drop",
+		"ip saddr @ipset_office_4 meta l4proto tcp th dport 9100 accept", "ip6 saddr @ipset_office_6 meta l4proto tcp th dport 22 accept",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in\n%s", want, out)
+		}
+	}
+	// a VM rule naming a set that's gone: skipped, not an error
+	out, err = RulesWith(vms, Global{})
+	if err != nil || !strings.Contains(out, "# skipped: no IP set +office") {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	// the store
+	st := &GlobalStore{Path: filepath.Join(t.TempDir(), "fw.json")}
+	if _, err := st.Save(g); err != nil {
+		t.Fatal(err)
+	}
+	if l := st.Load(); len(l.Allow) != 1 || l.Allow[0].Source != "+office" {
+		t.Fatalf("%+v", l)
 	}
 }
