@@ -260,6 +260,7 @@ hardware**. Work through it on the new machine; tick each line and note problems
 - [ ] Phone width: ☰ opens the chapter list; tables scroll sideways
 - [ ] `/docs/` works without signing in; "← Dashboard" goes back
 - [ ] Static site: `go run ./cmd/p8s-docs -src docs/guide dist/docs-site` → open `dist/docs-site/index.html` from disk: same pages, links work
+- [ ] Installer finishes all steps; `cat /etc/hostid` on the new system equals the installer's; first start imports tank and bpool without "previously in use from another system"
 - [ ] Installer: make a step fail (e.g. Command line → `zpool create busy ...` on a chosen disk first): the error screen shows the failed step's command and its last lines before the menu
 
 ## Add new features here as they are built

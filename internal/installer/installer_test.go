@@ -499,7 +499,7 @@ func TestRunner(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "Partitioning sda") {
 		t.Fatalf("err = %v", err)
 	}
-	if n > 5 {
+	if n > 6 {
 		t.Fatalf("kept going after the failure (%d commands)", n)
 	}
 	// partitions that never appear

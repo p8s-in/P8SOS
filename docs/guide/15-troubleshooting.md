@@ -10,7 +10,8 @@ Summary: What to do when installing, VMs, storage or the cluster go wrong.
 | Machine doesn't boot from the USB stick | Firmware: Secure Boot off, USB boot on; Rufus in **DD Image** mode |
 | ZFS module errors | Secure Boot must be **off** |
 | Installer: *the answers must say "erase": true* | Fixed in newer ISOs: build the ISO from the latest code |
-| Installer stops at *Closing the pools: exit status 1* (step 66/66) | Fixed in newer ISOs: rebuild and reinstall. If it still appears, photograph the screen the installer shows (it prints what the failing step said) |
+| Installer stops at *Closing the pools: exit status 1* (last step) | Fixed in newer ISOs: rebuild and reinstall. If it still appears, the screen now lists what keeps the pool busy — photograph it |
+| VirtualBox: *The virtual machine failed to boot* | The install didn't finish, so the disks have no boot loader. Put the ISO back in the drive and install again |
 | *first-boot setup FAILED* on the login screen | `sudo tail -50 /var/log/p8s-firstboot.log`; reboot retries; needs internet |
 | `No hardware virtualization` | Firmware: enable VT-x / AMD-V. VirtualBox: Nested VT-x on, Hyper-V off in Windows |
 | VirtualBox: Nested VT-x greyed out | Windows: Memory integrity off, Hyper-V off, `bcdedit /set hypervisorlaunchtype off`, restart |

@@ -77,6 +77,7 @@ dkms
 grub-efi-amd64-bin
 grub-pc-bin
 efibootmgr
+psmisc
 mokutil
 dosfstools
 gdisk

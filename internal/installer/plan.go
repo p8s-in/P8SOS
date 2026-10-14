@@ -220,6 +220,9 @@ func (p *Plan) Steps() []Step {
 	soft("Turning off swap", "swapoff", "-a")
 	cmd("Loading ZFS", "modprobe", "zfs")
 	cmd("Loading ZFS", "mkdir", "-p", "/etc/zfs")
+	// the pools remember the host id of the machine that has them open; the new
+	// system gets the same id (below), so it imports them as its own on the first start
+	cmd("Host id for the pools", "bash", "-c", "[ -s /etc/hostid ] || zgenhostid")
 	for _, d := range p.Disks {
 		cmd("Wiping "+d.Name, "bash", "-c", wipeScript(d.Path))
 	}
@@ -280,6 +283,7 @@ func (p *Plan) Steps() []Step {
 	cmd("Mounting the EFI partition", "mkdir", "-p", t+"/boot/efi", t+"/etc/zfs")
 	cmd("Mounting the EFI partition", "mount", p.Disks[0].Part(2), t+"/boot/efi")
 	cmd("Saving the pool list", "cp", "/etc/zfs/zpool.cache", t+"/etc/zfs/zpool.cache")
+	cmd("Saving the host id", "cp", "/etc/hostid", t+"/etc/hostid")
 	for _, m := range []string{"dev", "proc", "sys"} {
 		cmd("Preparing the new system", "mount", "--make-private", "--rbind", "/"+m, t+"/"+m)
 	}
@@ -365,7 +369,7 @@ func (p *Plan) Steps() []Step {
 	}
 	// programs started inside the new system (by package scripts) still hold it: stop them
 	soft("Stopping programs in the new system", "bash", "-c", killInTarget(t))
-	soft("Unmounting", "bash", "-c", "sync; umount -R "+shq(t)+" || { sleep 3; umount -R "+shq(t)+"; } || umount -Rl "+shq(t))
+	soft("Unmounting the new system", "bash", "-c", unmountScript(t))
 	cmd("Closing the pools", "bash", "-c", exportScript)
 	return s
 }
@@ -478,17 +482,65 @@ Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
 
 // killInTarget stops processes whose root or working directory is inside the target.
 func killInTarget(t string) string {
-	q := shq(t)
-	return "for p in /proc/[0-9]*; do r=$(readlink \"$p/root\" 2>/dev/null); c=$(readlink \"$p/cwd\" 2>/dev/null); " +
-		"case \"$r|$c\" in " + q + "*|*\"|\"" + q + "*) echo \"stopping ${p#/proc/} $(cat $p/comm)\"; kill \"${p#/proc/}\" 2>/dev/null;; esac; done; " +
-		"sleep 2; mountpoint -q " + q + " && fuser -km " + q + " 2>/dev/null; true" // only the new system's file system, never the installer's own
+	return fmt.Sprintf(holdersScript, shq(t)) + `
+for sig in TERM KILL; do
+  pids=$(holders)
+  [ -z "$pids" ] && break
+  for p in $pids; do echo "stopping $p $(cat "/proc/$p/comm" 2>/dev/null) ($sig)"; kill -$sig "$p" 2>/dev/null; done
+  sleep 2
+done
+true`
 }
 
-// exportScript closes the pools so the new system imports them cleanly; if
-// something still holds them, it forces it (ZFS writes everything out first).
+// holdersScript defines holders(): the processes (not this shell) whose root,
+// working directory, program, open files or mapped files are below %s, read
+// from /proc (the installer has no fuser). The installer's own files are never
+// below the new system's folder.
+const holdersScript = `T=%s
+holders() {
+  for d in /proc/[0-9]*; do
+    p=${d#/proc/}
+    [ "$p" = "$$" ] && continue
+    hit=
+    for l in "$d/root" "$d/cwd" "$d/exe" "$d"/fd/*; do
+      case "$(readlink "$l" 2>/dev/null)" in "$T"|"$T"/*) hit=1; break;; esac
+    done
+    [ -z "$hit" ] && grep -q " $T/" "$d/maps" 2>/dev/null && hit=1
+    [ -n "$hit" ] && echo "$p"
+  done
+}
+`
+
+// unmountScript unmounts everything below the new system's folder, deepest
+// first, without "lazy" unmounts (a lazily unmounted ZFS file system keeps its
+// pool busy); lazy only as the very last resort for non-ZFS mounts.
+func unmountScript(t string) string {
+	return fmt.Sprintf(holdersScript, shq(t)) + `sync
+below() { awk -v t="$T" '$2==t || index($2, t"/")==1 {print $2}' /proc/self/mounts | sort -r; }
+for _ in 1 2 3 4 5; do
+  [ -z "$(below)" ] && exit 0
+  for m in $(below); do umount "$m" 2>/dev/null; done
+  [ -z "$(below)" ] && exit 0
+  for p in $(holders); do kill -KILL "$p" 2>/dev/null; done
+  sleep 2
+done
+echo "still mounted:"; below
+for m in $(below); do
+  if [ "$(awk -v m="$m" '$2==m {print $3}' /proc/self/mounts | tail -1)" = zfs ]; then zfs unmount -f "$m" 2>&1 || umount -f "$m"; else umount -l "$m"; fi
+done
+[ -z "$(below)" ]`
+}
+
+// exportScript closes the pools so the new system imports them cleanly. If
+// one stays busy it says why (mounts, holders, datasets) and fails: the new
+// system shares this machine's host id, so it still imports a pool that wasn't
+// closed, but a busy pool means something is wrong and must be looked at.
 const exportScript = `zfs unmount -a 2>/dev/null
-for _ in 1 2 3 4 5 6 7 8 9 10; do zpool export -a && exit 0; sleep 2; done
-echo "pools still busy; open files:"; fuser -vm /mnt 2>&1 | head -20
-zpool export -f -a && exit 0
-zpool list -H -o name | while read -r p; do zpool export -f "$p"; done
+for _ in 1 2 3 4 5 6 7 8 9 10; do zpool export -a 2>/dev/null && exit 0; sleep 2; done
+zpool export -a && exit 0
+echo "== mounts of the pools:"; awk '$3=="zfs"' /proc/self/mounts
+echo "== datasets:"; zfs list -H -o name,mounted,mountpoint 2>&1 | head -20
+echo "== volumes in use:"; find /dev/zvol -maxdepth 3 2>&1 | head
+echo "== programs using the new system:"; for d in /proc/[0-9]*; do for l in "$d/root" "$d/cwd" "$d/exe"; do case "$(readlink "$l" 2>/dev/null)" in /mnt|/mnt/*) echo "${d#/proc/} $(cat "$d/comm" 2>/dev/null) $(readlink "$l")"; break;; esac; done; done
+for p in $(zpool list -H -o name 2>/dev/null); do zpool export -f "$p"; done
 [ -z "$(zpool list -H -o name 2>/dev/null)" ]`
