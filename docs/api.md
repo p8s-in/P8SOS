@@ -466,6 +466,8 @@ Names are shared with VMs (a container and a VM can't have the same name). See [
 | POST | `/api/v1/node/tasks` | `{"kind":"template","arg":"ubuntu-24.04"}` · `ct-template` (arg e.g. debian-13) · `storage-grow` · `lan-setup` · `os-check` · `os-upgrade` · `reboot` · `zfs-cache` (arg MiB or `auto`) · `net-check` · `net-repair` (202; 409 while another runs) |
 | GET | `/api/v1/node/tasks` / `/api/v1/node/tasks/{id}` | task list / one task with its log |
 | GET | `/api/v1/node/ct-images` | every container image on the image server: `{"images":[{"id":"kali/current","label":"Kali current","installed":false}]}` (cached 1 h); add one with task `ct-image` (arg `DIST/RELEASE`) |
+| POST | `/api/v1/node/rename` | `{"name":"p8s-vm1"}` → task `rename` (202): /etc/hosts, hostname, p8sd restart; VMs keep running |
+| POST | `/api/v1/cluster/nodes/{id}/rename` | master: `{"name"}` → asks that worker to rename itself (202) |
 | POST | `/api/v1/node/templates/custom` | VM template from any cloud image: `{"name","label","url","login","variant","checksum"}` (checksum = SUMS file URL, `sha256:HEX`, `sha512:HEX` or empty) → task `template-url` (202) |
 | GET | `/api/v1/node/memory` | where the RAM goes: `mem` (used/guests/system/zfs_cache/cache/free/ksm_saved MiB), `top` programs, `zfs_cache_max_mib` |
 

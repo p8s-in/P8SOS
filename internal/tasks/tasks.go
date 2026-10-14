@@ -26,6 +26,7 @@ const (
 	Template     = "template"     // arg: catalog name, e.g. ubuntu-24.04
 	CTTemplate   = "ct-template"  // container template, arg e.g. debian-13
 	TemplateURL  = "template-url" // VM template from any image address, arg: name (spec in Dir/template-NAME.json)
+	Rename       = "rename"       // arg: the server's new name
 	CTFromImage  = "ct-image"     // container template from any image on the image server, arg: DIST/RELEASE
 	StorageGrow  = "storage-grow" // use the system disk's free space for VMs
 	LANSetup     = "lan-setup"    // bridge VMs onto the home network
@@ -45,7 +46,7 @@ const (
 // Titles for the task log.
 var Titles = map[string]string{
 	Template: "Add OS template", CTTemplate: "Add container template",
-	TemplateURL: "Add OS template from an image address", CTFromImage: "Add container template", StorageGrow: "Grow VM storage", LANSetup: "Set up the home network",
+	TemplateURL: "Add OS template from an image address", Rename: "Rename the server", CTFromImage: "Add container template", StorageGrow: "Grow VM storage", LANSetup: "Set up the home network",
 	OSCheck: "Check for Debian updates", OSUpgrade: "Install Debian updates", Reboot: "Reboot the server",
 	ZFSCache: "Set the ZFS cache limit", NetCheck: "Check the guest network", NetRepair: "Repair the guest network",
 	TailscaleUp: "Connect Tailscale (remote access)", TailscaleOff: "Disconnect Tailscale",
@@ -72,8 +73,9 @@ var (
 )
 
 var (
-	reArg   = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{0,30}$`)
-	reImage = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,30}/[a-z0-9][a-z0-9._-]{0,30}$`)
+	reArg      = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{0,30}$`)
+	reHostname = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+	reImage    = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,30}/[a-z0-9][a-z0-9._-]{0,30}$`)
 )
 
 // SpecPath is where the API puts the description of a template added by address.
@@ -148,6 +150,11 @@ func (m *Manager) command(kind, arg string) ([]string, error) {
 			return nil, fmt.Errorf("%w: no description for template %s", ErrInvalid, arg)
 		}
 		return sh("make-template.sh", "--spec", m.SpecPath(arg), "--register"), nil
+	case Rename:
+		if !reHostname.MatchString(arg) {
+			return nil, fmt.Errorf("%w: server name: lowercase letters, digits and hyphens (not at the start or end), up to 63", ErrInvalid)
+		}
+		return sh("rename.sh", arg), nil
 	case CTFromImage:
 		if !reImage.MatchString(arg) {
 			return nil, fmt.Errorf("%w: image DIST/RELEASE", ErrInvalid)

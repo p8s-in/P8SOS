@@ -173,6 +173,7 @@ install -m 0755 "$REPO/scripts/make-template.sh" /usr/local/share/p8s/make-templ
 install -m 0755 "$REPO/scripts/storage.sh" /usr/local/share/p8s/storage.sh
 install -m 0755 "$REPO/scripts/os-upgrade.sh" /usr/local/share/p8s/os-upgrade.sh
 install -m 0755 "$REPO/scripts/make-ct-template.sh" /usr/local/share/p8s/make-ct-template.sh
+install -m 0755 "$REPO/scripts/rename.sh" /usr/local/share/p8s/rename.sh
 install -m 0755 "$REPO/scripts/tune.sh" /usr/local/share/p8s/tune.sh
 install -m 0755 "$REPO/scripts/netcheck.sh" /usr/local/share/p8s/netcheck.sh
 install -m 0755 "$REPO/scripts/tailscale.sh" /usr/local/share/p8s/tailscale.sh

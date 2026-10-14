@@ -665,6 +665,7 @@ func (m *Manager) NodeStatus(id string) Status {
 
 // Poll asks every worker for its capacity (the master runs it every few seconds).
 func (m *Manager) Poll(ctx context.Context) {
+	m.refreshNames(ctx, "", "")
 	hs := m.Handshakes(ctx)
 	for _, n := range m.Workers() {
 		var c Capacity
@@ -695,8 +696,48 @@ func (m *Manager) Poll(ctx context.Context) {
 			s.Online, s.Error, s.Capacity, s.Seen = true, "", c, m.now().UTC().Format(time.RFC3339)
 		}
 		m.mu.Unlock()
+		if err == nil && c.Hostname != "" && c.Hostname != n.Name {
+			m.refreshNames(ctx, n.ID, c.Hostname)
+		}
 	}
 	m.pushBook(ctx) // every server keeps a copy, so one can take over
+}
+
+// refreshNames keeps the names right after a server was renamed: this
+// server's own (id "") or worker id's.
+func (m *Manager) refreshNames(_ context.Context, id, name string) {
+	if id == "" {
+		if m.Hostname == nil {
+			return
+		}
+		name = m.Hostname()
+	}
+	if name == "" || len(name) > 63 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.load() != nil {
+		return
+	}
+	changed := false
+	if id == "" && m.st.Self.Name != name {
+		if m.Log != nil {
+			m.Log.Info("this server was renamed", "from", m.st.Self.Name, "to", name)
+		}
+		m.st.Self.Name, changed = name, true
+	}
+	for i := range m.st.Nodes {
+		if id != "" && m.st.Nodes[i].ID == id && m.st.Nodes[i].Name != name {
+			if m.Log != nil {
+				m.Log.Info("cluster server renamed", "id", id, "from", m.st.Nodes[i].Name, "to", name)
+			}
+			m.st.Nodes[i].Name, changed = name, true
+		}
+	}
+	if changed {
+		_ = m.save()
+	}
 }
 
 // Loop polls the workers while this server is the master.

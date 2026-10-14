@@ -273,6 +273,16 @@ hardware**. Work through it on the new machine; tick each line and note problems
 - [ ] `p8 templates add-url …`, `p8 ct templates available`, `p8 ct templates add kali/current` work
 - [ ] With no VM running, wait 5 minutes: `systemctl is-active libvirtd p8sd` both active (libvirtd no longer quits when idle); `sudo systemctl restart libvirtd` → p8sd keeps running
 
+## 25. Renaming and removing servers
+
+- [ ] Server page → **Rename** → `p8s-vm1`: task log, dashboard reconnects, header and login prompt (after re-login) say p8s-vm1; `sudo` shows no "unable to resolve host"
+- [ ] In a cluster: rename the master from its Server page → the Cluster list shows the new name within ~15 s
+- [ ] On the master, **Rename** on a worker's row → the worker renames itself; the row shows the new name after a few seconds
+- [ ] **Remove** asks first; afterwards the worker's own dashboard says "stands alone" (it was told); its VMs still run there
+- [ ] Remove a worker that is switched off: removed on the master; when it is back its dashboard still says worker → **Leave the cluster** there works
+- [ ] Add the removed server again with + Add a server: joins as before
+- [ ] `p8 rename`, `p8 cluster rename n2 NAME`, `p8 cluster remove n2` work
+
 ## Add new features here as they are built
 
 (Every new feature adds its own lines above before it counts as done.)

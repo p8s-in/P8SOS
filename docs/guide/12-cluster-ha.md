@@ -11,6 +11,17 @@ Install P8S OS on each machine as usual. The first server is the **master**.
 
 New VMs go to the server with the most free RAM, or the one an admin picks. Each worker has a **>\_ Shell** button in Server → Cluster.
 
+## Renaming and removing servers
+
+| Task | Dashboard | Command |
+|---|---|---|
+| Rename this server | Server page → **Rename** (top right) | `p8 rename NEWNAME` |
+| Rename a worker | On the master: Server → Cluster → **Rename** on its row | `p8 cluster rename n2 NEWNAME` |
+| Remove a worker | On the master: Server → Cluster → **Remove** on its row | `p8 cluster remove n2` |
+| Leave the cluster | On the worker: Server → Cluster → **Leave the cluster** | `p8 cluster leave` |
+
+Give every server its own name before joining (two servers both called `p8s-node` are hard to tell apart). A rename shows on every server within a few seconds; VMs keep running. **Remove** tells the worker to stand alone again; its VMs keep running there but disappear from the master's dashboard (move them first if they should stay in the cluster). An offline worker can't be told: press **Leave the cluster** on it when it is back. A removed server can be added again any time with **+ Add a server**.
+
 ## Moving VMs
 
 | Move | How | Time | Notes |

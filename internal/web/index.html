@@ -611,7 +611,7 @@ const store = {
   set(t, remember){ mem = t; try { sessionStorage.setItem("p8s.token", t); if (remember) localStorage.setItem("p8s.token", t); } catch {} },
   clear(){ mem = ""; try { sessionStorage.removeItem("p8s.token"); localStorage.removeItem("p8s.token"); } catch {} },
 };
-let mem = "", token = store.get(), vms = [], host = null, templates = [], busy = new Set(), timer = null, version = "";
+let mem = "", token = store.get(), vms = [], host = null, templates = [], busy = new Set(), timer = null, version = "", clRole = "";
 let me = null, userList = [], brandName = "P8S OS", sshPorts = {}, rdpPorts = {};
 // "SSH from any computer" line for a guest on the private network (server port -> guest:22)
 function sshLine(name, user){
@@ -2071,7 +2071,16 @@ async function refresh(withHost, background){
     if (isAdmin() && (withHost || tick % 4 === 0)) { host = await call("GET", "/host").catch(() => null); await loadHostMetrics(); }
     if (withHost && !templates.length) templates = (await call("GET", "/templates").catch(() => ({templates: []}))).templates;
     if (!version) { const h = await fetch(API + "/health").then(r => r.json()).catch(() => ({})); version = h.version || ""; }
-    if ($("#hVer")) $("#hVer").textContent = version ? "p8sd " + version : "";
+    if (isAdmin() && (withHost || tick % 4 === 0)) {
+      const c = await call("GET", "/cluster").catch(() => null);
+      clRole = !c ? "" : !c.role ? "standalone" : c.role + (c.size ? ` · cluster of ${c.size}` : "");
+    }
+    if ($("#hVer")) {
+      $("#hVer").textContent = (version ? "p8sd " + version : "") + (clRole ? " · " + clRole : "");
+      $("#hVer").title = clRole === "standalone" ? "This server is not in a cluster: Server page → Cluster → + Add a server"
+        : clRole.startsWith("master") ? "This server is the cluster's master: its dashboard manages every server"
+        : clRole.startsWith("worker") ? "This server is a worker: manage it from the master's dashboard" : "";
+    }
     smoothRender(!background);
   } catch (err) { if (token && err.code !== 401) toast(err.message, true); }
   tick++;

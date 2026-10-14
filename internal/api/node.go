@@ -96,6 +96,20 @@ func (s *Server) taskStarted(w http.ResponseWriter, r *http.Request, kind, arg s
 	}
 }
 
+// renameNode gives this server a new name (Server page → Rename).
+func (s *Server) renameNode(w http.ResponseWriter, r *http.Request) {
+	if !s.nodeOn(w, r) {
+		return
+	}
+	var b struct {
+		Name string `json:"name"`
+	}
+	if !decode(w, r, &b) {
+		return
+	}
+	s.taskStarted(w, r, tasks.Rename, strings.ToLower(strings.TrimSpace(b.Name)))
+}
+
 // getCTImages: every container image the image server offers (Server page →
 // Container templates → Add another).
 func (s *Server) getCTImages(w http.ResponseWriter, r *http.Request) {

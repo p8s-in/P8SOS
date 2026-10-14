@@ -8,6 +8,7 @@ let node = null, nodeTimer = null, taskOpen = "";
 document.body.insertAdjacentHTML("beforeend", `
 <dialog id="dlgNode" class="wide"><div class="dlg-body">
   <div class="inline" style="margin:0"><h2 style="margin:0">Server <span class="sub" id="ndHost"></span></h2><span class="spacer"></span>
+    <button class="btn" id="ndRename" type="button" title="Give this server a new name (VMs keep running)">Rename</button>
     <button class="btn" id="ndShell" type="button" title="Root shell on this server, in a new window (like at its keyboard)">&gt;_ Shell</button></div>
   <div id="ndRunning" class="toast" style="max-width:none;box-shadow:none;margin:8px 0;border-left-color:var(--warn)" hidden></div>
 
@@ -336,6 +337,19 @@ async function loadCTImages(){
   sel.onchange = () => { add.disabled = !sel.value; };
   note.textContent = "From images.linuxcontainers.org, checked against its checksums.";
 }
+
+$("#ndRename").onclick = async () => {
+  const cur = node?.hostname || "";
+  const n = (prompt("New name for this server (lowercase letters, digits, hyphens), e.g. p8s-vm1:", cur) || "").trim().toLowerCase();
+  if (!n || n === cur) return;
+  if (!/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(n)) return toast("Use lowercase letters, digits and hyphens (not at the start or end).", true);
+  try {
+    const t = await call("POST", "/node/rename", {name: n});
+    toast(t.title + " to " + n + " started: the dashboard reconnects in a few seconds");
+    taskOpen = t.id;
+    setTimeout(() => location.reload(), 6000);
+  } catch (e) { toast(e.message, true); }
+};
 
 async function runTask(kind, arg, question){
   if (question && !confirm(question)) return;

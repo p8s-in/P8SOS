@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"p8sos/internal/cluster"
@@ -161,6 +162,24 @@ func (s *Server) clusterRemove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// clusterRename: the master renames one of its workers (it asks the worker).
+func (s *Server) clusterRename(w http.ResponseWriter, r *http.Request) {
+	if !s.adminOnly(w, r) || !s.clusterOn(w) {
+		return
+	}
+	var b struct {
+		Name string `json:"name"`
+	}
+	if !decode(w, r, &b) {
+		return
+	}
+	if err := s.Cluster.Rename(r.Context(), r.PathValue("id"), strings.ToLower(strings.TrimSpace(b.Name))); err != nil {
+		s.clusterFail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"note": "renaming; the new name shows in a few seconds"})
 }
 
 func (s *Server) clusterCapacity(w http.ResponseWriter, r *http.Request) {

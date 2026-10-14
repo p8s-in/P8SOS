@@ -488,9 +488,11 @@ func serve(args []string) error {
 	// Cluster: this server as master (with workers) or as a worker of another.
 	_, apiPort, _ := net.SplitHostPort(cfg.Listen)
 	clu := &cluster.Manager{Dir: filepath.Join(cfg.DataDir, "cluster"), APIPort: apiPort, Run: run, Log: log,
+		Hostname: func() string { h, _ := os.Hostname(); return h },
 		LocalCapacity: func(ctx context.Context) cluster.Capacity {
 			in := hostinfo.Collect(ctx, run, cfg.VMDataset)
 			c := cluster.Capacity{CPUs: in.CPUs, MemTotalMiB: in.MemTotalMiB, PoolFreeGB: in.PoolFreeGB, Networks: svc.Networks(), Version: version}
+			c.Hostname, _ = os.Hostname()
 			if l, err := svc.List(ctx); err == nil {
 				for _, v := range l {
 					c.MemUsedMiB += v.MemoryMiB

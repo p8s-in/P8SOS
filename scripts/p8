@@ -129,10 +129,12 @@ p8 — manage P8S OS virtual machines
   p8 cluster add PUBLIC_ADDR       ... for a server on another network (PUBLIC_ADDR = your
                                    public IP or dynamic-DNS name; forward TCP 8006 + UDP 51820)
   p8 join MASTER_URL CODE          on a new server: join the master's cluster
-  p8 cluster remove ID [--force]   on the master: drop a server (n2, n3 …)
+  p8 cluster remove ID [--force]   on the master: drop a server (n2, n3 …); it is told to stand alone
+  p8 cluster rename ID NEWNAME     on the master: give a server a new name
   p8 cluster leave                 on a worker: stand alone again
   p8 cluster promote [--force]     on a worker: become the master (the old one is gone for good)
   p8 status                        is p8sd healthy?
+  p8 rename NEWNAME                give this server a new name (hostname, /etc/hosts, p8sd)
   p8 logs                          follow p8sd logs
   p8 test                          run the full automatic test
   p8 report                        save a problem report to ./p8s-report.txt
@@ -877,6 +879,17 @@ TXT
         echo; echo "More: p8 templates available" ;;
     esac ;;
 
+  rename)
+    n=${1:-}
+    [[ $n =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || { red "usage: p8 rename NEWNAME   (letters, digits, hyphens; e.g. p8s-vm1)"; exit 1; }
+    old=$(hostname)
+    [[ $n == "$old" ]] && { green "✔ this server is already called $n"; exit 0; }
+    # /etc/hosts first, so sudo can resolve the new name at once (no "unable to resolve host" warnings)
+    sudo sh -c "grep -qw '$old' /etc/hosts && sed -i 's/\\b$old\\b/$n/g' /etc/hosts || printf '127.0.1.1\\t%s\\n' '$n' >> /etc/hosts" 2>/dev/null
+    sudo hostnamectl set-hostname "$n" 2>/dev/null || exit 1
+    sudo systemctl restart p8sd 2>/dev/null
+    green "✔ renamed $old → $n (log out and in again to see it in the prompt)" ;;
+
   status)
     if h=$(curl -kfs "$URL/health"); then green "✔ p8sd is running ($(jq -r .version <<<"$h"))"
     else red "✘ p8sd is not answering at $URL"; systemctl --no-pager -n 5 status p8sd; exit 1; fi
@@ -1085,7 +1098,10 @@ TXT
       remove|rm)
         [[ -n ${2:-} ]] || { red "which server? p8 cluster remove n2"; exit 1; }
         q=""; [[ ${3:-} == --force ]] && q="?force=1"
-        call DELETE "/cluster/nodes/$2$q" >/dev/null && green "✔ removed $2" ;;
+        call DELETE "/cluster/nodes/$2$q" >/dev/null && green "✔ removed $2 (it was told to stand alone again)" ;;
+      rename)
+        [[ -n ${2:-} && -n ${3:-} ]] || { red "usage: p8 cluster rename ID NEWNAME   (on the master; this server itself: p8 rename NEWNAME)"; exit 1; }
+        call POST "/cluster/nodes/$2/rename" "$(jq -nc --arg n "$3" '{name:$n}')" | jq -r .note ;;
       leave)
         call POST /cluster/leave >/dev/null && green "✔ this server stands alone again (remove it on the master too)" ;;
       *) red "p8 cluster [list|find|invite|invites|accept|decline|add|remove|leave]"; exit 1 ;;

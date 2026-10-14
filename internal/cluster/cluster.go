@@ -113,6 +113,7 @@ type Capacity struct {
 	VMs         int      `json:"vms"`
 	Networks    []string `json:"networks"`
 	Version     string   `json:"version,omitempty"`
+	Hostname    string   `json:"hostname,omitempty"` // the server's name now (renames show up by themselves)
 }
 
 // Manager keeps the cluster state of this server.
@@ -121,6 +122,8 @@ type Manager struct {
 	CertFile string       // this server's TLS certificate (pinned by the others)
 	APIPort  string       // port p8sd listens on, e.g. "8006"
 	Run      execx.Runner // ip / wg; nil = no tunnel (tests)
+	// Hostname is this server's name now (nil: keep the name it had when the cluster was made).
+	Hostname func() string
 	Log      *slog.Logger
 	HTTP     func(pin string) *http.Client // tests; nil = pinned TLS client
 	Now      func() time.Time
@@ -508,8 +511,10 @@ func (m *Manager) Remove(ctx context.Context, id string) error {
 		return err
 	}
 	found := false
+	var gone Node
 	for i, n := range m.st.Nodes {
 		if n.ID == id {
+			gone = n
 			m.st.Nodes = append(m.st.Nodes[:i], m.st.Nodes[i+1:]...)
 			found = true
 			break
@@ -525,7 +530,39 @@ func (m *Manager) Remove(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
+	// tell it, while the tunnel is still up: it stands alone again (best effort —
+	// an offline server is told nothing and still thinks it is a worker until
+	// someone presses Leave the cluster on it)
+	if gone.Token != "" {
+		cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		if err := m.call(cctx, gone, "POST", "/cluster/leave", struct{}{}, nil); err != nil && m.Log != nil {
+			m.Log.Warn("removed server not told", "id", id, "err", err)
+		}
+		cancel()
+	}
 	return m.applyWG(ctx)
+}
+
+// Rename asks worker id to take a new name (the master's Rename button; the
+// worker renames itself, and the next poll shows the new name everywhere).
+func (m *Manager) Rename(ctx context.Context, id, name string) error {
+	m.mu.Lock()
+	if err := m.load(); err != nil {
+		m.mu.Unlock()
+		return err
+	}
+	var n Node
+	for _, x := range m.st.Nodes {
+		if x.ID == id {
+			n = x
+		}
+	}
+	role := m.st.Role
+	m.mu.Unlock()
+	if role != "master" || n.ID == "" {
+		return fmt.Errorf("%w: server %s", ErrNotFound, id)
+	}
+	return m.call(ctx, n, "POST", "/node/rename", map[string]string{"name": name}, nil)
 }
 
 // --- worker: joining and leaving ---

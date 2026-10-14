@@ -75,7 +75,7 @@ async function loadCluster(){
       <div class="sub">${room}</div>${!n.self && cluster.role === "master" ? `<div class="sub">${n.status?.tunnel ? "tunnel up · last handshake " + esc(new Date(n.status.tunnel).toLocaleTimeString()) : `<span style="color:var(--warn)">tunnel not up yet</span> — on another network, check UDP 51820 forwarding to this server`}</div>` : ""}
       ${!on && n.status?.error ? `<div class="sub" style="color:var(--bad)">${esc(n.status.error)}</div>` : ""}</td>
       <td style="white-space:nowrap"><span class="state ${on ? "running" : "stopped"}"><span class="dot"></span>${on ? "online" : "offline"}</span></td>
-      <td style="text-align:right;white-space:nowrap">${role === "master" && !n.self ? `<button class="btn" data-clsh="${esc(n.id)}" data-name="${esc(n.name)}" type="button" title="Root shell of ${esc(n.name)}">&gt;_ Shell</button> <button class="btn danger" data-clrm="${esc(n.id)}" type="button">Remove</button>` : ""}</td></tr>`;
+      <td style="text-align:right;white-space:nowrap">${role === "master" && !n.self ? `<button class="btn" data-clsh="${esc(n.id)}" data-name="${esc(n.name)}" type="button" title="Root shell of ${esc(n.name)}">&gt;_ Shell</button> <button class="btn" data-clren="${esc(n.id)}" data-name="${esc(n.name)}" type="button" title="Give ${esc(n.name)} a new name">Rename</button> <button class="btn danger" data-clrm="${esc(n.id)}" data-name="${esc(n.name)}" type="button">Remove</button>` : ""}</td></tr>`;
   }).join("");
   $("#clActions").innerHTML = role === "worker"
     ? `<span class="spacer"></span><button class="btn danger" id="clLeave" type="button">Leave the cluster</button>`
@@ -88,7 +88,7 @@ async function loadCluster(){
   };
   if ($("#clLeave")) $("#clLeave").onclick = async () => {
     if (!confirm("Leave the cluster? This server's VMs keep running here; the master won't show them any more.")) return;
-    try { await call("POST", "/cluster/leave"); toast("This server stands alone again. Remove it on the master too."); loadCluster(); } catch (e) { toast(e.message, true); }
+    try { await call("POST", "/cluster/leave"); toast("This server stands alone again. On the master it shows as offline: press Remove there."); loadCluster(); } catch (e) { toast(e.message, true); }
   };
 }
 async function makeCommand(masterURL, endpoint){
@@ -167,8 +167,17 @@ $("#clJoinGo").onclick = async () => {
 $("#clNodes").addEventListener("click", async e => {
   const sh = e.target.closest("[data-clsh]");
   if (sh) return void window.open(`/terminal?host=1&node=${encodeURIComponent(sh.dataset.clsh)}&name=${encodeURIComponent(sh.dataset.name)}`, "p8s-shell-" + sh.dataset.clsh);
+  const rn = e.target.closest("[data-clren]");
+  if (rn) {
+    const n = (prompt(`New name for ${rn.dataset.name} (lowercase letters, digits, hyphens):`, rn.dataset.name) || "").trim().toLowerCase();
+    if (!n || n === rn.dataset.name) return;
+    try { const r = await call("POST", `/cluster/nodes/${encodeURIComponent(rn.dataset.clren)}/rename`, {name: n}); toast(r.note); setTimeout(loadCluster, 8000); }
+    catch (err) { toast(err.message, true); }
+    return;
+  }
   const b = e.target.closest("[data-clrm]"); if (!b) return;
   const id = b.dataset.clrm;
+  if (!confirm(`Remove ${b.dataset.name || id} from the cluster? It is told to stand alone again (its VMs keep running there, but this dashboard no longer shows them). You can add it again later with + Add a server.`)) return;
   try { await call("DELETE", `/cluster/nodes/${encodeURIComponent(id)}`); }
   catch (err) {
     if (!/still has VMs/.test(err.message) || !confirm(err.message + "\n\nRemove it anyway? Its VMs keep running there but disappear from this dashboard.")) return toast(err.message, true);
