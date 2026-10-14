@@ -278,7 +278,23 @@ func showText(s string) {
 	defer os.Remove(f.Name())
 	f.WriteString(s)
 	f.Close()
-	_, _ = wt("--scrolltext", "--textbox", f.Name(), "22", "78")
+	h, w := screenSize()
+	_, _ = wt("--scrolltext", "--textbox", f.Name(), strconv.Itoa(h), strconv.Itoa(w))
+}
+
+// screenSize is the text box size: the whole screen less a margin (22 × 78 if unknown).
+func screenSize() (int, int) {
+	c := exec.Command("stty", "size")
+	c.Stdin = os.Stdin
+	out, err := c.Output()
+	var h, w int
+	if err == nil {
+		_, err = fmt.Sscan(string(out), &h, &w)
+	}
+	if err != nil || h < 24 || w < 80 {
+		return 22, 78
+	}
+	return h - 2, w - 4
 }
 
 func (u *menus) install(ctx context.Context) {
@@ -551,12 +567,16 @@ func (u *menus) progress(ctx context.Context, p *installer.Plan) {
 			installer.FailedStep(string(b), 14) + "\n\nThe whole log is " + p.Log + ".")
 	}
 	for {
-		c, e := wt("--nocancel", "--menu", "The install stopped:\n\n"+ierr.Error()+"\n\nThe log has the details.", "18", "78", "3",
-			"log", "Show the log", "shell", "Command line", "menu", "Back to the start (fix it, then install again)")
+		c, e := wt("--nocancel", "--menu", "The install stopped:\n\n"+ierr.Error()+"\n\nThe log has the details.", "18", "78", "4",
+			"step", "Show what the failed step printed", "log", "Show the whole log (End key = last lines)",
+			"shell", "Command line", "menu", "Back to the start (fix it, then install again)")
 		if e != nil {
 			continue
 		}
 		switch c {
+		case "step":
+			b, _ := os.ReadFile(p.Log)
+			showText("The install stopped: " + ierr.Error() + "\n\n" + installer.FailedStep(string(b), 60))
 		case "log":
 			b, _ := os.ReadFile(p.Log)
 			s := string(b)
