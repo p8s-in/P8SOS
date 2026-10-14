@@ -190,6 +190,11 @@ install -m 0644 "$REPO/deploy/p8s-net.service" /etc/systemd/system/p8s-net.servi
 install -d -m 0755 /etc/systemd/system/nftables.service.d
 printf '[Service]\n# P8S: loading /etc/nftables.conf flushes the ruleset; put libvirt NAT + P8S rules back\nExecStartPost=-/bin/systemctl --no-block start p8s-net.service\nExecReload=-/bin/systemctl --no-block start p8s-net.service\n' \
   >/etc/systemd/system/nftables.service.d/p8s.conf
+# libvirtd must stay up: Debian starts it with "--timeout 120", so it quits after
+# 2 idle minutes when no VM runs (and, before this, took p8sd down with it)
+install -d -m 0755 /etc/systemd/system/libvirtd.service.d
+printf '[Service]\n# P8S: no idle timeout; the host always manages VMs\nEnvironment=LIBVIRTD_ARGS=\nRestart=on-failure\n' \
+  >/etc/systemd/system/libvirtd.service.d/p8s.conf
 # system logs survive reboots and are kept long (CERT-In: 180 days); journald trims by size
 install -d -m 0755 /etc/systemd/journald.conf.d
 printf '[Journal]\n# P8S: keep system logs on disk (Activity log: see audit_retain_days)\nStorage=persistent\nSystemMaxUse=4G\n' >/etc/systemd/journald.conf.d/p8s.conf

@@ -271,6 +271,7 @@ hardware**. Work through it on the new machine; tick each line and note problems
 - [ ] Name of an existing template, `ftp://` address, bad login → clear error, nothing starts
 - [ ] Container templates → **+ Add another**: the list shows every image (not the added ones); add `kali/current` → task log, then + Create CT offers "Kali current"; it is listed with the others afterwards
 - [ ] `p8 templates add-url …`, `p8 ct templates available`, `p8 ct templates add kali/current` work
+- [ ] With no VM running, wait 5 minutes: `systemctl is-active libvirtd p8sd` both active (libvirtd no longer quits when idle); `sudo systemctl restart libvirtd` → p8sd keeps running
 
 ## Add new features here as they are built
 

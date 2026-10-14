@@ -2,13 +2,14 @@
 Description=P8S OS management daemon
 Documentation=file:///usr/share/doc/p8sd/README.md
 After=network-online.target libvirtd.service zfs.target
-Wants=network-online.target
-Requires=libvirtd.service
+# Wants, not Requires: p8sd keeps running (and keeps answering) when libvirtd
+# stops or restarts — with Requires, stopping libvirtd stopped p8sd for good
+Wants=network-online.target libvirtd.service
 
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/p8sd serve -config /etc/p8s/p8sd.json
-Restart=on-failure
+Restart=always
 RestartSec=3
 # Runs as root: zfs clone/destroy and /dev/zvol access need it in Phase 1.
 NoNewPrivileges=yes
