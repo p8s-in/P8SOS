@@ -363,8 +363,10 @@ func (p *Plan) Steps() []Step {
 	for i := 1; i < len(p.Disks); i++ {
 		cmd("Copying the boot partition to "+p.Disks[i].Name, "dd", "if="+p.Disks[0].Part(2), "of="+p.Disks[i].Part(2), "bs=4M", "conv=fsync", "status=none")
 	}
-	soft("Unmounting", "bash", "-c", "sync; umount -R "+shq(t)+" || { sleep 3; umount -Rl "+shq(t)+"; }")
-	cmd("Closing the pools", "bash", "-c", "for i in 1 2 3 4 5 6 7 8 9 10; do zpool export -a && exit 0; sleep 2; done; exit 1")
+	// programs started inside the new system (by package scripts) still hold it: stop them
+	soft("Stopping programs in the new system", "bash", "-c", killInTarget(t))
+	soft("Unmounting", "bash", "-c", "sync; umount -R "+shq(t)+" || { sleep 3; umount -R "+shq(t)+"; } || umount -Rl "+shq(t))
+	cmd("Closing the pools", "bash", "-c", exportScript)
 	return s
 }
 
@@ -473,3 +475,20 @@ Suites: trixie-security
 Components: main contrib non-free-firmware
 Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
 `
+
+// killInTarget stops processes whose root or working directory is inside the target.
+func killInTarget(t string) string {
+	q := shq(t)
+	return "for p in /proc/[0-9]*; do r=$(readlink \"$p/root\" 2>/dev/null); c=$(readlink \"$p/cwd\" 2>/dev/null); " +
+		"case \"$r|$c\" in " + q + "*|*\"|\"" + q + "*) echo \"stopping ${p#/proc/} $(cat $p/comm)\"; kill \"${p#/proc/}\" 2>/dev/null;; esac; done; " +
+		"sleep 2; mountpoint -q " + q + " && fuser -km " + q + " 2>/dev/null; true" // only the new system's file system, never the installer's own
+}
+
+// exportScript closes the pools so the new system imports them cleanly; if
+// something still holds them, it forces it (ZFS writes everything out first).
+const exportScript = `zfs unmount -a 2>/dev/null
+for _ in 1 2 3 4 5 6 7 8 9 10; do zpool export -a && exit 0; sleep 2; done
+echo "pools still busy; open files:"; fuser -vm /mnt 2>&1 | head -20
+zpool export -f -a && exit 0
+zpool list -H -o name | while read -r p; do zpool export -f "$p"; done
+[ -z "$(zpool list -H -o name 2>/dev/null)" ]`
