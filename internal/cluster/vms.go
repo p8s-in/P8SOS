@@ -902,6 +902,46 @@ func (c *VMs) AddDisk(ctx context.Context, name string, sizeGB int) (vm.VM, stri
 	return c.tag(out.VM, n), out.Note, nil
 }
 
+// nicLocal is the network-card part of the local VM service.
+type nicLocal interface {
+	AddNIC(ctx context.Context, name, network string, vlan int) (vm.VM, string, error)
+	RemoveNIC(ctx context.Context, name, mac string) (vm.VM, error)
+}
+
+var errNoNICs = fmt.Errorf("%w: extra network cards aren't available on this server", vm.ErrInvalid)
+
+// AddNIC gives a VM another network card (on the server it runs on).
+func (c *VMs) AddNIC(ctx context.Context, name, network string, vlan int) (vm.VM, string, error) {
+	n, ok := c.locate(ctx, name)
+	if !ok {
+		l, ok := c.Local.(nicLocal)
+		if !ok {
+			return vm.VM{}, "", errNoNICs
+		}
+		v, note, err := l.AddNIC(ctx, name, network, vlan)
+		return c.selfTag(v), note, err
+	}
+	var out struct {
+		vm.VM
+		Note string `json:"note"`
+	}
+	if err := c.call(ctx, n, "POST", vpath(name, "/nics"), map[string]any{"network": network, "vlan": vlan}, &out); err != nil {
+		return vm.VM{}, "", err
+	}
+	return c.tag(out.VM, n), out.Note, nil
+}
+
+// RemoveNIC takes a network card out of a VM.
+func (c *VMs) RemoveNIC(ctx context.Context, name, mac string) (vm.VM, error) {
+	return c.remoteVM(ctx, name, func() (vm.VM, error) {
+		l, ok := c.Local.(nicLocal)
+		if !ok {
+			return vm.VM{}, errNoNICs
+		}
+		return l.RemoveNIC(ctx, name, mac)
+	}, "DELETE", vpath(name, "/nics/", mac), nil)
+}
+
 func (c *VMs) ResizeDisk(ctx context.Context, name string, index, sizeGB int) (vm.VM, error) {
 	return c.remoteVM(ctx, name, func() (vm.VM, error) {
 		d, ok := c.Local.(diskLocal)

@@ -288,6 +288,18 @@ hardware**. Work through it on the new machine; tick each line and note problems
 - [ ] Pull the worker's cable for 20 s: it stays online; for 60 s+: offline with a plain-words reason; plug in: online again
 - [ ] Send an invitation, restart p8sd on the new server (`sudo systemctl restart p8sd`): the invitation is still there
 
+## 26. Several network cards per VM
+
+- [ ] Running Debian VM → Manage → Network & firewall → Add network card (private network): plugged in at once; `ip -br a` in the VM shows a new interface with a 192.168.122.x address (or `sudo dhclient <it>`)
+- [ ] Add one on the home network and one on VLAN 20 (switch carrying it tagged): each gets an address from that network
+- [ ] Firewall on, allow only SSH: port 80 is blocked on every card, SSH works on every card
+- [ ] Remove a card while it runs: gone from the VM and the list; the first card can't be removed
+- [ ] Clone the VM: the copy's cards all have new MACs (`p8 nics copy`)
+- [ ] Move it (shut down) to another server: the cards come along; one whose network isn't there lands on the private network with a note
+- [ ] Windows VM: second card shows up in Windows (e1000e), gets DHCP
+- [ ] Customer account: no network-card section (staff only); API answers 403
+- [ ] `p8 nics`, `p8 nic-add web1 lan --vlan 20`, `p8 nic-rm web1 MAC` work
+
 ## Add new features here as they are built
 
 (Every new feature adds its own lines above before it counts as done.)

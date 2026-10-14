@@ -153,10 +153,14 @@ func (s *Service) applyFirewalls(ctx context.Context, m map[string]firewall.Sett
 	list := []firewall.VM{}
 	for _, v := range vms {
 		e := firewall.VM{Name: v.Name, MAC: v.MAC, FW: m[v.Name]}
+		for _, n := range v.NICs { // every card of the VM is behind its firewall
+			e.MACs = append(e.MACs, n.MAC)
+		}
 		if v.Public != nil && v.State == virt.Running {
-			// Pin the public address to this VM's port (ports change on every start).
+			// Pin the public address to this VM's first card's port (ports change
+			// on every start; the first card is listed first).
 			if ports, err := s.HV.Ports(ctx, Prefix+v.Name); err == nil && len(ports) > 0 {
-				e.LockIP, e.Ports = v.Public.IP, ports
+				e.LockIP, e.Ports = v.Public.IP, ports[:1]
 			}
 		}
 		if e.FW.Enabled || e.LockIP != "" {

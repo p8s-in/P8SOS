@@ -61,6 +61,7 @@ Each phase ships something usable on its own.
   Delete) and tabs Summary, Console (inside the page), Hardware, Network & firewall, Snapshots, Backups, Options;
   task bar at the bottom (backups, restores, downloads, off-site copies, server tasks)
 - [x] Off-site backups: folder / S3-compatible / SSH targets, optional encryption, retention per place, bring back ([offsite-backups.md](offsite-backups.md))
+- [x] Several network cards per VM (nat / home network / VLAN, hot-plug, firewall on every card, kept on moves and failover, new MACs on clones)
 - [x] Speed: VM disks with an I/O thread, native AIO and multi-queue; vhost-net multi-queue NICs; host tuning
   (ZFS ARC capped at 10% of RAM, KSM, vhost_net, swappiness 10); faster, flicker-free dashboard polling
 - [x] Editions: Home / Standard / Enterprise / Datacenter (one ISO, the licence key decides)

@@ -102,3 +102,17 @@ func TestSpoofLock(t *testing.T) {
 		}
 	}
 }
+
+func TestRulesCoverEveryCard(t *testing.T) {
+	s, err := Rules([]VM{{Name: "fw1", MAC: "52:54:00:aa:bb:01", MACs: []string{"52:54:00:AA:BB:02"},
+		FW: Settings{Enabled: true, Rules: []Rule{{Proto: "tcp", Ports: "22"}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(s, "ether daddr 52:54:00:aa:bb:01 jump vm1") || !strings.Contains(s, "ether daddr 52:54:00:aa:bb:02 jump vm1") {
+		t.Fatalf("second card not behind the firewall:\n%s", s)
+	}
+	if _, err := Rules([]VM{{Name: "x", MAC: "52:54:00:aa:bb:01", MACs: []string{"bad"}, FW: Settings{Enabled: true}}}); err == nil {
+		t.Fatal("bad MAC accepted")
+	}
+}

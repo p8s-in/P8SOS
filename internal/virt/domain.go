@@ -53,6 +53,8 @@ type Spec struct {
 	Firmware string
 	// Extra are data disks after the root disk (at most MaxExtraDisks).
 	Extra []ExtraDisk
+	// NICs are network cards after the first one (Bridge/MAC), at most MaxExtraNICs.
+	NICs []ExtraNIC
 	// CPUModel "" gives the VM this server's CPU as it is (fastest; live moves
 	// only between servers with the same CPU). A named model (e.g. the cluster's
 	// common CPU, see CPUBaseline) with CPUFeatures ("+name" required, "-name"
@@ -68,6 +70,16 @@ type ExtraDisk struct {
 	Path   string // block device
 	SizeGB int
 }
+
+// ExtraNIC is a second, third … network card on its own bridge (another
+// network or VLAN). The MAC identifies it for its whole life.
+type ExtraNIC struct {
+	MAC    string
+	Bridge string
+}
+
+// MaxExtraNICs is how many network cards a VM can have next to its first one.
+const MaxExtraNICs = 7
 
 // MaxExtraDisks is how many data disks a VM can have next to its root disk.
 const MaxExtraDisks = 8
@@ -507,6 +519,11 @@ func DomainXML(s Spec) ([]byte, error) {
 		}{"vhost", queues}
 	}
 	d.Devices.Interfaces = []ifaceXML{nic}
+	for _, e := range s.NICs {
+		x := nic // same model and driver as the first card
+		x.MAC.Address, x.Source.Bridge = e.MAC, e.Bridge
+		d.Devices.Interfaces = append(d.Devices.Interfaces, x)
+	}
 
 	// A tablet makes the mouse follow the pointer exactly in the browser console.
 	d.Devices.Inputs = append(d.Devices.Inputs, struct {
@@ -606,6 +623,31 @@ func ExtraDiskXML(s Spec, e ExtraDisk) ([]byte, error) {
 	}{diskXML: x}, "", "  ")
 }
 
+// NICXML is one extra network card's <interface> element, for plugging it into
+// a running VM (virsh attach-device / detach-device --live).
+func NICXML(s Spec, e ExtraNIC) ([]byte, error) {
+	t := s
+	t.NICs = []ExtraNIC{e}
+	if t.DiskPath == "" {
+		t.DiskPath = "/dev/null"
+	}
+	full, err := DomainXML(t)
+	if err != nil {
+		return nil, err
+	}
+	var d domainXML
+	if err := xml.Unmarshal(full, &d); err != nil {
+		return nil, err
+	}
+	if len(d.Devices.Interfaces) < 2 {
+		return nil, fmt.Errorf("no network card rendered")
+	}
+	return xml.MarshalIndent(struct {
+		XMLName xml.Name `xml:"interface"`
+		ifaceXML
+	}{ifaceXML: d.Devices.Interfaces[1]}, "", "  ")
+}
+
 // ParseDomainXML reads back a domain (e.g. from `virsh dumpxml`).
 func ParseDomainXML(b []byte) (Spec, error) {
 	var d domainXML
@@ -668,6 +710,9 @@ func ParseDomainXML(b []byte) (Spec, error) {
 	if len(d.Devices.Interfaces) > 0 {
 		s.MAC = d.Devices.Interfaces[0].MAC.Address
 		s.Bridge = d.Devices.Interfaces[0].Source.Bridge
+		for _, x := range d.Devices.Interfaces[1:] {
+			s.NICs = append(s.NICs, ExtraNIC{MAC: x.MAC.Address, Bridge: x.Source.Bridge})
+		}
 	}
 	return s, nil
 }

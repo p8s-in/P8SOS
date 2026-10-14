@@ -44,6 +44,7 @@ type Settings struct {
 type VM struct {
 	Name string
 	MAC  string
+	MACs []string // its other network cards (all behind the same firewall)
 	FW   Settings
 	// LockIP pins a VM with a public address: frames from its ports must
 	// carry its own MAC and this IPv4 (no taking a neighbour's address).
@@ -213,6 +214,13 @@ func Rules(vms []VM) (string, error) {
 		fmt.Fprintf(&b, "\t\tcounter drop comment %q\n", "firewall of "+v.Name)
 		b.WriteString("\t}\n")
 		jumps = append(jumps, fmt.Sprintf("\t\tether daddr %s jump %s\n", mac, chain))
+		for _, x := range v.MACs {
+			x = strings.ToLower(x)
+			if !reMAC.MatchString(x) {
+				return "", fmt.Errorf("firewall: vm %q has a bad MAC %q", v.Name, x)
+			}
+			jumps = append(jumps, fmt.Sprintf("\t\tether daddr %s jump %s\n", x, chain))
+		}
 	}
 	// Anti-spoofing for VMs with public addresses, before anything else.
 	b.WriteString("\tchain spoof {\n\t\ttype filter hook prerouting priority -200; policy accept;\n")

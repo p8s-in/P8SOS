@@ -81,6 +81,22 @@ func (v *Virsh) AttachDisk(ctx context.Context, name string, diskXML []byte) err
 	return err
 }
 
+// DetachDevice unplugs a device (e.g. a network card) from a running VM.
+func (v *Virsh) DetachDevice(ctx context.Context, name string, devXML []byte) error {
+	f, err := os.CreateTemp("", "p8s-dev-*.xml")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	if _, err := f.Write(devXML); err != nil {
+		f.Close()
+		return err
+	}
+	f.Close()
+	_, err = v.virsh(ctx, "detach-device", name, f.Name(), "--live")
+	return err
+}
+
 func (v *Virsh) virsh(ctx context.Context, args ...string) ([]byte, error) {
 	out, err := v.Run.Run(ctx, "virsh", append([]string{"-c", v.URI, "-q"}, args...)...)
 	var ee *execx.Error

@@ -60,6 +60,8 @@ var (
 	cephJS []byte
 	//go:embed disks.js
 	disksJS []byte
+	//go:embed nics.js
+	nicsJS []byte
 	//go:embed remote.js
 	remoteJS []byte
 	//go:embed terminal.html
@@ -96,6 +98,7 @@ var assets = map[string]asset{
 	"/security.js":   {securityJS, "text/javascript; charset=utf-8", "no-cache"},
 	"/remote.js":     {remoteJS, "text/javascript; charset=utf-8", "no-cache"},
 	"/disks.js":      {disksJS, "text/javascript; charset=utf-8", "no-cache"},
+	"/nics.js":       {nicsJS, "text/javascript; charset=utf-8", "no-cache"},
 	"/storages.js":   {storagesJS, "text/javascript; charset=utf-8", "no-cache"},
 	"/ceph.js":       {cephJS, "text/javascript; charset=utf-8", "no-cache"},
 	// P8S logo (assets/brand): tab icon, phone home screen, header, sign-in page

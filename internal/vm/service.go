@@ -132,6 +132,8 @@ type VM struct {
 	Public *ippool.Lease `json:"public,omitempty"`
 	// Disks are the data disks next to the root disk (DiskGB).
 	Disks []Disk `json:"disks,omitempty"`
+	// NICs are the network cards after the first one (MAC/Network/VLAN).
+	NICs []NIC `json:"nics,omitempty"`
 	// Storage holds the VM's disks: empty = this server's own pool, else a
 	// network storage (iSCSI).
 	Storage string `json:"storage,omitempty"`
@@ -494,6 +496,7 @@ func (s *Service) get(ctx context.Context, dom string) (VM, error) {
 		v.Drivers = filepath.Base(spec.DriversISO)
 	}
 	v.OSType = spec.OSType
+	v.NICs = s.nicsOf(spec)
 	v.Storage = s.storageOf(dom)
 	v.CPU = "host"
 	if spec.CPUModel != "" {

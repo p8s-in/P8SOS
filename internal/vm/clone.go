@@ -136,6 +136,10 @@ func (s *Service) clone(ctx context.Context, name string, r CloneRequest, p jobs
 	p("making the new VM")
 	ns := sp
 	ns.Name, ns.UUID, ns.MAC = dst, newUUID(), virt.RandomMAC()
+	ns.NICs = nil
+	for _, n := range sp.NICs { // the extra cards too: two VMs with one MAC break the network
+		ns.NICs = append(ns.NICs, virt.ExtraNIC{MAC: virt.RandomMAC(), Bridge: n.Bridge})
+	}
 	ns.CreatedAt = time.Now().UTC().Format(time.RFC3339)
 	ns.Video, ns.DefVersion = "", 0
 	dw, ok := s.Disks.(deviceWaiter)

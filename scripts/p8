@@ -39,6 +39,9 @@ p8 — manage P8S OS virtual machines
                                    change size (any of the three; disk only grows)
   p8 disks NAME                    list a VM's extra disks
   p8 disk-add NAME GB              give a VM another (empty) disk
+  p8 nics NAME                     a VM's network cards
+  p8 nic-add NAME nat|lan [--vlan ID]  another network card (plugged in while it runs)
+  p8 nic-rm NAME MAC               remove a network card (not the first)
   p8 disk-grow NAME N GB           grow extra disk N (stops the VM, starts it again)
   p8 disk-rm NAME N                remove extra disk N and everything on it
   p8 verify NAME BACKUP_ID         restore test of a backup (scratch disk; the VM isn't touched)
@@ -332,6 +335,23 @@ case $cmd in
     [[ $(jq '.disks // [] | length' <<<"$body") == 0 ]] && { echo "No extra disks. Add one: p8 disk-add $1 50"; exit 0; }
     printf '%-6s %-8s %s\n' DISK DEVICE SIZE
     jq -r '.disks[] | "\(.index)\t\(.device)\t\(.size_gb) GB"' <<<"$body" | while IFS=$'\t' read -r i d g; do printf '%-6s %-8s %s\n' "$i" "$d" "$g"; done ;;
+
+  nics)
+    need "${1:-}"; body=$(call GET "/vms/$1") || exit 1
+    jq -r '"card 1  \(.mac)  \(.network)\(if (.vlan // 0) > 0 then " VLAN \(.vlan)" else "" end)  (first card)",
+           (.nics // [] | .[] | "\(.device)  \(.mac)  \(.network)\(if (.vlan // 0) > 0 then " VLAN \(.vlan)" else "" end)")' <<<"$body"
+    [[ $(jq '.nics // [] | length' <<<"$body") == 0 ]] && echo "Add one: p8 nic-add $1 nat   (or: lan, lan --vlan 20)" ;;
+
+  nic-add)
+    need "${1:-}"; net=${2:-nat}; vlan=0
+    [[ $net =~ ^(nat|lan)$ ]] || { red "usage: p8 nic-add NAME nat|lan [--vlan ID]"; exit 1; }
+    [[ ${3:-} == --vlan ]] && { [[ ${4:-} =~ ^[0-9]+$ ]] || { red "--vlan needs a number 1-4094"; exit 1; }; vlan=$4; }
+    body=$(call POST "/vms/$1/nics" "$(jq -nc --arg n "$net" --argjson v "$vlan" '{network:$n,vlan:$v}')") || exit 1
+    green "✔ $(jq -r .note <<<"$body")" ;;
+
+  nic-rm)
+    need "${1:-}"; [[ ${2:-} =~ ^[0-9a-fA-F:]{17}$ ]] || { red "usage: p8 nic-rm NAME MAC   (see: p8 nics NAME)"; exit 1; }
+    call DELETE "/vms/$1/nics/$2" >/dev/null && green "✔ network card $2 removed from $1" ;;
 
   disk-add)
     need "${1:-}"; [[ ${2:-} =~ ^[0-9]+$ ]] || { red "usage: p8 disk-add NAME GB"; exit 1; }

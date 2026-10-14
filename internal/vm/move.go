@@ -55,6 +55,7 @@ type MoveHeader struct {
 	Shared string           `json:"shared,omitempty"`
 	Extra  []virt.ExtraDisk `json:"extra,omitempty"` // data disks (shared storage)
 	TPM    []byte           `json:"tpm,omitempty"`   // software TPM state (Windows 11, BitLocker)
+	NICs   []NIC            `json:"nics,omitempty"`  // the other network cards (same MACs)
 }
 
 // maxHeader caps the header line (UEFI variables are about 0.7 MB in base64).
@@ -128,6 +129,7 @@ func (s *Service) moveHeader(ctx context.Context, name string) (MoveHeader, erro
 	if v := s.vlanOf(sp.Bridge); v > 0 {
 		h.Network, h.VLAN = NetLAN, v
 	}
+	h.NICs = s.nicsOf(sp)
 	if fw, err := s.GetFirewall(ctx, name); err == nil && (fw.Enabled || len(fw.Rules) > 0) {
 		h.Firewall = &fw
 	}
@@ -277,6 +279,18 @@ func (s *Service) defineMoved(ctx context.Context, h MoveHeader, disk string, un
 		DiskBus: h.DiskBus, NICModel: h.NICModel, Firmware: h.Firmware}
 	if h.Shared != "" {
 		spec.Extra = h.Extra // opened by attachShared: paths on this server
+	}
+	for _, n := range h.NICs { // the other cards, on this server's bridges
+		nw := n.Network
+		if nw == NetLAN && !s.LANAvailable() {
+			nw = NetNAT
+		}
+		b, err := s.bridgeVLAN(ctx, nw, n.VLAN)
+		if err != nil || b == "" {
+			note += fmt.Sprintf("; network card %s is on the private network here (its network isn't available)", n.MAC)
+			b = s.bridgeFor(NetNAT)
+		}
+		spec.NICs = append(spec.NICs, virt.ExtraNIC{MAC: n.MAC, Bridge: b})
 	}
 	if spec.UUID == "" {
 		spec.UUID = newUUID()

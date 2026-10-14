@@ -1354,6 +1354,7 @@ function renderManage(){
   $("#mRzHint").dataset.st = v.state + mName;
   $("#mPwGo").disabled = !(v.state === "running");
   if (typeof renderDisks === "function") renderDisks(v);
+  if (typeof renderNICs === "function") renderNICs(v);
   $("#mPubBox").hidden = !v.public;
   if (v.public) {
     const p = v.public;
@@ -2121,6 +2122,7 @@ document.addEventListener("DOMContentLoaded", render); // after cloud.js has loa
 <script src="/security.js"></script>
 <script src="/remote.js"></script>
 <script src="/disks.js"></script>
+<script src="/nics.js"></script>
 <script src="/storages.js"></script>
 <script src="/ceph.js"></script>
 </body>

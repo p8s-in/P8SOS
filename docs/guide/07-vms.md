@@ -40,6 +40,7 @@ Command line: `p8 create web1 2 2048 20 --os debian-13 [--lan] [--vlan 20] [--st
 | Log in | Manage → Login (IP, user, password) | `p8 ssh NAME`, `p8 ip NAME` |
 | Change CPUs, RAM, disk | Manage → Options → Resize | `p8 resize NAME cpus=4 ram=4096 disk=40` |
 | Extra disks | Manage → Disks | `p8 disk-add NAME 50`, `p8 disk-grow NAME 1 100`, `p8 disk-rm NAME 1` |
+| More network cards (up to 8) | Manage → Network & firewall → **Add network card** | `p8 nic-add NAME lan --vlan 20`, `p8 nics NAME`, `p8 nic-rm NAME MAC` |
 | Snapshot / roll back | Manage → Snapshots | `p8 snap NAME before-upgrade`, `p8 rollback NAME before-upgrade` |
 | Password inside the VM | Manage → Login | `p8 passwd NAME [USER]` |
 | Firewall | Manage → Firewall | `p8 fw NAME allow tcp 22 from 203.0.113.0/24` |

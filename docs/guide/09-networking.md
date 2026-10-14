@@ -23,6 +23,7 @@ Summary: Private, home, public-IP and VLAN networks, bonding, IPv6, firewall and
 | IPv6 | Home-network VMs get it from your router. Private network: `sudo p8 ipv6 on` |
 | Public IP pools | Settings → Public IP pools, or `p8 ippool add dc1 203.0.113.8/29 203.0.113.9`; then create with `--ip dc1`. Anti-spoofing stops a VM from using another's IP |
 | Per-VM firewall | Manage → Firewall, or `p8 fw web1 on`, `p8 fw web1 allow tcp 443` |
+| A VM on several networks | Manage → Network & firewall → **Add network card** (private network, home network or a VLAN; up to 8 cards, plugged in while it runs). For router/firewall VMs (pfSense, OPNsense) or a database on a private VLAN. The VM's firewall covers every card; a public IP stays on the first card |
 | Websites without opening ports (Cloudflare Tunnel) | Settings → Public access (domain on Cloudflare + API token), then `p8 publish web1 shop 80` → `https://shop.yourdomain`. Works behind CGNAT |
 | Fixed LAN address for a VM | Reserve its MAC (from `p8 show NAME`) in your router's DHCP settings |
 
