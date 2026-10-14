@@ -4,7 +4,11 @@
 #   sudo ./make-template.sh                       -> debian-13 (what install.sh uses)
 #   sudo ./make-template.sh ubuntu-24.04 --register
 #                                                 -> import + add to /etc/p8s/p8sd.json + restart p8sd
-#   ./make-template.sh --list                     -> what can be imported
+#   ./make-template.sh --list                     -> what can be imported (and others added)
+#   sudo ./make-template.sh --spec FILE --register
+#                                                 -> any cloud image: FILE is JSON
+#      {"name","label","url","login","variant","checksum"}; checksum = the URL of a
+#      SHA256SUMS / SHA512SUMS / CHECKSUM file, "sha256:HEX" / "sha512:HEX", or "" (not checked)
 #
 # Every image is checked against its publisher's checksum before use.
 set -euo pipefail
@@ -37,20 +41,51 @@ catalog() {
   esac
 }
 
-REGISTER=0; NAME=${NAME:-debian-13}
-for a in "$@"; do
+REGISTER=0; NAME=${NAME:-debian-13}; SPEC=""; HASH=""
+CONF=${CONF:-/etc/p8s/p8sd.json}
+args=("$@")
+for ((i = 0; i < ${#args[@]}; i++)); do
+  a=${args[i]}
   case $a in
     --register) REGISTER=1 ;;
-    --list) for n in $CATALOG; do catalog "$n"; printf '  %-14s %s\n' "$n" "$LABEL"; done; exit 0 ;;
+    --list)
+      for n in $CATALOG; do catalog "$n"; printf '  %-14s %s\n' "$n" "$LABEL"; done
+      # others added from an image address (--spec)
+      [[ -r $CONF ]] && jq -r '.templates[]? | select(.source_url != null) | "  \(.name) \(.label // .name)"' "$CONF" 2>/dev/null |
+        while read -r n l; do [[ " $CATALOG " == *" $n "* ]] || printf '  %-14s %s\n' "$n" "$l"; done
+      exit 0 ;;
+    --spec) SPEC=${args[i+1]:-}; i=$((i + 1)) ;;
     -*) echo "unknown option $a" >&2; exit 1 ;;
     *) NAME=$a ;;
   esac
 done
-catalog "$NAME" || { echo "unknown template '$NAME'. Available:" >&2; "$0" --list >&2; exit 1; }
+if [[ -n $SPEC ]]; then
+  [[ -r $SPEC ]] || { echo "no spec file $SPEC" >&2; exit 1; }
+  NAME=$(jq -r '.name // ""' "$SPEC"); URL=$(jq -r '.url // ""' "$SPEC")
+  LABEL=$(jq -r '.label // ""' "$SPEC"); LOGIN=$(jq -r '.login // ""' "$SPEC")
+  VARIANT=$(jq -r '.variant // ""' "$SPEC"); CHECK=$(jq -r '.checksum // ""' "$SPEC")
+  [[ $NAME =~ ^[a-z][a-z0-9.-]{1,30}$ ]] || { echo "bad template name '$NAME'" >&2; exit 1; }
+  [[ $URL =~ ^https?://[^[:space:]\"\']+$ ]] || { echo "bad image address '$URL'" >&2; exit 1; }
+  [[ -n $LABEL ]] || LABEL=$NAME
+  [[ $LOGIN =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || LOGIN=root
+  [[ $VARIANT =~ ^[a-z0-9.]{1,40}$ ]] || VARIANT=linux2022
+  SUMS="" ALGO=sha256
+  case $CHECK in
+    sha256:*) HASH=${CHECK#sha256:} ;;
+    sha512:*) HASH=${CHECK#sha512:}; ALGO=sha512 ;;
+    http://*|https://*) SUMS=$CHECK; [[ $CHECK == *512* ]] && ALGO=sha512 ;;
+    "") ;;
+    *) echo "checksum must be a URL, sha256:HEX or sha512:HEX" >&2; exit 1 ;;
+  esac
+  HASH=${HASH,,}
+  [[ -z $HASH || ( $ALGO == sha256 && $HASH =~ ^[0-9a-f]{64}$ ) || ( $ALGO == sha512 && $HASH =~ ^[0-9a-f]{128}$ ) ]] ||
+    { echo "the $ALGO checksum is not the right length" >&2; exit 1; }
+else
+  catalog "$NAME" || { echo "unknown template '$NAME'. Available:" >&2; "$0" --list >&2; exit 1; }
+fi
 
 POOL=${POOL:-tank}
-CONF=${CONF:-/etc/p8s/p8sd.json}
-IMG=${URL##*/}
+IMG=${URL##*/}; IMG=${IMG%%\?*}; [[ $IMG =~ ^[A-Za-z0-9._+-]+$ ]] || IMG=image
 DS=$POOL/p8s/templates/$NAME
 WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT
 
@@ -62,9 +97,11 @@ register() { # add/refresh the template in p8sd's config, then restart p8sd
   local bytes gb tmp
   bytes=$(zfs get -Hp -o value volsize "$DS"); gb=$(( (bytes + 1073741823) / 1073741824 ))
   tmp=$(mktemp)
-  jq --arg n "$NAME" --arg s "$DS@base" --argjson gb "$gb" --arg v "$VARIANT" --arg l "$LABEL" --arg u "$LOGIN" '
+  local src=""; [[ -n $SPEC ]] && src=$URL
+  jq --arg n "$NAME" --arg s "$DS@base" --argjson gb "$gb" --arg v "$VARIANT" --arg l "$LABEL" --arg u "$LOGIN" --arg src "$src" '
     .templates = ([.templates[] | select(.name != $n)] +
-      [{name: $n, snapshot: $s, min_disk_gb: $gb, os_variant: $v, label: $l, default_user: $u}])' "$CONF" > "$tmp"
+      [{name: $n, snapshot: $s, min_disk_gb: $gb, os_variant: $v, label: $l, default_user: $u} +
+       (if $src == "" then {} else {source_url: $src} end)])' "$CONF" > "$tmp"
   cat "$tmp" > "$CONF"; rm -f "$tmp"
   systemctl restart p8sd
   echo "==> $LABEL is now in the dashboard's template list (log in as '$LOGIN' or root)."
@@ -89,15 +126,29 @@ wait_zvol() {
 
 echo "==> downloading $LABEL ($IMG)"
 curl -fL --retry 3 -o "$WORK/$IMG" "$URL"
-curl -fsSL --retry 3 -o "$WORK/SUMS" "$SUMS"
-# Checksum files come in several formats ("HASH  file", "HASH *file", "SHA256 (file) = HASH");
-# take the hash on the line that names our file.
 LEN=64; [[ $ALGO == sha512 ]] && LEN=128
-want=$(grep -F "$IMG" "$WORK/SUMS" | grep -oE "[0-9a-f]{$LEN}" | head -1 || true)
-[[ -n $want ]] || { echo "no checksum for $IMG in $SUMS" >&2; exit 1; }
-got=$("${ALGO}sum" "$WORK/$IMG" | cut -d' ' -f1)
-[[ $got == "$want" ]] || { echo "CHECKSUM MISMATCH for $IMG (download corrupted or tampered)" >&2; exit 1; }
-echo "==> checksum OK ($ALGO)"
+want=$HASH
+if [[ -n $SUMS ]]; then
+  curl -fsSL --retry 3 -o "$WORK/SUMS" "$SUMS"
+  # Checksum files come in several formats ("HASH  file", "HASH *file", "SHA256 (file) = HASH");
+  # take the hash on the line that names our file (or the only hash, for a one-file .sha256).
+  want=$(grep -F "$IMG" "$WORK/SUMS" | grep -oiE "[0-9a-f]{$LEN}" | head -1 || true)
+  [[ -n $want ]] || [[ $(grep -ciE "[0-9a-f]{$LEN}" "$WORK/SUMS") != 1 ]] || want=$(grep -oiE "[0-9a-f]{$LEN}" "$WORK/SUMS")
+  [[ -n $want ]] || { echo "no $ALGO checksum for $IMG in $SUMS" >&2; exit 1; }
+fi
+if [[ -n $want ]]; then
+  got=$("${ALGO}sum" "$WORK/$IMG" | cut -d' ' -f1)
+  [[ $got == "${want,,}" ]] || { echo "CHECKSUM MISMATCH for $IMG (download corrupted or tampered)" >&2; exit 1; }
+  echo "==> checksum OK ($ALGO)"
+else
+  echo "==> WARNING: no checksum given, so the download is not checked"
+fi
+# compressed images: unpack first
+case $IMG in
+  *.xz) xz -d "$WORK/$IMG"; IMG=${IMG%.xz} ;;
+  *.gz) gzip -d "$WORK/$IMG"; IMG=${IMG%.gz} ;;
+esac
+qemu-img info "$WORK/$IMG" >/dev/null 2>&1 || { echo "$IMG is not a disk image qemu-img can read (use a .qcow2, .img or .raw cloud image)" >&2; exit 1; }
 
 BYTES=$(qemu-img info --output=json "$WORK/$IMG" | jq -r '."virtual-size"')
 GB=$(( (BYTES + 1073741823) / 1073741824 ))

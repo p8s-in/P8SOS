@@ -430,6 +430,8 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("POST /api/v1/node/shell", s.hostShellTicket)
 	auth.HandleFunc("POST /api/v1/node/tasks", s.startTask)
 	auth.HandleFunc("GET /api/v1/node/tasks/{id}", s.getTask)
+	auth.HandleFunc("GET /api/v1/node/ct-images", s.getCTImages)
+	auth.HandleFunc("POST /api/v1/node/templates/custom", s.customTemplate)
 	auth.HandleFunc("GET /api/v1/updates", s.getUpdates)
 	auth.HandleFunc("POST /api/v1/updates/check", s.checkUpdates)
 	auth.HandleFunc("POST /api/v1/updates/install", s.installUpdate)

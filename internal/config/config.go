@@ -78,6 +78,8 @@ type Template struct {
 	Label     string `json:"label"`       // shown in the dashboard, e.g. "Ubuntu 24.04 LTS"
 	// DefaultUser is the image's login user that gets the SSH keys ("debian", "ubuntu", "rocky").
 	DefaultUser string `json:"default_user"`
+	// SourceURL: where an image added by address came from (Server page → Add another).
+	SourceURL string `json:"source_url,omitempty"`
 }
 
 // User returns the template's login user (older configs have none: Debian).

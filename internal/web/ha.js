@@ -74,6 +74,7 @@ async function loadHASrv(){
   if (box.contains(document.activeElement)) return;
   let st;
   try { st = await call("GET", "/ha"); } catch { box.hidden = true; return; }
+  st.replicas = st.replicas || [];
   if (!st.role && !st.replicas.length) { box.hidden = true; return; }
   box.hidden = false;
   const wasOpen = [...box.querySelectorAll("details")].map(d => d.open);

@@ -29,12 +29,32 @@ document.body.insertAdjacentHTML("beforeend", `
   <h3>OS templates</h3>
   <div class="sub">Images new VMs are made from. Adding one downloads it from the publisher (a few hundred MB) and checks its checksum.</div>
   <table class="snaps"><tbody id="ndTpl"></tbody></table>
+  <details id="ndTplMore" style="margin:6px 0 10px"><summary class="btn" style="display:inline-block">+ Add another OS (any cloud image)</summary>
+    <form id="ndTplForm" style="margin-top:8px">
+      <div class="sub">Any Linux "cloud image" with cloud-init works (.qcow2, .img or .raw, also .xz/.gz): Kali, openSUSE, CentOS Stream, Oracle, Fedora, Debian testing… Copy its download link from the publisher's site.</div>
+      <div class="row" style="grid-template-columns:1fr 1fr">
+        <div><label for="ndTN">Name</label><input id="ndTN" required pattern="[a-z][a-z0-9.\-]{1,30}" placeholder="e.g. kali-2026"></div>
+        <div><label for="ndTL">Label <span class="sub">(shown when making VMs)</span></label><input id="ndTL" maxlength="60" placeholder="e.g. Kali Linux 2026.3"></div>
+      </div>
+      <label for="ndTU">Image address</label><input id="ndTU" type="url" required placeholder="https://…/something-genericcloud-amd64.qcow2">
+      <div class="row" style="grid-template-columns:1fr 1fr">
+        <div><label for="ndTUser">Login user <span class="sub">(the image's default user)</span></label><input id="ndTUser" pattern="[a-z_][a-z0-9_\-]{0,31}" placeholder="e.g. kali, opensuse, cloud-user (empty = root)"></div>
+        <div><label for="ndTV">OS type <span class="sub">(optional)</span></label><input id="ndTV" pattern="[a-z0-9.]{1,40}" placeholder="e.g. debian13, opensuse15.6"></div>
+      </div>
+      <label for="ndTC">Checksum <span class="sub">(recommended: the SHA256SUMS / CHECKSUM file's address, or sha256:HASH)</span></label><input id="ndTC" placeholder="https://…/SHA256SUMS">
+      <div class="inline" style="margin-top:8px"><button class="btn primary">Add this OS</button><span class="sub">Downloads it, checks the checksum, and adds it to Create VM. The dashboard restarts for a moment when it's done.</span></div>
+    </form>
+  </details>
   <div id="ndMyTpl"></div>
 
   <div id="ndCTBox" hidden>
     <h3>Container templates</h3>
     <div class="sub">Official linuxcontainers.org images (50-200 MB each), checked against their checksums. Every container is an instant copy of one.</div>
     <table class="snaps"><tbody id="ndCTTpl"></tbody></table>
+    <details id="ndCTMore" style="margin:6px 0 10px"><summary class="btn" style="display:inline-block">+ Add another (every image on the image server)</summary>
+      <div class="inline" style="margin-top:8px"><select id="ndCTImg" aria-label="Container image"><option value="">Loading the list…</option></select>
+        <button class="btn primary" id="ndCTImgAdd" disabled>Add</button><span class="sub" id="ndCTImgNote"></span></div>
+    </details>
   </div>
 
   <h3>Home network</h3>
@@ -204,6 +224,23 @@ function renderNode(){
     <td style="text-align:right">${c.installed ? `<span class="sub">✔ added</span>` : `<button class="btn" data-cttpl="${esc(c.name)}" ${dis}>Add</button>`}</td></tr>`).join("");
   for (const b of $("#ndCTTpl").querySelectorAll("[data-cttpl]")) b.onclick = () => runTask("ct-template", b.dataset.cttpl,
     "Add the " + b.dataset.cttpl + " container template? It downloads 50-200 MB.");
+  $("#ndCTMore").hidden = !n.containers;
+  $("#ndCTMore").ontoggle = () => { if ($("#ndCTMore").open) loadCTImages(); };
+  $("#ndCTImgAdd").onclick = () => { const v = $("#ndCTImg").value; if (v) { ctImages = null; runTask("ct-image", v, "Add the " + v + " container template? It downloads 50-200 MB."); } };
+  $("#ndTplForm").onsubmit = async e => {
+    e.preventDefault();
+    const body = {name: $("#ndTN").value.trim(), label: $("#ndTL").value.trim(), url: $("#ndTU").value.trim(),
+      login: $("#ndTUser").value.trim(), variant: $("#ndTV").value.trim(), checksum: $("#ndTC").value.trim()};
+    if (!body.checksum && !confirm("No checksum: the download can't be checked for damage or tampering. Add it anyway?")) return;
+    try {
+      const t = await call("POST", "/node/templates/custom", body);
+      toast(t.title + " started");
+      taskOpen = t.id;
+      $("#ndTplMore").open = false;
+      $("#ndTplForm").reset();
+      await loadNode();
+    } catch (err) { toast(err.message, true); }
+  };
 
   $("#ndLan").innerHTML = n.lan
     ? `<div class="sub">✔ VMs can join your home network (choose "Home network" when creating a VM).</div>`
@@ -281,6 +318,23 @@ async function loadMem(){
     runTask("zfs-cache", String(v), `Limit the ZFS cache to ${ndMiB(v)}? It shrinks within a minute; VMs keep running.`);
   };
   if ($("#ndArcAuto")) $("#ndArcAuto").onclick = () => runTask("zfs-cache", "auto", "Set the ZFS cache limit to 10% of RAM (1-16 GB)?");
+}
+
+let ctImages = null;
+async function loadCTImages(){
+  const sel = $("#ndCTImg"), add = $("#ndCTImgAdd"), note = $("#ndCTImgNote");
+  if (!ctImages) {
+    sel.innerHTML = `<option value="">Loading the list…</option>`; add.disabled = true; note.textContent = "";
+    try { ctImages = (await call("GET", "/node/ct-images")).images || []; }
+    catch (e) { sel.innerHTML = `<option value="">List not available</option>`; note.textContent = e.message; return; }
+  }
+  const left = ctImages.filter(i => !i.installed);
+  sel.innerHTML = left.length ? `<option value="">Choose a distribution and release (${left.length})…</option>` +
+    left.map(i => `<option value="${esc(i.id)}">${esc(i.label)} — ${esc(i.id)}</option>`).join("")
+    : `<option value="">Every image is added already</option>`;
+  add.disabled = true;
+  sel.onchange = () => { add.disabled = !sel.value; };
+  note.textContent = "From images.linuxcontainers.org, checked against its checksums.";
 }
 
 async function runTask(kind, arg, question){

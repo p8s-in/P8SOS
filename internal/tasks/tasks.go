@@ -25,6 +25,8 @@ import (
 const (
 	Template     = "template"     // arg: catalog name, e.g. ubuntu-24.04
 	CTTemplate   = "ct-template"  // container template, arg e.g. debian-13
+	TemplateURL  = "template-url" // VM template from any image address, arg: name (spec in Dir/template-NAME.json)
+	CTFromImage  = "ct-image"     // container template from any image on the image server, arg: DIST/RELEASE
 	StorageGrow  = "storage-grow" // use the system disk's free space for VMs
 	LANSetup     = "lan-setup"    // bridge VMs onto the home network
 	OSCheck      = "os-check"     // apt-get update + list what can be upgraded
@@ -42,7 +44,8 @@ const (
 
 // Titles for the task log.
 var Titles = map[string]string{
-	Template: "Add OS template", CTTemplate: "Add container template", StorageGrow: "Grow VM storage", LANSetup: "Set up the home network",
+	Template: "Add OS template", CTTemplate: "Add container template",
+	TemplateURL: "Add OS template from an image address", CTFromImage: "Add container template", StorageGrow: "Grow VM storage", LANSetup: "Set up the home network",
 	OSCheck: "Check for Debian updates", OSUpgrade: "Install Debian updates", Reboot: "Reboot the server",
 	ZFSCache: "Set the ZFS cache limit", NetCheck: "Check the guest network", NetRepair: "Repair the guest network",
 	TailscaleUp: "Connect Tailscale (remote access)", TailscaleOff: "Disconnect Tailscale",
@@ -68,7 +71,15 @@ var (
 	ErrInvalid = errors.New("invalid")
 )
 
-var reArg = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{0,30}$`)
+var (
+	reArg   = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{0,30}$`)
+	reImage = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,30}/[a-z0-9][a-z0-9._-]{0,30}$`)
+)
+
+// SpecPath is where the API puts the description of a template added by address.
+func (m *Manager) SpecPath(name string) string {
+	return filepath.Join(m.Dir, "template-"+name+".json")
+}
 
 type Manager struct {
 	Dir     string // data_dir/tasks: tasks.json and exit codes
@@ -129,6 +140,20 @@ func (m *Manager) command(kind, arg string) ([]string, error) {
 			return nil, fmt.Errorf("%w: template name", ErrInvalid)
 		}
 		return sh("make-ct-template.sh", arg), nil
+	case TemplateURL:
+		if !reArg.MatchString(arg) {
+			return nil, fmt.Errorf("%w: template name", ErrInvalid)
+		}
+		if _, err := os.Stat(m.SpecPath(arg)); err != nil {
+			return nil, fmt.Errorf("%w: no description for template %s", ErrInvalid, arg)
+		}
+		return sh("make-template.sh", "--spec", m.SpecPath(arg), "--register"), nil
+	case CTFromImage:
+		if !reImage.MatchString(arg) {
+			return nil, fmt.Errorf("%w: image DIST/RELEASE", ErrInvalid)
+		}
+		d, r, _ := strings.Cut(arg, "/")
+		return sh("make-ct-template.sh", "--image", d, r), nil
 	case StorageGrow:
 		return sh("storage.sh", "grow"), nil
 	case LANSetup:

@@ -4,11 +4,14 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
+	"time"
 
 	"p8sos/internal/execx"
 )
@@ -26,6 +29,79 @@ type Node struct {
 	LANBridge   string      // e.g. br0
 	SysNet      string      // /sys/class/net (tests)
 	ProcBonding string      // /proc/net/bonding (tests)
+
+	imgMu   sync.Mutex
+	imgAt   time.Time
+	imgList []CTImage
+}
+
+// CTImage is a container image on the image server (images.linuxcontainers.org).
+type CTImage struct {
+	ID        string `json:"id"`    // DIST/RELEASE, e.g. kali/current
+	Label     string `json:"label"` // e.g. "Kali current"
+	Installed bool   `json:"installed"`
+}
+
+// CTImages lists every container image the image server offers (cached for an hour).
+func (n *Node) CTImages(ctx context.Context) ([]CTImage, error) {
+	n.imgMu.Lock()
+	defer n.imgMu.Unlock()
+	if n.imgList == nil || time.Since(n.imgAt) > time.Hour {
+		b, err := n.Run.Run(ctx, "/bin/bash", filepath.Join(n.Tasks.Scripts, "make-ct-template.sh"), "--available")
+		if err != nil {
+			return nil, err
+		}
+		var l []CTImage
+		sc := bufio.NewScanner(strings.NewReader(string(b)))
+		for sc.Scan() {
+			f := strings.Fields(sc.Text())
+			if len(f) >= 2 && reImage.MatchString(f[0]) {
+				l = append(l, CTImage{ID: f[0], Label: strings.Join(f[1:], " ")})
+			}
+		}
+		if len(l) == 0 {
+			return nil, errors.New("the image server listed no images")
+		}
+		n.imgList, n.imgAt = l, time.Now()
+	}
+	have := map[string]bool{}
+	if n.CTTemplates != nil {
+		for _, t := range n.CTTemplates() {
+			have[t] = true
+		}
+	}
+	out := make([]CTImage, len(n.imgList))
+	for i, im := range n.imgList {
+		im.Installed = have[CTImageName(im.ID)]
+		out[i] = im
+	}
+	return out, nil
+}
+
+// ctShort is make-ct-template.sh's short list: DIST/RELEASE → its name there.
+var ctShort = map[string]string{
+	"debian/trixie": "debian-13", "debian/bookworm": "debian-12", "ubuntu/noble": "ubuntu-24.04", "ubuntu/jammy": "ubuntu-22.04",
+	"alpine/3.24": "alpine-3.24", "rockylinux/9": "rocky-9", "almalinux/9": "alma-9", "fedora/44": "fedora-44", "archlinux/current": "archlinux",
+}
+
+// CTImageName is the template name make-ct-template.sh --image gives DIST/RELEASE.
+func CTImageName(id string) string {
+	if n, ok := ctShort[id]; ok {
+		return n
+	}
+	s := strings.ToLower(strings.Replace(id, "/", "-", 1))
+	s = strings.ReplaceAll(s, "_", "-")
+	var b strings.Builder
+	for _, r := range s {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '.' || r == '-' {
+			b.WriteRune(r)
+		}
+	}
+	s = b.String()
+	if len(s) > 31 {
+		s = s[:31]
+	}
+	return s
 }
 
 // Port is a physical network port.

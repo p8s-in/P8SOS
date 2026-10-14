@@ -57,6 +57,21 @@ Snapshots are instant and free until data changes. Take one before every upgrade
 
 Windows 11 gets UEFI, Secure Boot and a software TPM 2.0. Setup stuck at "Let's connect you to a network": Console → Keys → Shift+F10, then `start ms-cxh:localonly` (or `OOBE\BYPASSNRO` on older builds). Bring your own Windows licence.
 
+## More operating systems
+
+**Server → OS templates** lists the ready ones (Debian 13/12, Ubuntu 24.04/22.04, Rocky 9, Alma 9): **Add** downloads one and checks its checksum. For anything else press **+ Add another OS (any cloud image)**:
+
+| Field | What to put |
+|---|---|
+| Name | Short name, e.g. `kali-2026`, `opensuse-15.6` |
+| Label | What Create VM shows, e.g. *Kali Linux 2026.3* |
+| Image address | The download link of the distribution's **cloud image** (`.qcow2`, `.img`, `.raw`, also `.xz` / `.gz`), e.g. "genericcloud" or "OpenStack" images |
+| Login user | The image's default user (`kali`, `opensuse`, `cloud-user`, `fedora`…); empty = root |
+| OS type | Optional, e.g. `debian13` |
+| Checksum | The address of the publisher's `SHA256SUMS` / `CHECKSUM` file, or `sha256:HASH` (strongly recommended) |
+
+The image must have cloud-init (all official cloud images do), so P8S can set the password, SSH key and network. Command line: `p8 templates add-url kali-2026 https://…/kali.qcow2.xz --label "Kali 2026" --login kali --checksum https://…/SHA256SUMS`. For an OS without a cloud image, install from its ISO and then **Make template** from that VM.
+
 ## Clones and templates
 
 - **Clone** (Manage → Options → Clone, or `p8 clone web1 web2 [--start]`): a full, independent copy with all disks, even while the VM runs. Gets a new MAC address.

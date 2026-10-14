@@ -22,7 +22,15 @@ If the login screen says *first-boot setup FAILED*: log in, run `sudo tail -50 /
 
 ## The dashboard
 
-Open **https://\<server-ip>:8006** in a browser. The certificate is self-signed at first, so the browser warns once: choose *Advanced → Continue*. Sign in with the admin user from the install.
+Open **https://\<server-ip>:8006** in a browser. The certificate is self-signed at first, so the browser warns once: choose *Advanced → Continue*.
+
+The first time, the dashboard asks you to **create your dashboard admin account** with a one-time **setup code**:
+
+1. On the server's screen (or over SSH), log in with the admin user from the install and run `cat ~/.p8s-token`. It prints a code that starts with `p8s_`.
+2. In the browser: paste it into **Setup code**, choose a user name and a password (10+ characters), then **Create account**.
+3. From now on you sign in with that user name and password. Keep the code secret: it is the server's master API key.
+
+The dashboard account is separate from the Linux login, but you can use the same name.
 
 | Area | What's there |
 | --- | --- |

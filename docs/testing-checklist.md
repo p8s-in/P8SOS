@@ -263,6 +263,15 @@ hardware**. Work through it on the new machine; tick each line and note problems
 - [ ] Installer finishes all steps; `cat /etc/hostid` on the new system equals the installer's; first start imports tank and bpool without "previously in use from another system"
 - [ ] Installer: make a step fail (e.g. Command line → `zpool create busy ...` on a chosen disk first): the error screen shows the failed step's command and its last lines before the menu
 
+## 24. More OS and container templates
+
+- [ ] Server → OS templates → **+ Add another OS**: name `opensuse-15.6`, a Leap 15.6 "Minimal-VM Cloud" `.qcow2` link, login `opensuse`, checksum `.sha256` link → task log shows "checksum OK", the dashboard restarts, Create VM lists it; a VM from it boots and takes the SSH key
+- [ ] Same with an `.xz` image (Kali cloud image) — it is unpacked first
+- [ ] Wrong checksum → task fails with CHECKSUM MISMATCH and nothing is added; no checksum → asks first, log says "not checked"
+- [ ] Name of an existing template, `ftp://` address, bad login → clear error, nothing starts
+- [ ] Container templates → **+ Add another**: the list shows every image (not the added ones); add `kali/current` → task log, then + Create CT offers "Kali current"; it is listed with the others afterwards
+- [ ] `p8 templates add-url …`, `p8 ct templates available`, `p8 ct templates add kali/current` work
+
 ## Add new features here as they are built
 
 (Every new feature adds its own lines above before it counts as done.)

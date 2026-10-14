@@ -4,7 +4,9 @@
 # every container is then an instant ZFS clone of it.
 #
 #   sudo ./make-ct-template.sh debian-13      add one
-#   ./make-ct-template.sh --list              what can be added
+#   ./make-ct-template.sh --list              the short list (and any others added)
+#   ./make-ct-template.sh --available         every image the server has: DIST/RELEASE  Label
+#   sudo ./make-ct-template.sh --image DIST RELEASE   add any of those (e.g. --image kali current)
 #
 # The download is checked against the image server's SHA256SUMS.
 set -euo pipefail
@@ -30,30 +32,70 @@ catalog() {
   esac
 }
 
-NAME=""
-for a in "$@"; do
+# IPv4 first: many networks hand out IPv6 addresses without a working IPv6 route
+get() { curl -4 "$@" 2>/dev/null || curl "$@"; }
+POOL=${POOL:-tank}
+
+# nice name for a distribution id from the image server
+pretty() {
+  case $1 in
+    almalinux) echo AlmaLinux ;; alt) echo ALT ;; amazonlinux) echo "Amazon Linux" ;; archlinux) echo "Arch Linux" ;;
+    busybox) echo BusyBox ;; centos) echo CentOS ;; debian) echo Debian ;; devuan) echo Devuan ;; fedora) echo Fedora ;;
+    funtoo) echo Funtoo ;; gentoo) echo Gentoo ;; kali) echo Kali ;; mint) echo "Linux Mint" ;; nixos) echo NixOS ;;
+    openeuler) echo openEuler ;; opensuse) echo openSUSE ;; openwrt) echo OpenWrt ;; oracle) echo "Oracle Linux" ;;
+    rockylinux) echo "Rocky Linux" ;; slackware) echo Slackware ;; ubuntu) echo Ubuntu ;; voidlinux) echo "Void Linux" ;;
+    *) echo "${1^}" ;;
+  esac
+}
+# template name for DIST RELEASE: the short-list name if it is one, else dist-release
+name_for() {
+  local n
+  for n in $CATALOG; do catalog "$n"; [[ $DIST == "$1" && $REL == "$2" ]] && { echo "$n"; return; }; done
+  echo "$1-$2" | tr 'A-Z_' 'a-z-' | tr -cd 'a-z0-9.-' | cut -c1-31
+}
+
+NAME="" IMAGE=0
+args=("$@")
+for ((i = 0; i < ${#args[@]}; i++)); do
+  a=${args[i]}
   case $a in
-    --list) for n in $CATALOG; do catalog "$n"; printf '  %-14s %s\n' "$n" "$LABEL"; done; exit 0 ;;
+    --list)
+      for n in $CATALOG; do catalog "$n"; printf '  %-14s %s\n' "$n" "$LABEL"; done
+      # others added with --image
+      zfs list -H -o name,p8s:label -r "$POOL/p8s/ct-templates" 2>/dev/null | while IFS=$'\t' read -r ds lb; do
+        n=${ds##*/}; [[ $ds == "$POOL/p8s/ct-templates" || " $CATALOG " == *" $n "* || $lb == - ]] && continue
+        printf '  %-14s %s\n' "$n" "$lb"
+      done
+      exit 0 ;;
+    --available)
+      get -fsSL --retry 3 "$SERVER/meta/1.0/index-system" | awk -F';' '$3=="amd64" && $4=="cloud" {print $1";"$2}' | sort -u |
+        while IFS=';' read -r d r; do printf '%s/%s %s %s\n' "$d" "$r" "$(pretty "$d")" "$r"; done
+      exit 0 ;;
+    --image)
+      DIST=${args[i+1]:-}; REL=${args[i+2]:-}; i=$((i + 2)); IMAGE=1
+      [[ $DIST =~ ^[a-z0-9][a-z0-9._-]{0,30}$ && $REL =~ ^[a-z0-9][a-z0-9._-]{0,30}$ ]] || { echo "usage: $0 --image DIST RELEASE   (see: $0 --available)" >&2; exit 1; } ;;
     -*) echo "unknown option $a" >&2; exit 1 ;;
     *) NAME=$a ;;
   esac
 done
-[[ -n $NAME ]] || { echo "usage: $0 NAME   (see: $0 --list)" >&2; exit 1; }
-catalog "$NAME" || { echo "unknown container template '$NAME'. Available:" >&2; "$0" --list >&2; exit 1; }
+if (( IMAGE )); then
+  NAME=$(name_for "$DIST" "$REL")
+  LABEL="$(pretty "$DIST") $REL"
+  catalog "$NAME" 2>/dev/null || true  # a short-list one keeps its own label
+else
+  [[ -n $NAME ]] || { echo "usage: $0 NAME   (see: $0 --list, or --image DIST RELEASE)" >&2; exit 1; }
+  catalog "$NAME" || { echo "unknown container template '$NAME'. Available:" >&2; "$0" --list >&2; exit 1; }
+fi
 [[ $EUID -eq 0 ]] || { echo "run as root: sudo $0 $*" >&2; exit 1; }
 command -v lxc-usernsexec >/dev/null || { echo "lxc is not installed (sudo bash update.sh installs it)" >&2; exit 1; }
 
-POOL=${POOL:-tank}
 DS=$POOL/p8s/ct-templates/$NAME
 MNT=/var/lib/p8s/ct-templates/$NAME
 if zfs list -H "$DS@base" >/dev/null 2>&1; then echo "==> $NAME is already added"; exit 0; fi
 
-# IPv4 first: many networks hand out IPv6 addresses without a working IPv6 route
-get() { curl -4 "$@" 2>/dev/null || curl "$@"; }
-
 echo "==> finding the newest $LABEL image"
 LINE=$(get -fsSL --retry 3 "$SERVER/meta/1.0/index-system" | grep "^$DIST;$REL;amd64;cloud;" | tail -1 || true)
-[[ -n $LINE ]] || { echo "no amd64 cloud image for $DIST $REL on $SERVER" >&2; exit 1; }
+[[ -n $LINE ]] || { echo "no amd64 cloud image for $DIST $REL on $SERVER (list them: $0 --available)" >&2; exit 1; }
 DIR=$(cut -d';' -f6 <<<"$LINE")
 URL=$SERVER$DIR
 echo "    $URL"
