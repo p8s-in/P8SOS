@@ -370,7 +370,11 @@ func (p *Plan) Steps() []Step {
 	// programs started inside the new system (by package scripts) still hold it: stop them
 	soft("Stopping programs in the new system", "bash", "-c", killInTarget(t))
 	soft("Unmounting the new system", "bash", "-c", unmountScript(t))
-	cmd("Closing the pools", "bash", "-c", exportScript)
+	pools := []string{RootPool}
+	if zroot {
+		pools = append(pools, BootPool)
+	}
+	cmd("Closing the pools", "bash", "-c", exportScript(pools...))
 	return s
 }
 
@@ -531,16 +535,33 @@ done
 [ -z "$(below)" ]`
 }
 
-// exportScript closes the pools so the new system imports them cleanly. If
-// one stays busy it says why (mounts, holders, datasets) and fails: the new
-// system shares this machine's host id, so it still imports a pool that wasn't
-// closed, but a busy pool means something is wrong and must be looked at.
-const exportScript = `zfs unmount -a 2>/dev/null
-for _ in 1 2 3 4 5 6 7 8 9 10; do zpool export -a 2>/dev/null && exit 0; sleep 2; done
-zpool export -a && exit 0
-echo "== mounts of the pools:"; awk '$3=="zfs"' /proc/self/mounts
+// exportScript closes the pools so the new system imports them cleanly.
+// A pool stays "busy" while any of its file systems is mounted anywhere —
+// also in the private mount namespace of a service (systemd gives many
+// services their own copy of the mount table, taken while the new system was
+// mounted), which /proc/self/mounts doesn't show. Those copies are unmounted
+// inside their namespace (nsenter), or the process holding them is stopped.
+// If a pool is still busy after that, everything is written out (zpool sync)
+// and the install goes on: the new system has this machine's host id
+// ("Saving the host id"), so it imports a pool that wasn't closed as its own.
+func exportScript(pools ...string) string {
+	return `pools="` + strings.Join(pools, " ") + `"
+ours() { awk -v pools="$pools" '{ for (i = 1; i <= NF; i++) if ($i == "-") break; t = $(i+1); src = $(i+2); split(src, a, "/"); if (t == "zfs" && index(" " pools " ", " " a[1] " ")) print $5 }' "$1" 2>/dev/null; }
+holders() { for d in /proc/[0-9]*; do [ -n "$(ours "$d/mountinfo")" ] && echo "${d#/proc/}"; done; }
+close_all() { zfs unmount -a 2>/dev/null; for p in $pools; do zpool list "$p" >/dev/null 2>&1 && { zpool export "$p" 2>/dev/null || return 1; }; done; return 0; }
+for _ in 1 2 3; do close_all && exit 0; sleep 1; done
+for pid in $(holders); do
+  echo "pool file systems still mounted for $pid $(cat "/proc/$pid/comm" 2>/dev/null):"
+  for m in $(ours "/proc/$pid/mountinfo" | sort -r); do echo "  $m"; nsenter -t "$pid" -m umount "$m" 2>/dev/null || nsenter -t "$pid" -m umount -l "$m"; done
+done
+for _ in 1 2 3 4 5; do close_all && exit 0; sleep 2; done
+for pid in $(holders); do [ "$pid" = 1 ] && continue; echo "stopping $pid $(cat "/proc/$pid/comm" 2>/dev/null)"; kill -KILL "$pid" 2>/dev/null; done
+sleep 2
+for _ in 1 2 3 4 5; do close_all && exit 0; sleep 2; done
+echo "== still open:"; zpool list -H -o name 2>&1
 echo "== datasets:"; zfs list -H -o name,mounted,mountpoint 2>&1 | head -20
-echo "== volumes in use:"; find /dev/zvol -maxdepth 3 2>&1 | head
-echo "== programs using the new system:"; for d in /proc/[0-9]*; do for l in "$d/root" "$d/cwd" "$d/exe"; do case "$(readlink "$l" 2>/dev/null)" in /mnt|/mnt/*) echo "${d#/proc/} $(cat "$d/comm" 2>/dev/null) $(readlink "$l")"; break;; esac; done; done
-for p in $(zpool list -H -o name 2>/dev/null); do zpool export -f "$p"; done
-[ -z "$(zpool list -H -o name 2>/dev/null)" ]`
+echo "== who still has them mounted:"; for pid in $(holders); do echo "$pid $(cat "/proc/$pid/comm" 2>/dev/null): $(ours "/proc/$pid/mountinfo" | tr '\n' ' ')"; done
+zpool sync
+echo "Could not close the pools; everything is written to the disks. The new system has the same host id, so it opens them on its first start."
+exit 0`
+}

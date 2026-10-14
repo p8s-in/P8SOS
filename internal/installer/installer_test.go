@@ -292,7 +292,7 @@ func TestStepsMirrorUEFI(t *testing.T) {
 		"[new system] update-grub",
 		"dd if=" + b0 + "-part2 of=/dev/sdc2 bs=4M conv=fsync status=none",
 		"write /etc/apt/apt.conf.d/99p8s-esp-sync",
-		"zpool export -a",
+		"zpool export \"$p\"",
 	} {
 		if !strings.Contains(all, want) {
 			t.Errorf("missing %q in\n%s", want, all)
