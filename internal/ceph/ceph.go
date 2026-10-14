@@ -485,7 +485,7 @@ func (m *Manager) Init(ctx context.Context, network string) error {
 		return err
 	}
 	fsid := NewFSID()
-	tmp, err := os.MkdirTemp("", "p8s-ceph-")
+	tmp, err := m.workDir()
 	if err != nil {
 		return err
 	}
@@ -506,9 +506,11 @@ func (m *Manager) Init(ctx context.Context, network string) error {
 			"--cap", "mon", "profile bootstrap-osd", "--cap", "mgr", "allow r"},
 		{"ceph-authtool", monKey, "--import-keyring", m.AdminKeyring()},
 		{"ceph-authtool", monKey, "--import-keyring", m.BootstrapKeyring()},
-		{"chown", "ceph:ceph", monKey, m.BootstrapKeyring()},
-		{"chmod", "0600", m.AdminKeyring()},
 		{"monmaptool", "--create", "--addv", m.Name, monAddrv(ip.String()), "--fsid", fsid, monmap},
+		// ceph-mon --setuser ceph must be able to read both (the folder too)
+		{"chown", "ceph:ceph", filepath.Dir(tmp)},
+		{"chown", "-R", "ceph:ceph", tmp, m.BootstrapKeyring()},
+		{"chmod", "0600", m.AdminKeyring()},
 		{"install", "-d", "-o", "ceph", "-g", "ceph", "-m", "0750", m.monDir()},
 		{"ceph-mon", "--cluster", "ceph", "--mkfs", "-i", m.Name, "--monmap", monmap, "--keyring", monKey, "--setuser", "ceph", "--setgroup", "ceph"},
 		{"systemctl", "enable", "--now", "ceph-mon@" + m.Name},
@@ -534,6 +536,17 @@ func (m *Manager) Init(ctx context.Context, network string) error {
 		}
 	}
 	return m.CreateMgr(ctx)
+}
+
+// workDir is a private folder for the monitor's first files. Not in /tmp:
+// p8sd's /tmp is private and a root-only temp folder can't be read by
+// ceph-mon once it runs as the ceph user ("monmap: Permission denied").
+func (m *Manager) workDir() (string, error) {
+	base := m.lib("tmp")
+	if err := os.MkdirAll(base, 0o750); err != nil {
+		return "", err
+	}
+	return os.MkdirTemp(base, "p8s-")
 }
 
 func monAddrv(ip string) string { return fmt.Sprintf("[v2:%s:3300,v1:%s:6789]", ip, ip) }
@@ -571,7 +584,7 @@ func (m *Manager) CreateMon(ctx context.Context) error {
 	if _, ok := m.AddrIn(net); !ok {
 		return fmt.Errorf("%w: this server has no address in the Ceph network %s", ErrInvalid, net)
 	}
-	tmp, err := os.MkdirTemp("", "p8s-ceph-")
+	tmp, err := m.workDir()
 	if err != nil {
 		return err
 	}
@@ -584,7 +597,8 @@ func (m *Manager) CreateMon(ctx context.Context) error {
 		return fmt.Errorf("monitor map: %w", err)
 	}
 	for _, s := range [][]string{
-		{"chown", "ceph:ceph", key, mp},
+		{"chown", "ceph:ceph", filepath.Dir(tmp)},
+		{"chown", "-R", "ceph:ceph", tmp},
 		{"install", "-d", "-o", "ceph", "-g", "ceph", "-m", "0750", m.monDir()},
 		{"ceph-mon", "--cluster", "ceph", "--mkfs", "-i", m.Name, "--monmap", mp, "--keyring", key, "--setuser", "ceph", "--setgroup", "ceph"},
 		{"systemctl", "enable", "--now", "ceph-mon@" + m.Name},

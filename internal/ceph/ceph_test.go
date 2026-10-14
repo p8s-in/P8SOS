@@ -442,3 +442,14 @@ func TestInstallRunsAptOutsideP8sd(t *testing.T) {
 		t.Errorf("aptErrors = %q", got)
 	}
 }
+
+// The monitor's first files live where the ceph user can read them
+// (not in p8sd's private, root-only /tmp).
+func TestMonFilesReadableByCeph(t *testing.T) {
+	lib := t.TempDir()
+	m := &Manager{Lib: lib}
+	d, err := m.workDir()
+	if err != nil || !strings.HasPrefix(d, filepath.Join(lib, "tmp")+string(filepath.Separator)) {
+		t.Fatalf("workDir = %q, %v", d, err)
+	}
+}

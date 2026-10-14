@@ -224,6 +224,7 @@ hardware**. Work through it on the new machine; tick each line and note problems
 
 - [ ] Server → Ceph on the master: every server listed; Install Ceph on each (a few minutes; ⏳ then ✔)
 - [ ] An install that failed before (dpkg error 1, from the old p8sd sandbox) works on the next **Install Ceph** after `update.sh`: it finishes the half-done packages first; a real failure names the package (`dpkg: error processing package …`)
+- [ ] **Set up Ceph** on the master works first time (no "monmap: Permission denied"); after a failed try, pressing it again works (nothing left half set up)
 - [ ] Set up Ceph with the LAN network (pre-filled): health shows, 1 monitor, manager up; the other servers show "installed" and get the configuration (`ls /etc/ceph` on them)
 - [ ] Add monitor on two other servers → monitors 3/3; Add manager on one → `p8 ceph` shows it
 - [ ] Each server's empty disk is offered ("Give to Ceph"); a disk with data or the system disk is not; after giving: osd.N up
