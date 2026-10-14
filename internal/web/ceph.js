@@ -55,6 +55,10 @@ function cephNode(c, n){
   });
   const disks = c.configured && i.installed ? (i.disks || []).map(d =>
     `<div class="sub mono">${esc(d.label)} <button class="btn" data-cp="osd" data-node="${id}" data-disk="${esc(d.path)}" ${busy}>Give to Ceph</button></div>`) : [];
+  // no empty disk here: say why and how (disks with data are never offered)
+  if (c.configured && i.installed && !disks.length && !osds.length)
+    disks.push(`<div class="sub">No empty disk on this server. Ceph only takes a disk with nothing on it (disks with data or partitions are never offered).
+      Add one — on a VirtualBox VM: shut it down, Settings → Storage → add a new 20 GB disk, start it — then reload this page.</div>`);
   return `<tr><td><b>${esc(n.name)}</b>${n.self ? ' <span class="sub">(this server)</span>' : ""} <span class="sub">${esc((i.addrs || []).join(", "))}</span>
       <div class="sub">${parts.join(" · ")}${osds.length ? " · disks: " + osds.join(" · ") : ""}</div>
       ${disks.join("")}${cephTask(i.task)}</td>
@@ -83,7 +87,11 @@ function renderCeph(){
       <div class="sub">This server becomes the first monitor and manager. Use a network every server is on (a separate 10 Gbit network is best).</div>`;
   }
   let pool = "";
-  if (c.configured && !c.pool_ready) {
+  const upDisks = (s?.osds || []).filter(o => o.up && o.in).length;
+  if (c.configured && !c.pool_ready && !upDisks) {
+    pool = `<div class="hint" style="margin-top:8px">Next: press <b>Give to Ceph</b> on an empty disk above (one per server is best).
+      When a disk shows <b>up</b>, you can create the VM pool here.</div>`;
+  } else if (c.configured && !c.pool_ready) {
     pool = `<div class="inline" style="margin-top:8px"><label for="cephSize" style="margin:0">Copies of every block</label>
       <select id="cephSize"><option value="0">automatic (3; fewer with fewer servers)</option><option value="3">3</option><option value="2">2</option><option value="1">1 (no safety)</option></select>
       <button class="btn primary" id="cephPool">Create the VM pool</button></div>`;
