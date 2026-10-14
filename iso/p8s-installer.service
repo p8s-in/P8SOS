@@ -1,0 +1,26 @@
+# The P8S OS installer on the first screen of the installer ISO (live system).
+# Only runs when the kernel was started with p8s.installer (the ISO's boot menu).
+[Unit]
+Description=P8S OS installer
+After=systemd-user-sessions.service live-config.service systemd-udev-settle.service
+Wants=systemd-udev-settle.service
+ConditionKernelCommandLine=p8s.installer
+Conflicts=getty@tty1.service
+Before=getty@tty1.service
+
+[Service]
+Type=idle
+ExecStart=/usr/local/sbin/p8s-install
+StandardInput=tty
+StandardOutput=tty
+StandardError=journal
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+Environment=TERM=linux
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

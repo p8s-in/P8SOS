@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
-# Build the P8S OS alpha ISO inside the VirtualBox test VM and save it to the
-# shared folder, so it appears on Windows as L:\P8SOS\dist\p8sos-alpha-*.iso
+# Build the P8S OS installer ISO inside the VirtualBox test VM and save it to
+# the shared folder, so it appears on Windows as L:\P8SOS\dist\p8sos-installer-*.iso
 #
 #   su -c 'mount -t vboxsf P8SOS /mnt || mount -t vboxsf p8sos /mnt; SUDO_USER=vboxuser bash /mnt/make-iso.sh'
+#
+#   ... make-iso.sh            the P8S installer: ZFS system disk(s), RAID choice (docs/installer.md)
+#   ... make-iso.sh classic    the older ISO: Debian's own installer + P8S on first boot
+#   ANSWERS=/mnt/answers.json ... make-iso.sh    installs without questions (test VMs)
 #
 # The shared folder must be WRITABLE (VirtualBox Settings -> Shared Folders ->
 # edit P8SOS -> untick Read-only). Otherwise the ISO is saved in the VM's home folder.
@@ -39,4 +43,8 @@ else
   echo "      To get it on Windows: power off, untick Read-only on the P8SOS share, run this again."
 fi
 
-bash "$SRC/iso/build-iso.sh" "$OUT"
+if [[ ${1:-} == classic ]]; then
+  bash "$SRC/iso/build-iso.sh" "$OUT"
+else
+  bash "$SRC/iso/build-installer.sh" "$OUT"
+fi

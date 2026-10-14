@@ -19,7 +19,7 @@ internal/execx/     command runner (faked in tests)
 deploy/             systemd unit, example config
 install.sh          one-command host install
 update.sh           update an installed host from a newer copy of this folder
-iso/                alpha ISO: build script, installer answers, first-boot setup
+iso/                installer ISO (ZFS system disks, RAID choice: cmd/p8s-install), classic ISO, first-boot setup
 scripts/            p8 CLI, smoke test, host bootstrap, template import
 docs/               api.md, architecture.md, host-setup.md, roadmap.md
 ```

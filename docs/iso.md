@@ -1,6 +1,8 @@
 # P8S OS alpha ISO
 
-A bootable installer: Debian 13 underneath, P8S OS set up automatically on first boot.
+A bootable installer for P8S OS. **The current installer is described in [installer.md](installer.md)**:
+the system on ZFS with a RAID choice (one disk, mirror, RAID 10, RAID-Z), booting from every disk,
+installed from the ISO itself. This page covers what is the same for both ISOs and what comes after.
 
 ## 1. Build the ISO (in the p8s-test VM)
 
@@ -10,8 +12,12 @@ A bootable installer: Debian 13 underneath, P8S OS set up automatically on first
    ```
    su -c 'mount -t vboxsf P8SOS /mnt || mount -t vboxsf p8sos /mnt; SUDO_USER=vboxuser bash /mnt/make-iso.sh'
    ```
-3. ~5 minutes (downloads the 750 MB Debian ISO once). Result on Windows:
-   `L:\P8SOS\dist\p8sos-alpha-YYYYMMDD-amd64.iso` (+ `.sha256`).
+3. First time 30–60 minutes, 15 GB free needed (later builds are faster). Result on Windows:
+   `L:\P8SOS\dist\p8sos-installer-YYYYMMDD-amd64.iso` (+ `.sha256`).
+
+The **classic** ISO (Debian's own installer, ext4, P8S set up on the first start; the boot menu has
+"encrypted VM storage" as a separate entry) still builds with `bash /mnt/make-iso.sh classic` →
+`p8sos-alpha-YYYYMMDD-amd64.iso`.
 
 ## 2. Write it to a USB stick (Windows)
 
@@ -21,7 +27,8 @@ A bootable installer: Debian 13 underneath, P8S OS set up automatically on first
 
 ## 3. Install on the laptop (FX505GT)
 
-> ⚠️ This **erases the disk you choose** (Proxmox and everything on it).
+> ⚠️ This **erases the disks you choose**. The laptop's 1 TB hard disk holds your files: don't pick it
+> (the installer marks it `HAS DATA` and asks twice before erasing anything that isn't empty).
 
 1. **BIOS first:** power on, press **F2** →
    - Security → **Secure Boot: Disabled** (ZFS's kernel module is not signed)
@@ -29,18 +36,13 @@ A bootable installer: Debian 13 underneath, P8S OS set up automatically on first
    - Save & Exit (F10).
 2. Plug in the USB stick and Ethernet if you have it (Wi-Fi also works).
 3. Power on, press **Esc** repeatedly (ASUS boot menu) → pick the USB stick (UEFI entry).
-4. It boots **Install P8S OS (alpha)** automatically after 5 seconds.
-5. The installer asks only:
-   - network (Wi-Fi name + password, if no cable)
-   - hostname (default `p8s-node`)
-   - your name, user name and password
-   - **which disk** to install on, then **"Write changes to disks?" → Yes**
-6. ~10 minutes, then it reboots. Remove the USB stick.
+4. **Install P8S OS** starts by itself. Steps and screens: [installer.md](installer.md#3-install).
+5. Remove the USB stick when it says so; it restarts.
 
 ## 4. First boot (automatic, 10–20 min)
 
-The screen shows `[P8S OS] ...` progress lines: it installs KVM, libvirt, ZFS, the
-Debian template and p8sd. When done, the login screen says:
+The screen shows `[P8S OS] ...` progress lines: it finishes KVM, libvirt and ZFS setup, downloads
+the Debian template and builds p8sd. When done, the login screen says:
 
 ```
 P8S OS (alpha) is ready.   Host IP: 192.168.x.x
@@ -55,9 +57,9 @@ p8 create web1
 p8 ssh web1
 ```
 
-**VM storage:** if the laptop has a second, completely **empty** disk, the ZFS pool goes
-there. Otherwise P8S OS uses a pool file on the system disk (fine for the alpha).
-A second disk that has any partitions or data on it is **never touched**.
+**VM storage:** with the P8S installer, VMs live in the ZFS pool the installer made (`tank`).
+With the classic ISO: a second, completely **empty** disk if there is one, else a pool file on the
+system disk. A second disk that has any partitions or data on it is **never touched**.
 
 ## 5. Web dashboard
 

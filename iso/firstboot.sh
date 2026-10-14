@@ -20,16 +20,24 @@ USER_NAME=$(getent passwd | awk -F: '$3 >= 1000 && $3 < 60000 {print $1; exit}')
 [[ -n $USER_NAME ]] || USER_NAME=root
 usermod -aG sudo "$USER_NAME" 2>/dev/null || true
 
-# 3. VM storage: an EMPTY second disk if there is one, else a file pool on the system disk.
-ROOTDISK=$(lsblk -no PKNAME "$(findmnt -no SOURCE /)" | head -1)
+# 3. VM storage: the pool the P8S installer made; else an EMPTY second disk if
+#    there is one; else a file pool on the system disk.
+ROOTDISK=$(lsblk -no PKNAME "$(findmnt -no SOURCE /)" 2>/dev/null | head -1)
 DEV=""
+if zpool list -H tank >/dev/null 2>&1; then
+  say "VM storage: ZFS pool 'tank' made by the installer ($(zpool list -H -o size tank), $(cat /etc/p8s/installed.json 2>/dev/null | jq -r .layout 2>/dev/null || echo zfs))"
+  ROOTDISK=all   # don't look for spare disks
+fi
 for d in $(lsblk -dno NAME,TYPE | awk '$2=="disk"{print $1}'); do
+  [[ $ROOTDISK == all ]] && break
   [[ $d == "$ROOTDISK" ]] && continue
   [[ $(lsblk -no NAME "/dev/$d" | wc -l) -eq 1 ]] || continue          # has partitions -> not empty
   [[ -z $(blkid -p "/dev/$d" 2>/dev/null) ]] || continue               # has a filesystem/signature -> not empty
   DEV=/dev/$d; break
 done
-if [[ -n $DEV ]]; then
+if [[ $ROOTDISK == all ]]; then
+  :
+elif [[ -n $DEV ]]; then
   say "VM storage: empty disk $DEV ($(lsblk -dno SIZE "$DEV")) will hold the ZFS pool"
 else
   say "VM storage: no empty second disk found -> using a file-backed pool on /dev/$ROOTDISK (fine for alpha)"

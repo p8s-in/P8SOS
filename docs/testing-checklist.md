@@ -201,6 +201,25 @@ hardware**. Work through it on the new machine; tick each line and note problems
 - [ ] Pull the network cable of the master only: it pauses HA ("can't reach most of the cluster"), its protected VMs go off; the other two elect a new master
 - [ ] Two servers: master off → worker shows "hasn't answered" + Make this server the master; `p8 cluster promote` works
 
+## 20. Installer: system on ZFS with a RAID choice (VirtualBox VM first, see docs/installer.md)
+
+- [ ] `make-iso.sh` builds `p8sos-installer-*.iso` (first time 30-60 min); boot menu says "Install P8S OS" with the logo (UEFI and BIOS)
+- [ ] The installer starts by itself on the first screen; *Show the disks* lists the VM's disks; the ISO/CD itself is not offered
+- [ ] VM with Secure Boot on (VirtualBox 7: Settings → System → Secure Boot): the installer says to turn it off
+- [ ] Two 20 GB disks, **mirror**, UEFI: summary lists both as ERASED; typing anything but ERASE changes nothing
+- [ ] A disk with data on it (format one in another VM first): shows `HAS DATA ...` and asks a second time
+- [ ] After the restart: first-start setup runs, login screen shows the address; `zpool status` → `tank` and `bpool` mirrors, ONLINE; `p8 test` passes
+- [ ] `cat /etc/p8s/installed.json` shows the layout; `ls /boot/efi/EFI` has `p8s` and `BOOT`; `sudo p8s-esp-sync` says 1 spare updated
+- [ ] Remove disk 1, start: boots from disk 2, `zpool status` DEGRADED, VMs start; put it back → resilvers
+- [ ] Same with EFI off (BIOS): boots from either disk
+- [ ] 4 disks **raidz2** and **raid10**: `zpool status` shows the right layout; 3 disks only offer mirror / RAID-Z1
+- [ ] **ext4** on one disk: `/` is ext4 (`findmnt /`), VMs in `tank` on partition 4
+- [ ] Static address + DNS chosen in the installer: works after the restart (`ip a`, `ping deb.debian.org`)
+- [ ] Encrypt VM disks: `zfs get encryption tank/p8s` → aes-256-gcm after the first start
+- [ ] `ANSWERS=... make-iso.sh` → the `-auto` ISO installs with no questions; `p8s-install --answers a.json --dry-run` lists every command
+- [ ] `sudo apt upgrade` with a new kernel: still boots (ZFS rebuilt by DKMS, GRUB finds the ZFS system)
+- [ ] Laptop: the 1 TB hard disk shows `HAS DATA` — **don't tick it**; install on the SSD only
+
 ## Add new features here as they are built
 
 (Every new feature adds its own lines above before it counts as done.)

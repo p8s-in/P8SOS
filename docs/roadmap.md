@@ -66,6 +66,7 @@ Each phase ships something usable on its own.
 - [x] Editions: Home / Standard / Enterprise / Datacenter (one ISO, the licence key decides)
 - [x] Proxmox-style dashboard: top bar, sidebar tree (server → VMs and containers), grouped menus, ⋯ action menus
 - [x] Server page in the dashboard: storage + grow, add OS templates, home-network setup, Debian updates, reboot, task log with live output
+- [x] Installer with the system on ZFS: pick the disks, then one disk / mirror / RAID 10 / RAID-Z1-2-3 (or ext4); boots from every disk; offline install from the ISO, unattended with an answers file ([installer.md](installer.md))
 - [x] No single master: cluster book on every server, elections by majority (3+ servers), old master steps down, fencing without quorum, `p8 cluster promote` for two servers; direct server-to-server tunnels
 - [x] Incremental backups (only changes since the last, full every 7th, chain-aware keep/delete/off-site) and restore tests (weekly automatic + on demand)
 - [x] Live moves: running VMs move between cluster servers without stopping (memory + disks over the tunnel); CPU type "compatible" = the cluster's common CPU ([cluster.md](cluster.md))
@@ -95,8 +96,9 @@ scheduled backups (ZFS send to a second pool or remote).
 
 ## Phase 4 — Installer ISO (months 5–6)
 
-Debian live-build: branded installer → partitions, ZFS root, installs p8sd,
-boots to the web UI. This is the moment it becomes **P8S OS**.
+- [x] Debian live-build: branded installer → partitions, ZFS root with a RAID choice, installs p8sd,
+  boots to the web UI ([installer.md](installer.md)). This is the moment it becomes **P8S OS**.
+- [ ] Graphical installer (mouse, like Proxmox's); p8sd pre-built on the ISO (first start without internet)
 
 ## Phase 5 — Clustering (month 7+)
 

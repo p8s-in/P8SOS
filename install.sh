@@ -46,6 +46,8 @@ if [[ -n $DEV ]]; then
   mounted=$(findmnt -rno SOURCE)   # capture first: `cmd | grep -q` misfires under pipefail
   grep -q "^$DEV" <<<"$mounted" && die "$DEV is in use (mounted). Pick the EMPTY disk."
   ok "storage disk $DEV"
+elif zpool list -H "$POOL" >/dev/null 2>&1; then
+  ok "VM storage: ZFS pool '$POOL' ($(zpool list -H -o size "$POOL"))"
 else
   ok "no disk given: will use a 64 GB file pool (testing only)"
 fi
@@ -55,7 +57,7 @@ ok "${free_gb} GB free on /"
 
 # ---------------------------------------------------------------------------
 say "Installing KVM, libvirt and ZFS (ZFS builds a kernel module: 3-10 min)"
-if zpool list -H "$POOL" >/dev/null 2>&1 && command -v virsh >/dev/null && command -v cloud-localds >/dev/null; then
+if zpool list -H "$POOL" >/dev/null 2>&1 && zfs list -H "$POOL/p8s/vms" >/dev/null 2>&1 && command -v virsh >/dev/null && command -v cloud-localds >/dev/null; then
   ok "already installed, pool '$POOL' exists"
   command -v zstd >/dev/null || apt-get install -y zstd >/dev/null 2>&1 || true  # backups compress with it (newer versions)
   command -v ssh >/dev/null || apt-get install -y openssh-client >/dev/null 2>&1 || true  # off-site copies to another server
