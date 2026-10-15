@@ -9,6 +9,7 @@ Type=oneshot
 RemainAfterExit=yes
 TimeoutStartSec=300
 ExecStart=/usr/local/share/p8s/storages-up.sh
+ExecStop=/usr/local/share/p8s/storages-up.sh --stop
 
 [Install]
 WantedBy=multi-user.target

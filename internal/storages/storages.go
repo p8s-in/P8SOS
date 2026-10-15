@@ -2,7 +2,10 @@
 //
 //   - NFS shares (a NAS): mounted at <MountRoot>/<name>, kept in /etc/fstab.
 //     They hold backup copies (<mount>/p8s/backups) and installer ISOs
-//     (<mount>/p8s/iso).
+//     (<mount>/p8s/iso). With VMDisks, a ZFS pool "p8s-<name>" lives in one
+//     file on the share (<mount>/p8s/vmdisks-<name>.zpool), so VM disks there
+//     have snapshots, backups and data disks like local ones. One server uses
+//     the pool at a time.
 //   - iSCSI disks (a SAN LUN, or a NAS that exports one): logged in with
 //     open-iscsi, and a ZFS pool "p8s-<name>" is made on the disk, so VM disks
 //     there have snapshots, backups and data disks like local ones. One server
@@ -47,9 +50,11 @@ type Storage struct {
 	Name string `json:"name"`
 	Type string `json:"type"` // nfs | iscsi
 
-	Server  string `json:"server,omitempty"`  // nfs: NAS address
-	Export  string `json:"export,omitempty"`  // nfs: e.g. /mnt/tank/p8s
-	Options string `json:"options,omitempty"` // nfs: extra mount options, e.g. vers=3
+	Server  string `json:"server,omitempty"`   // nfs: NAS address
+	Export  string `json:"export,omitempty"`   // nfs: e.g. /mnt/tank/p8s
+	Options string `json:"options,omitempty"`  // nfs: extra mount options, e.g. vers=3
+	VMDisks bool   `json:"vm_disks,omitempty"` // nfs: also VM disks (a ZFS pool in a file on the share)
+	SizeGB  int    `json:"size_gb,omitempty"`  // nfs + vm_disks: size of that pool file
 
 	Portal       string `json:"portal,omitempty"` // iscsi: host:port
 	Target       string `json:"target,omitempty"` // iscsi: IQN
@@ -119,6 +124,18 @@ func (m *Manager) BackupDir(name string) string {
 	return filepath.Join(m.MountPoint(name), "p8s", "backups")
 }
 
+// PoolDir / PoolFile: where an NFS storage's VM-disk pool file is.
+func (m *Manager) PoolDir(name string) string { return filepath.Join(m.MountPoint(name), "p8s") }
+func (m *Manager) PoolFile(name string) string {
+	return filepath.Join(m.PoolDir(name), "vmdisks-"+name+".zpool")
+}
+
+// MinPoolGB / MaxPoolGB bound the pool file on an NFS share.
+const (
+	MinPoolGB = 10
+	MaxPoolGB = 64 * 1024
+)
+
 func (m *Manager) load() ([]Storage, error) {
 	b, err := os.ReadFile(m.File)
 	if errors.Is(err, os.ErrNotExist) {
@@ -164,11 +181,15 @@ func (m *Manager) Get(name string) (Storage, error) {
 	return Storage{}, fmt.Errorf("%w: %q", ErrNotFound, name)
 }
 
-// VMPools maps iSCSI storage names to the dataset for their VM disks.
+// HoldsVMs: VM disks can be on this storage.
+func (s Storage) HoldsVMs() bool { return s.Type == ISCSI || s.Type == NFS && s.VMDisks }
+
+// VMPools maps the names of storages for VM disks (iSCSI, NFS with
+// vm_disks) to the dataset for their VM disks.
 func (m *Manager) VMPools() map[string]string {
 	out := map[string]string{}
 	for _, s := range m.All() {
-		if s.Type == ISCSI {
+		if s.HoldsVMs() {
 			out[s.Name] = Dataset(s.Name)
 		}
 	}
@@ -229,6 +250,16 @@ func (m *Manager) check(s *Storage) error {
 		if !reOpts.MatchString(s.Options) {
 			return fmt.Errorf("%w: options: letters, digits and , = . _ - only (e.g. vers=3)", ErrInvalid)
 		}
+		if s.VMDisks {
+			if s.SizeGB == 0 {
+				s.SizeGB = 100
+			}
+			if s.SizeGB < MinPoolGB || s.SizeGB > MaxPoolGB {
+				return fmt.Errorf("%w: size for VM disks must be %d-%d GB", ErrInvalid, MinPoolGB, MaxPoolGB)
+			}
+		} else {
+			s.SizeGB = 0
+		}
 		s.Portal, s.Target, s.LUN, s.CHAPUser, s.CHAPPassword = "", "", 0, "", ""
 	case ISCSI:
 		host, port, err := net.SplitHostPort(s.Portal)
@@ -248,7 +279,7 @@ func (m *Manager) check(s *Storage) error {
 		if (s.CHAPUser == "") != (s.CHAPPassword == "") || s.CHAPUser != "" && (!reCHAP.MatchString(s.CHAPUser) || !reCHAP.MatchString(s.CHAPPassword)) {
 			return fmt.Errorf("%w: CHAP needs both a user and a password (no spaces)", ErrInvalid)
 		}
-		s.Server, s.Export, s.Options = "", "", ""
+		s.Server, s.Export, s.Options, s.VMDisks, s.SizeGB = "", "", "", false, 0
 	default:
 		return fmt.Errorf("%w: type must be nfs or iscsi", ErrInvalid)
 	}
@@ -295,7 +326,12 @@ func (m *Manager) Add(ctx context.Context, s Storage, format bool) (Status, erro
 // --- NFS ---
 
 func (s Storage) mountOpts() string {
+	// soft: an unreachable NAS gives errors instead of hanging the server; but
+	// VM disks must never see an I/O error for a short outage (ZFS waits)
 	o := "soft,timeo=150,retrans=3,_netdev,nofail,x-systemd.mount-timeout=30"
+	if s.VMDisks {
+		o = "hard,timeo=600,retrans=5,_netdev,nofail,x-systemd.mount-timeout=30"
+	}
 	if s.Options != "" {
 		o += "," + s.Options
 	}
@@ -323,7 +359,69 @@ func (m *Manager) addNFS(ctx context.Context, s Storage) error {
 				ErrInvalid, stderr(err))
 		}
 	}
+	if s.VMDisks {
+		if err := m.nfsPool(ctx, s); err != nil {
+			_, _ = m.Run.Run(context.WithoutCancel(ctx), "umount", dir)
+			_ = os.Remove(dir)
+			return err
+		}
+	}
 	return m.fstab(s.Name, fmt.Sprintf("%s:%s %s nfs %s 0 0", s.Server, s.Export, dir, s.mountOpts()))
+}
+
+// nfsPool imports the storage's pool file on the share, or makes it.
+func (m *Manager) nfsPool(ctx context.Context, s Storage) error {
+	pool, file := PoolName(s.Name), m.PoolFile(s.Name)
+	if _, err := m.Run.Run(ctx, "zpool", "list", "-H", pool); err == nil {
+		return nil // imported already
+	}
+	if _, err := os.Stat(file); err == nil { // server reinstalled: take it over with its VM disks
+		if _, err := m.Run.Run(ctx, "zpool", "import", "-d", m.PoolDir(s.Name), "-N", "-o", "cachefile=none", pool); err != nil {
+			return fmt.Errorf("%w: %s is on the share but can't be opened (%s). Is another server using it?", ErrInvalid, file, stderr(err))
+		}
+		_, _ = m.Run.Run(ctx, "zfs", "create", "-p", "-o", "canmount=off", Dataset(s.Name))
+		return nil
+	}
+	// enough room on the share for the whole file (it starts sparse)
+	if out, err := m.Run.Run(ctx, "timeout", "10", "stat", "-f", "-c", "%a %S", m.PoolDir(s.Name)); err == nil {
+		if f := strings.Fields(string(out)); len(f) == 2 {
+			a, _ := strconv.ParseInt(f[0], 10, 64)
+			bs, _ := strconv.ParseInt(f[1], 10, 64)
+			if free := a * bs >> 30; free > 0 && free < int64(s.SizeGB) {
+				return fmt.Errorf("%w: the share has %d GB free; pick at most that for VM disks", ErrInvalid, free)
+			}
+		}
+	}
+	if _, err := m.Run.Run(ctx, "truncate", "-s", fmt.Sprintf("%dG", s.SizeGB), file); err != nil {
+		return fmt.Errorf("make %s: %s", file, stderr(err))
+	}
+	if _, err := m.Run.Run(ctx, "zpool", "create", "-f", "-o", "cachefile=none", "-o", "ashift=12",
+		"-O", "compression=lz4", "-O", "atime=off", "-m", "none", pool, file); err != nil {
+		_ = os.Remove(file)
+		return fmt.Errorf("make the pool: %s", stderr(err))
+	}
+	if _, err := m.Run.Run(ctx, "zfs", "create", "-o", "canmount=off", Dataset(s.Name)); err != nil {
+		_, _ = m.Run.Run(context.WithoutCancel(ctx), "zpool", "destroy", pool)
+		_ = os.Remove(file)
+		return fmt.Errorf("make the VM folder: %s", stderr(err))
+	}
+	return nil
+}
+
+// poolStatus fills in a VM-disk pool's size and health.
+func (m *Manager) poolStatus(ctx context.Context, st *Status, name string) {
+	out, err := m.Run.Run(ctx, "zpool", "list", "-H", "-p", "-o", "size,free,health", PoolName(name))
+	f := strings.Fields(string(out))
+	if err != nil || len(f) != 3 {
+		st.Online, st.Error = false, "pool not imported: "+stderr(err)
+		return
+	}
+	st.SizeBytes, _ = strconv.ParseInt(f[0], 10, 64)
+	st.FreeBytes, _ = strconv.ParseInt(f[1], 10, 64)
+	st.Online = f[2] == "ONLINE"
+	if !st.Online {
+		st.Error = "pool is " + f[2]
+	}
 }
 
 const fstabMark = "# p8s-storage "
@@ -522,19 +620,15 @@ func (m *Manager) status(ctx context.Context, s Storage) Status {
 		} else {
 			st.Online, st.Error = false, "not answering"
 		}
+		if s.VMDisks && st.Online {
+			st.Uses, st.Device = "VM disks, backup copies, ISOs", m.PoolFile(s.Name)
+			m.poolStatus(ctx, &st, s.Name)
+		}
 	case ISCSI:
 		st.Path, st.Device, st.Uses = Dataset(s.Name), m.Device(s), "VM disks"
-		out, err := m.Run.Run(ctx, "zpool", "list", "-H", "-p", "-o", "size,free,health", PoolName(s.Name))
-		f := strings.Fields(string(out))
-		if err != nil || len(f) != 3 {
-			st.Error = "pool not imported (SAN unreachable?): " + stderr(err)
-			break
-		}
-		st.SizeBytes, _ = strconv.ParseInt(f[0], 10, 64)
-		st.FreeBytes, _ = strconv.ParseInt(f[1], 10, 64)
-		st.Online = f[2] == "ONLINE"
-		if !st.Online {
-			st.Error = "pool is " + f[2]
+		m.poolStatus(ctx, &st, s.Name)
+		if st.Error != "" && strings.HasPrefix(st.Error, "pool not imported") {
+			st.Error = strings.Replace(st.Error, "pool not imported", "pool not imported (SAN unreachable?)", 1)
 		}
 	}
 	return st
@@ -553,6 +647,13 @@ func (m *Manager) Connect(ctx context.Context, name string) (Status, error) {
 		if !m.mounted(dir) {
 			if _, err := m.Run.Run(ctx, "mount", dir); err != nil {
 				return m.status(ctx, s), fmt.Errorf("mount %s: %s", dir, stderr(err))
+			}
+		}
+		if s.VMDisks {
+			if _, err := m.Run.Run(ctx, "zpool", "list", "-H", PoolName(name)); err != nil {
+				if _, err := m.Run.Run(ctx, "zpool", "import", "-d", m.PoolDir(name), "-N", "-o", "cachefile=none", PoolName(name)); err != nil {
+					return m.status(ctx, s), fmt.Errorf("import pool: %s", stderr(err))
+				}
 			}
 		}
 	case ISCSI:
@@ -593,6 +694,11 @@ func (m *Manager) Remove(ctx context.Context, name string) error {
 	switch s.Type {
 	case NFS:
 		dir := m.MountPoint(name)
+		if s.VMDisks {
+			if _, err := m.Run.Run(ctx, "zpool", "export", PoolName(name)); err != nil && !strings.Contains(stderr(err), "no such pool") {
+				return fmt.Errorf("release the pool: %s (is a VM on it still running?)", stderr(err))
+			}
+		}
 		if m.mounted(dir) {
 			if _, err := m.Run.Run(ctx, "umount", dir); err != nil {
 				if _, err2 := m.Run.Run(ctx, "umount", "-l", dir); err2 != nil {

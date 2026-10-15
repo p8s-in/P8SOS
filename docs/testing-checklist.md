@@ -541,6 +541,18 @@ Build a new ISO on the laptop: `sudo bash iso/build-installer.sh ~/P8SOS/dist` (
 - [ ] Anti-spoofing: inside the VM `ip addr add <a free pool address>` and ping out → dropped; IPv6 from an address not its own → dropped
 - [ ] `p8 ip web1`, `p8 ip add web1`, `p8 ip change web1 --pool dc2` print the addresses
 
+## 50. VM disks on an NFS share
+
+- [ ] Server → Network storage → Add NAS share, tick "VM disks here too", 100 GB → online, holds "VM disks, backup copies, ISOs"; on the NAS a file `p8s/vmdisks-nas.zpool` (small: sparse); `zpool list p8s-nas`
+- [ ] New VM with Storage: nas → boots; snapshot, rollback, backup + restore, data disk, clone all work
+- [ ] Move an existing VM to nas (Manage → Storage) and back
+- [ ] Reboot the server → share mounted, pool imported before the VMs start (autostart VM on nas comes up); `journalctl -u p8s-storages`
+- [ ] Shutdown doesn't hang (pool closed: "nas: pool closed" in the log)
+- [ ] Pull the NAS cable for 30 s while a VM writes → the VM pauses and carries on, no disk errors inside
+- [ ] Remove the storage with a VM on it → refused; without VMs → pool released, unmounted, the file stays on the NAS
+- [ ] Add it again with the same name + VM disks → taken over (its VM disks are there: `zfs list -r p8s-nas`)
+- [ ] `p8 storages add-nfs nas2 NAS /export --vm-disks 50`
+
 ## Add new features here as they are built
 
 (Every new feature adds its own lines above before it counts as done.)

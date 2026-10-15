@@ -178,3 +178,57 @@ func TestParseTargets(t *testing.T) {
 		t.Fatalf("%v", l)
 	}
 }
+
+func TestNFSVMDisks(t *testing.T) {
+	ctx := context.Background()
+	r := &testfake.Runner{Out: map[string]string{"timeout 10 stat -f": "900000 4096\n", "timeout 5 stat -f": "100000000 90000000 4096\n",
+		"zpool list -H -p": "107374182400 100000000000 ONLINE\n"}, Fail: map[string]string{"zpool list -H p8s-nas": "no such pool"}}
+	m, _ := newMgr(t, r)
+	if _, err := m.Add(ctx, Storage{Name: "nas", Type: NFS, Server: "10.0.0.5", Export: "/x", VMDisks: true, SizeGB: 5}, false); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("too small: %v", err)
+	}
+	// the share has only ~3 GB free
+	if _, err := m.Add(ctx, Storage{Name: "nas", Type: NFS, Server: "10.0.0.5", Export: "/x", VMDisks: true, SizeGB: 100}, false); err == nil || !strings.Contains(err.Error(), "GB free") {
+		t.Fatalf("no room: %v", err)
+	}
+	r.Out["timeout 10 stat -f"] = "90000000 4096\n"
+	mp := m.MountPoint("nas")
+	if _, err := m.Add(ctx, Storage{Name: "nas", Type: NFS, Server: "10.0.0.5", Export: "/x", VMDisks: true, SizeGB: 100}, false); err != nil {
+		t.Fatal(err)
+	}
+	calls := strings.Join(r.Calls, "\n")
+	file := mp + "/p8s/vmdisks-nas.zpool"
+	for _, want := range []string{"mount -t nfs -o hard,timeo=600", "truncate -s 100G " + file,
+		"zpool create -f -o cachefile=none -o ashift=12 -O compression=lz4 -O atime=off -m none p8s-nas " + file,
+		"zfs create -o canmount=off p8s-nas/vms"} {
+		if !strings.Contains(calls, want) {
+			t.Fatalf("no %q in\n%s", want, calls)
+		}
+	}
+	if p := m.VMPools(); p["nas"] != "p8s-nas/vms" {
+		t.Fatalf("pools %v", p)
+	}
+	os.WriteFile(m.Mounts, []byte("10.0.0.5:/x "+mp+" nfs4 rw 0 0\n"), 0o644)
+	st := m.List(ctx)[0]
+	if !st.Online || st.SizeBytes != 107374182400 || !strings.Contains(st.Uses, "VM disks") || !st.HoldsVMs() {
+		t.Fatalf("status %+v", st)
+	}
+	if err := m.Remove(ctx, "nas"); err != nil {
+		t.Fatal(err)
+	}
+	if calls = strings.Join(r.Calls, "\n"); !strings.Contains(calls, "zpool export p8s-nas") {
+		t.Fatalf("pool not released:\n%s", calls)
+	}
+
+	// the file is on the share already (server reinstalled): taken over
+	r2 := &testfake.Runner{Fail: map[string]string{"zpool list -H p8s-nas": "no such pool"}}
+	m2, _ := newMgr(t, r2)
+	os.MkdirAll(m2.PoolDir("nas"), 0o755)
+	os.WriteFile(m2.PoolFile("nas"), []byte("zfs"), 0o600)
+	if _, err := m2.Add(ctx, Storage{Name: "nas", Type: NFS, Server: "10.0.0.5", Export: "/x", VMDisks: true}, false); err != nil {
+		t.Fatal(err)
+	}
+	if calls := strings.Join(r2.Calls, "\n"); !strings.Contains(calls, "zpool import -d "+m2.PoolDir("nas")+" -N -o cachefile=none p8s-nas") || strings.Contains(calls, "zpool create") {
+		t.Fatalf("not taken over:\n%s", calls)
+	}
+}

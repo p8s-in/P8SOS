@@ -25,8 +25,8 @@ function netRow(s){
 function renderNetStorage(){
   const l = netStores?.storages || [];
   $("#ndNet").innerHTML = `
-    <div class="sub">A NAS share (NFS) keeps copies of every backup and your ISO collection. A SAN disk (iSCSI) holds VM disks, with
-      snapshots and backups like local ones; one server uses a disk at a time.${netStores?.initiator ? ` This server's iSCSI name (allow it on the SAN): <span class="mono">${esc(netStores.initiator)}</span>` : ""}</div>
+    <div class="sub">A NAS share (NFS) keeps copies of every backup and your ISO collection, and can hold VM disks too. A SAN disk (iSCSI)
+      holds VM disks. VM disks on either have snapshots and backups like local ones; one server uses them at a time.${netStores?.initiator ? ` This server's iSCSI name (allow it on the SAN): <span class="mono">${esc(netStores.initiator)}</span>` : ""}</div>
     <table class="snaps"><tbody>${l.length ? l.map(netRow).join("") : `<tr><td class="sub">None yet.</td></tr>`}</tbody></table>
     <details id="nsAddBox"><summary class="btn" style="display:inline-block">Add network storage</summary>
       <div class="row" style="margin-top:8px">
@@ -39,6 +39,9 @@ function renderNetStorage(){
         <div><label for="nsOpts">Options <span class="muted">(optional)</span></label><input id="nsOpts" placeholder="vers=3" autocomplete="off"></div>
       </div>
       <label id="nsBackupsL" class="check"><input id="nsBackups" type="checkbox" checked> Copy every backup here (keeps 7 per VM)</label>
+      <div id="nsVMsBox"><label class="check"><input id="nsVMs" type="checkbox"> VM disks here too</label>
+        <div class="inline" id="nsVMsSize" hidden><label for="nsSize" style="margin:0">Space for VM disks (GB)</label><input id="nsSize" type="number" min="10" value="200" style="flex:0 0 110px">
+          <span class="hint" style="margin:0">a ZFS pool in one file on the share (it only uses what VMs write); the share is mounted "hard" so a NAS hiccup pauses VMs instead of breaking their disks</span></div></div>
       <div id="nsISCSI" hidden>
         <div class="row">
           <div><label for="nsPortal">SAN address</label><input id="nsPortal" placeholder="192.168.0.20" autocomplete="off"></div>
@@ -58,9 +61,10 @@ function renderNetStorage(){
     </details>`;
   const type = () => $("#nsType").value;
   $("#nsType").onchange = () => {
-    $("#nsNFS").hidden = $("#nsBackupsL").hidden = type() !== "nfs";
+    $("#nsNFS").hidden = $("#nsBackupsL").hidden = $("#nsVMsBox").hidden = type() !== "nfs";
     $("#nsISCSI").hidden = type() !== "iscsi";
   };
+  $("#nsVMs").onchange = () => { $("#nsVMsSize").hidden = !$("#nsVMs").checked; };
   $("#nsFind").onclick = async () => {
     try {
       const r = await call("POST", "/storages/discover", {portal: $("#nsPortal").value.trim()});
@@ -72,7 +76,7 @@ function renderNetStorage(){
   $("#nsAdd").onclick = async () => {
     const go = $("#nsAdd"), body = {name: $("#nsName").value.trim(), type: type()};
     if (type() === "nfs") Object.assign(body, {server: $("#nsServer").value.trim(), export: $("#nsExport").value.trim(),
-      options: $("#nsOpts").value.trim(), backups: $("#nsBackups").checked});
+      options: $("#nsOpts").value.trim(), backups: $("#nsBackups").checked, vm_disks: $("#nsVMs").checked, size_gb: +$("#nsSize").value || 0});
     else Object.assign(body, {portal: $("#nsPortal").value.trim(), target: $("#nsTarget").value.trim(), lun: +$("#nsLun").value,
       chap_user: $("#nsChapU").value.trim(), chap_password: $("#nsChapP").value, format: $("#nsFormat").checked});
     go.disabled = true; go.textContent = "Connecting…";

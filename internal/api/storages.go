@@ -96,6 +96,9 @@ func (s *Server) addStorage(w http.ResponseWriter, r *http.Request) {
 	note := ""
 	if req.Type == storages.NFS {
 		note = fmt.Sprintf("ISOs put in %s on the NAS show up in the ISO library.", s.Storages.ISODir(req.Name))
+		if req.VMDisks {
+			note += fmt.Sprintf(" New VMs can go on it: Create → Storage: %s (p8 create NAME --storage %s).", req.Name, req.Name)
+		}
 		if req.Backups {
 			if s.Offsite == nil {
 				note += " Backup copies need off-site backups, which aren't available here."

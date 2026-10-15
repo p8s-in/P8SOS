@@ -381,7 +381,7 @@ func serve(args []string) error {
 					free = int(st.FreeBytes * 100 / st.SizeBytes)
 				}
 				out = append(out, monitor.Storage{Name: st.Name, Online: st.Online, Error: st.Error,
-					VMDisks: st.Type == storages.ISCSI, FreePct: free})
+					VMDisks: st.HoldsVMs(), FreePct: free})
 			}
 			return out
 		},
