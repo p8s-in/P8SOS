@@ -382,6 +382,7 @@ type ifaceXML struct {
 		Name   string `xml:"name,attr"`
 		Queues int    `xml:"queues,attr,omitempty"`
 	} `xml:"driver"`
+	MTU       *mtuXML       `xml:"mtu"`
 	Bandwidth *bandwidthXML `xml:"bandwidth"`
 }
 
@@ -571,10 +572,12 @@ func DomainXML(s Spec) ([]byte, error) {
 		}{"vhost", queues}
 	}
 	nic.Bandwidth = s.Limits.bandwidth()
+	nic.MTU = mtuFor(s.Bridge)
 	d.Devices.Interfaces = []ifaceXML{nic}
 	for _, e := range s.NICs {
 		x := nic // same model and driver as the first card
 		x.MAC.Address, x.Source.Bridge = e.MAC, e.Bridge
+		x.MTU = mtuFor(e.Bridge)
 		d.Devices.Interfaces = append(d.Devices.Interfaces, x)
 	}
 
@@ -680,6 +683,22 @@ func ExtraDiskXML(s Spec, e ExtraDisk) ([]byte, error) {
 		XMLName xml.Name `xml:"disk"`
 		diskXML
 	}{diskXML: x}, "", "  ")
+}
+
+type mtuXML struct {
+	Size int `xml:"size,attr"`
+}
+
+// VNetMTU is the card MTU on a cluster virtual network (bridges vxb<VNI>):
+// its frames travel inside the WireGuard tunnel (sdn.MTU).
+const VNetMTU = 1230
+
+// mtuFor gives cards on a virtual network's bridge the smaller MTU.
+func mtuFor(bridge string) *mtuXML {
+	if strings.HasPrefix(bridge, "vxb") {
+		return &mtuXML{Size: VNetMTU}
+	}
+	return nil
 }
 
 // NICXML is one extra network card's <interface> element, for plugging it into

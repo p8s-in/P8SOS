@@ -500,6 +500,9 @@ func (s *Service) restoreAsNew(ctx context.Context, name string, m Backup, p job
 	bridge, err := s.bridgeVLAN(ctx, network, m.VLAN)
 	if err != nil {
 		bridge, note = s.bridgeFor(NetNAT), fmt.Sprintf(" (VLAN %d isn't available, so it is on the private network)", m.VLAN)
+		if IsVNet(network) {
+			note = " (" + network + " isn't available here, so it is on the private network)"
+		}
 	}
 	// A deleted VM recreated under its own name gets its public address back
 	// (or another one from the pool); copies under a new name stay private.

@@ -236,7 +236,13 @@ func (s *Service) StartImport(ctx context.Context, r ImportRequest) (Job, error)
 			errs = append(errs, "network \"lan\" is not set up on this host")
 		}
 	default:
-		errs = append(errs, `network must be "nat" or "lan"`)
+		if IsVNet(network) {
+			if msg := s.checkVNet(network); msg != "" {
+				errs = append(errs, msg)
+			}
+			break
+		}
+		errs = append(errs, `network must be "nat", "lan" or "vnet:NAME"`)
 	}
 	if _, err := s.HV.State(ctx, Prefix+pl.Name); err == nil {
 		errs = append(errs, fmt.Sprintf("a VM called %q exists already", pl.Name))

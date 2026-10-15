@@ -55,6 +55,7 @@ import (
 	"p8sos/internal/metrics"
 	"p8sos/internal/offsite"
 	"p8sos/internal/portfwd"
+	"p8sos/internal/sdn"
 	"p8sos/internal/secpol"
 	"p8sos/internal/sso"
 	"p8sos/internal/storage"
@@ -518,7 +519,45 @@ func serve(args []string) error {
 		}}
 	// no single master: every server keeps the master's settings and can take over
 	clu.DataDir = cfg.DataDir
-	clu.BookFiles = []string{"users.json", "vm-shares.json", "firewall-dc.json", "cluster/ha.json", "ippools.json", "security.json", "ldap.json", "sso.json"}
+	clu.BookFiles = []string{"users.json", "vm-shares.json", "firewall-dc.json", "cluster/ha.json", "ippools.json", "security.json", "ldap.json", "sso.json", "sdn.json"}
+	// virtual networks across the servers (VXLAN in the tunnel; the master is their gateway)
+	vnets := &sdn.Manager{Store: &sdn.Store{Path: filepath.Join(cfg.DataDir, "sdn.json")}, Run: run, DataDir: cfg.DataDir,
+		Where: func() sdn.Where {
+			st := clu.State()
+			w := sdn.Where{Gateway: st.Role != "worker"}
+			if st.Role == "" {
+				return w
+			}
+			w.Self = st.Self.WGIP
+			for _, n := range append(append([]cluster.Node(nil), st.Nodes...), st.Mesh...) {
+				if n.WGIP != "" && n.WGIP != w.Self {
+					w.Peers = append(w.Peers, n.WGIP)
+				}
+			}
+			return w
+		}}
+	svc.VNets, apiSrv.VNets = vnets, vnets
+	go func() {
+		last := ""
+		for {
+			if clu.Role() == "worker" { // the master's settings arrive with the cluster book
+				_, _ = vnets.Store.Adopt(filepath.Join(clu.Dir, "standby", "sdn.json"))
+			}
+			msg := ""
+			if err := vnets.Apply(ctx); err != nil {
+				msg = err.Error()
+			}
+			if msg != last && msg != "" {
+				log.Warn("virtual networks", "err", msg)
+			}
+			last = msg
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(time.Minute):
+			}
+		}
+	}()
 	clu.OnRoleChange = func(role string) {
 		log.Warn("cluster role changed; restarting p8sd to take it up", "role", role)
 		go func() { time.Sleep(2 * time.Second); os.Exit(3) }() // systemd starts it again (VMs keep running)

@@ -34,6 +34,7 @@ import (
 	"p8sos/internal/mail"
 	"p8sos/internal/metrics"
 	"p8sos/internal/offsite"
+	"p8sos/internal/sdn"
 	"p8sos/internal/secpol"
 	"p8sos/internal/sso"
 	"p8sos/internal/storage"
@@ -106,6 +107,8 @@ type Server struct {
 	Users *users.Store
 	// DCFirewall is the datacenter firewall (IP sets, blocks, rules for all VMs); nil = off.
 	DCFirewall *firewall.GlobalStore
+	// VNets are the virtual networks across the servers (internal/sdn); nil = off.
+	VNets *sdn.Manager
 	// Browse opens backups for file-level restore; nil = off.
 	Browse *browse.Manager
 	// Shares: VMs shared with users besides their owner (per-VM permissions); nil = off.
@@ -369,6 +372,8 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("DELETE /api/v1/sites/{host}", s.deleteSite)
 	auth.HandleFunc("GET /api/v1/firewall", s.getDCFirewall)
 	auth.HandleFunc("PUT /api/v1/firewall", s.putDCFirewall)
+	auth.HandleFunc("GET /api/v1/sdn", s.getSDN)
+	auth.HandleFunc("PUT /api/v1/sdn", s.putSDN)
 	auth.HandleFunc("GET /api/v1/vms/{name}/firewall", s.getFirewall)
 	auth.HandleFunc("PUT /api/v1/vms/{name}/firewall", s.putFirewall)
 	auth.HandleFunc("GET /api/v1/node/encryption", s.getEncryption)

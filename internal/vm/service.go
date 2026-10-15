@@ -59,6 +59,8 @@ type Service struct {
 	LANBridge     string // bridge onto the home network (network "lan"); empty = not set up
 	// VLANs makes the bridges of tagged VLANs on the home network; nil = no VLANs.
 	VLANs VLANs
+	// VNets are the cluster's virtual networks (nil: none).
+	VNets VNets
 	// BridgeUp reports whether a host bridge exists; nil means "assume yes".
 	BridgeUp func(name string) bool
 	// TPMReady reports whether the software TPM (swtpm) is installed; nil = yes.
@@ -215,6 +217,34 @@ func (s *Service) Networks() []string {
 	return []string{NetNAT}
 }
 
+// VNets resolves cluster-wide virtual networks (sdn.Manager): network
+// "vnet:NAME" is the bridge of vnet NAME on every server.
+type VNets interface {
+	BridgeOf(ctx context.Context, name string) (string, error)
+	NameOf(bridge string) string
+	Names() []string
+}
+
+// NetVNetPrefix starts a virtual network's name as a VM's network ("vnet:office").
+const NetVNetPrefix = "vnet:"
+
+// IsVNet says whether a network is a virtual network ("vnet:NAME").
+func IsVNet(network string) bool { return strings.HasPrefix(network, NetVNetPrefix) }
+
+// checkVNet says what is wrong with a "vnet:NAME" network ("" = fine).
+func (s *Service) checkVNet(network string) string {
+	if s.VNets == nil {
+		return "virtual networks aren't available on this server"
+	}
+	name := strings.TrimPrefix(network, NetVNetPrefix)
+	for _, n := range s.VNets.Names() {
+		if n == name {
+			return ""
+		}
+	}
+	return fmt.Sprintf("there is no virtual network %q (Settings → Virtual networks)", name)
+}
+
 // VLANs makes the bridge of a tagged VLAN (vlan.Manager).
 type VLANs interface {
 	Bridge(ctx context.Context, vid int) (string, error)
@@ -230,6 +260,12 @@ func (s *Service) vlanOf(bridge string) int {
 
 // bridgeVLAN is the bridge for a network and VLAN (made if needed).
 func (s *Service) bridgeVLAN(ctx context.Context, network string, vid int) (string, error) {
+	if IsVNet(network) {
+		if s.VNets == nil {
+			return "", fmt.Errorf("%w: virtual networks aren't available on this server", ErrInvalid)
+		}
+		return s.VNets.BridgeOf(ctx, strings.TrimPrefix(network, NetVNetPrefix))
+	}
 	if vid > 0 && network == NetLAN {
 		if s.VLANs == nil {
 			return "", fmt.Errorf("%w: VLANs aren't available on this host", ErrInvalid)
@@ -254,6 +290,13 @@ func (s *Service) checkVLAN(network string, vid int) string {
 }
 
 func (s *Service) bridgeFor(network string) string {
+	if IsVNet(network) {
+		if s.VNets == nil {
+			return ""
+		}
+		br, _ := s.VNets.BridgeOf(context.Background(), strings.TrimPrefix(network, NetVNetPrefix))
+		return br
+	}
 	if network == NetLAN {
 		return s.LANBridge
 	}
@@ -261,6 +304,11 @@ func (s *Service) bridgeFor(network string) string {
 }
 
 func (s *Service) networkOf(bridge string) string {
+	if s.VNets != nil {
+		if n := s.VNets.NameOf(bridge); n != "" {
+			return NetVNetPrefix + n
+		}
+	}
 	if s.LANBridge != "" && bridge == s.LANBridge || s.vlanOf(bridge) > 0 {
 		return NetLAN
 	}
@@ -328,7 +376,13 @@ func (s *Service) validate(r *CreateRequest) (config.Template, error) {
 		}
 	case NetPublic:
 	default:
-		errs = append(errs, `network must be "nat", "lan" or "public"`)
+		if IsVNet(r.Network) {
+			if msg := s.checkVNet(r.Network); msg != "" {
+				errs = append(errs, msg)
+			}
+			break
+		}
+		errs = append(errs, `network must be "nat", "lan", "public" or "vnet:NAME"`)
 	}
 	if msg := s.checkVLAN(r.Network, r.VLAN); msg != "" {
 		errs = append(errs, msg)

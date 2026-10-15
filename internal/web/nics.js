@@ -14,7 +14,8 @@ document.querySelector('[data-tab="network"]').insertAdjacentHTML("afterbegin", 
     It is plugged in at once while the VM runs; the VM's firewall covers every card.</div>
 </div>`);
 
-const nicNet = n => n.network === "lan" ? (n.vlan ? `VLAN ${n.vlan}` : "Home network") : n.network === "public" ? "Public IP" : "Private network (NAT)";
+const nicNet = n => n.network === "lan" ? (n.vlan ? `VLAN ${n.vlan}` : "Home network") : n.network === "public" ? "Public IP"
+  : (n.network || "").startsWith("vnet:") ? "Virtual network " + n.network.slice(5) : "Private network (NAT)";
 
 function renderNICs(v){
   const box = $("#mNicBox"), staff = me?.role === "admin" || me?.role === "operator";
@@ -25,6 +26,7 @@ function renderNICs(v){
   if ($("#mNics").dataset.key === key) return; // keep half-confirmed buttons
   $("#mNics").dataset.key = key;
   const lan = !!host?.networks?.includes("lan");
+  if (typeof vnetOptions === "function" && !$("#mNicNet").dataset.vn) { $("#mNicNet").dataset.vn = "1"; vnetOptions($("#mNicNet"), "Virtual network"); }
   $("#mNicNet").querySelector('[value="lan"]').disabled = !lan;
   if (!lan) $("#mNicNet").value = "nat";
   $("#mNicVlan").hidden = $("#mNicNet").value !== "lan";

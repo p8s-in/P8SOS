@@ -43,7 +43,13 @@ func (s *Service) AddNIC(ctx context.Context, name, network string, vid int) (VM
 			return VM{}, "", fmt.Errorf("%w: the home network isn't set up on this server (Server page → Home network)", ErrInvalid)
 		}
 	default:
-		return VM{}, "", fmt.Errorf("%w: network must be \"nat\" or \"lan\" (a public address is only for the first card)", ErrInvalid)
+		if IsVNet(network) {
+			if msg := s.checkVNet(network); msg != "" {
+				return VM{}, "", fmt.Errorf("%w: %s", ErrInvalid, msg)
+			}
+			break
+		}
+		return VM{}, "", fmt.Errorf("%w: network must be \"nat\", \"lan\" or \"vnet:NAME\" (a public address is only for the first card)", ErrInvalid)
 	}
 	if msg := s.checkVLAN(network, vid); msg != "" {
 		return VM{}, "", fmt.Errorf("%w: %s", ErrInvalid, msg)

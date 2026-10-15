@@ -129,6 +129,9 @@ func (s *Service) moveHeader(ctx context.Context, name string) (MoveHeader, erro
 	if v := s.vlanOf(sp.Bridge); v > 0 {
 		h.Network, h.VLAN = NetLAN, v
 	}
+	if n := s.networkOf(sp.Bridge); IsVNet(n) {
+		h.Network = n // the same virtual network on every server
+	}
 	h.NICs = s.nicsOf(sp)
 	if fw, err := s.GetFirewall(ctx, name); err == nil && (fw.Enabled || len(fw.Rules) > 0) {
 		h.Firewall = &fw
@@ -266,6 +269,9 @@ func (s *Service) defineMoved(ctx context.Context, h MoveHeader, disk string, un
 	bridge, err := s.bridgeVLAN(ctx, network, h.VLAN)
 	if err != nil {
 		bridge, note = s.bridgeFor(NetNAT), fmt.Sprintf("; VLAN %d isn't available here (%v), so it is on the private network", h.VLAN, err)
+		if IsVNet(network) {
+			note = fmt.Sprintf("; %s isn't available here (%v), so it is on the private network", network, err)
+		}
 	}
 	seed := ""
 	if h.Seed {

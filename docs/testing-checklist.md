@@ -420,6 +420,21 @@ Needs a third always-on Linux box (a Raspberry Pi, another PC, a small VM on you
 - [ ] Witness down and the master switched off: the worker does NOT take over (only 1 of 3 votes) — `p8 cluster promote` still works by hand
 - [ ] Remove witness → `p8 cluster` back to "2 servers", no automatic takeover
 
+## 38. Virtual networks (SDN)
+
+- [ ] Settings → Virtual networks → `office` with subnet `10.60.0.0/24` → Add: "on every server"; `p8 vnets` on p8s-vm1 lists it too
+- [ ] On both servers: `ip -br link | grep vx` shows `vxb10000` and `vxl10000` UP; `bridge fdb show dev vxl10000 | grep 00:00:00` points at the other server's 10.250.0.x
+- [ ] On the master: `systemctl status p8s-vnet-office` running; `ip -br addr show vxb10000` = 10.60.0.1/24
+- [ ] Create VM `a` on p8s-node and VM `b` on p8s-vm1, both Network → Virtual network — office: each gets a 10.60.0.x address (`p8 show`), `ip link` inside shows mtu 1230
+- [ ] In `a`: `ping` b's 10.60.0.x works; `ping 1.1.1.1` and `apt update` work (internet through the master)
+- [ ] In `b`: `ping 192.168.0.1` (your router) fails — fenced like the private network; `ssh 10.60.0.1` (the master) fails, DNS (`dig debian.org @10.60.0.1`) works
+- [ ] Live-move `b` to p8s-node: it keeps its address and the ping from `a` continues
+- [ ] Add a second card on a new switch-only network `db` to both VMs; set 10.70.0.1/24 and .2/24 by hand: they ping each other across the servers
+- [ ] A network without internet (untick "internet"): VMs get addresses but `ping 1.1.1.1` fails
+- [ ] Remove `office` while VMs use it → refused with their names; move them off → removed on both servers (`ip -br link | grep vx` empty for it)
+- [ ] Reboot p8s-vm1 with a VM on `office` set to start at boot: it starts (bridge made at boot by p8s-vlans.service) and gets its address again
+- [ ] From another PC on the home network, a VXLAN packet to the server's LAN IP (UDP 4789) is dropped (`nft list table inet p8s_sdn` shows the rule)
+
 ## Add new features here as they are built
 
 (Every new feature adds its own lines above before it counts as done.)

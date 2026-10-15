@@ -29,6 +29,7 @@ p8 — manage P8S OS virtual machines
   p8 rmiso NAME.iso                delete an ISO
   p8 eject NAME                    take the installer CD out (VM stopped)
                                    --lan: on your home network, IP from your router
+                                   --net NET: on virtual network NET (spans every server; p8 vnets)
                                    --root-password: asks for a root password (SSH login allowed)
   p8 show NAME                     details of one VM
   p8 start NAME                    power on
@@ -41,7 +42,7 @@ p8 — manage P8S OS virtual machines
   p8 disks NAME                    list a VM's extra disks
   p8 disk-add NAME GB              give a VM another (empty) disk
   p8 nics NAME                     a VM's network cards
-  p8 nic-add NAME nat|lan [--vlan ID]  another network card (plugged in while it runs)
+  p8 nic-add NAME nat|lan|vnet:NET [--vlan ID]  another network card (plugged in while it runs)
   p8 nic-rm NAME MAC               remove a network card (not the first)
   p8 files NAME BACKUP_ID [PATH] [--part ID]   look inside a backup; with a file PATH: download it here
   p8 storage NAME STORAGE [--drop-snapshots]   move a VM's disks to another storage (local, ceph, a NAS/SAN pool)
@@ -102,6 +103,10 @@ p8 — manage P8S OS virtual machines
   p8 tunnel [dashboard NAME|off]   status / publish the dashboard as NAME.yourdomain
   p8 publish VM NAME PORT [--https]  website: https://NAME.yourdomain -> VM:PORT
   p8 sites / p8 unpublish HOST     list / remove websites
+  p8 vnets                         virtual networks across the servers (VMs on one talk wherever they run)
+  p8 vnet-add NAME [SUBNET] [--no-internet] [--comment TEXT]
+                                   add one; with SUBNET (10.60.0.0/24) the master is gateway + DHCP + NAT
+  p8 vnet-rm NAME                  remove one (no VM may use it)
   p8 fw NAME [on|off]              VM firewall: show, switch on/off
   p8 fw NAME allow tcp 22 [from 203.0.113.0/24] | allow ping | remove N
   p8 users                         user accounts (dashboard sign-in)
@@ -249,7 +254,9 @@ case $cmd in
 
   create|new)
     net=nat; args=(); askpw=0; os=debian-13; next_os=0; iso=""; next_iso=0; ostype=linux; owner=""; next_for=0; ippool=""; next_ip=0; vlan=""; next_vlan=0; store=""; next_store=0
+    next_net=0
     for a in "$@"; do
+      if (( next_net )); then net=vnet:${a#vnet:}; next_net=0; continue; fi
       if (( next_for )); then owner=$a; next_for=0; continue; fi
       if (( next_ip )); then ippool=$a; next_ip=0; continue; fi
       if (( next_os )); then os=$a; next_os=0; continue; fi
@@ -257,7 +264,7 @@ case $cmd in
       if (( next_vlan )); then vlan=$a; next_vlan=0; continue; fi
       if (( next_store )); then store=$a; next_store=0; continue; fi
       case $a in
-        --lan) net=lan ;; --nat) net=nat ;; --vlan) net=lan; next_vlan=1 ;; --vlan=*) net=lan; vlan=${a#*=} ;; --root-password|--password) askpw=1 ;;
+        --lan) net=lan ;; --nat) net=nat ;; --net=*) v=${a#*=}; net=vnet:${v#vnet:} ;; --net) next_net=1 ;; --vlan) net=lan; next_vlan=1 ;; --vlan=*) net=lan; vlan=${a#*=} ;; --root-password|--password) askpw=1 ;;
         --os|--template) next_os=1 ;; --os=*|--template=*) os=${a#*=} ;;
         --iso) next_iso=1 ;; --iso=*) iso=${a#*=} ;; --windows) ostype=windows ;;
         --for) next_for=1 ;; --for=*) owner=${a#*=} ;;
@@ -364,10 +371,40 @@ case $cmd in
 
   nic-add)
     need "${1:-}"; net=${2:-nat}; vlan=0
-    [[ $net =~ ^(nat|lan)$ ]] || { red "usage: p8 nic-add NAME nat|lan [--vlan ID]"; exit 1; }
+    [[ $net =~ ^(nat|lan|vnet:[a-z][a-z0-9-]*)$ ]] || { red "usage: p8 nic-add NAME nat|lan|vnet:NET [--vlan ID]"; exit 1; }
     [[ ${3:-} == --vlan ]] && { [[ ${4:-} =~ ^[0-9]+$ ]] || { red "--vlan needs a number 1-4094"; exit 1; }; vlan=$4; }
     body=$(call POST "/vms/$1/nics" "$(jq -nc --arg n "$net" --argjson v "$vlan" '{network:$n,vlan:$v}')") || exit 1
     green "✔ $(jq -r .note <<<"$body")" ;;
+
+  vnets)
+    body=$(call GET /sdn) || exit 1
+    [[ $(jq '.vnets | length' <<<"$body") == 0 ]] && { echo "No virtual networks. Add one: p8 vnet-add office 10.60.0.0/24"; exit 0; }
+    jq -r '.vnets[] | [.name, "vxb\(.vni)", (if .subnet then "\(.subnet) gateway+DHCP\(if .nat == false then ", no internet" else ", internet" end)" else "switch only" end), (.comment // "")] | @tsv' <<<"$body" |
+      { command -v column >/dev/null && column -t -s $'\t' || cat; }
+    echo "VMs use one with: p8 create NAME --net NET   or   p8 nic-add VM vnet:NET" ;;
+
+  vnet-add)
+    [[ -n ${1:-} ]] || { red "usage: p8 vnet-add NAME [SUBNET] [--no-internet] [--comment TEXT]"; exit 1; }
+    name=$1; shift; subnet=""; nat=true; comment=""
+    while (( $# )); do
+      case $1 in
+        --no-internet) nat=false ;; --comment) comment=${2:-}; shift ;;
+        */*) subnet=$1 ;; *) red "unknown: $1"; exit 1 ;;
+      esac; shift
+    done
+    body=$(call GET /sdn) || exit 1
+    new=$(jq -c --arg n "$name" --arg s "$subnet" --argjson nat "$nat" --arg c "$comment" \
+      '{vnets: (.vnets + [{name:$n, subnet:$s, comment:$c} + (if $s != "" then {nat:$nat} else {} end)])}' <<<"$body")
+    r=$(call PUT /sdn "$new") || exit 1
+    green "✔ virtual network $name is on every server"
+    n=$(jq -r '.note // ""' <<<"$r"); [[ -n $n ]] && echo "$n" ;;
+
+  vnet-rm)
+    [[ -n ${1:-} ]] || { red "usage: p8 vnet-rm NAME"; exit 1; }
+    body=$(call GET /sdn) || exit 1
+    jq -e --arg n "$1" '.vnets | any(.name == $n)' <<<"$body" >/dev/null || { red "no virtual network $1"; exit 1; }
+    call PUT /sdn "$(jq -c --arg n "$1" '{vnets: [.vnets[] | select(.name != $n)]}' <<<"$body")" >/dev/null || exit 1
+    green "✔ virtual network $1 removed" ;;
 
   nic-rm)
     need "${1:-}"; [[ ${2:-} =~ ^[0-9a-fA-F:]{17}$ ]] || { red "usage: p8 nic-rm NAME MAC   (see: p8 nics NAME)"; exit 1; }

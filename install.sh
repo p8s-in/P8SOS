@@ -66,6 +66,7 @@ if zpool list -H "$POOL" >/dev/null 2>&1 && zfs list -H "$POOL/p8s/vms" >/dev/nu
   command -v smartctl >/dev/null || apt-get install -y smartmontools >/dev/null 2>&1 || true  # disk health alerts
   command -v ping >/dev/null || apt-get install -y iputils-ping >/dev/null 2>&1 || true  # high availability: is the router reachable
   command -v lspci >/dev/null || apt-get install -y pciutils usbutils >/dev/null 2>&1 || true  # PCI/USB passthrough: device names
+  [[ -x /usr/sbin/dnsmasq ]] || apt-get install -y dnsmasq-base >/dev/null 2>&1 || true  # virtual networks: DHCP and DNS on their gateway
 else
   P8S_BRIDGE=$BRIDGE bash "$REPO/scripts/bootstrap-debian13.sh" $DEV
 fi
@@ -187,6 +188,7 @@ install -m 0755 "$REPO/scripts/acme.sh" /usr/local/share/p8s/acme.sh
 install -m 0755 "$REPO/scripts/netcheck.sh" /usr/local/share/p8s/netcheck.sh
 install -m 0755 "$REPO/scripts/tailscale.sh" /usr/local/share/p8s/tailscale.sh
 install -m 0755 "$REPO/scripts/vlans.sh" /usr/local/share/p8s/vlans.sh
+install -m 0755 "$REPO/scripts/sdn.sh" /usr/local/share/p8s/sdn.sh
 install -m 0755 "$REPO/scripts/setup-bond.sh" /usr/local/share/p8s/setup-bond.sh
 install -m 0755 "$REPO/scripts/ipv6.sh" /usr/local/share/p8s/ipv6.sh
 install -m 0644 "$REPO/deploy/p8s-vlans.service" /etc/systemd/system/p8s-vlans.service

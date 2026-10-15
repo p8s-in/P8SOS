@@ -113,7 +113,13 @@ func (s *Service) createFromISO(ctx context.Context, r CreateRequest) (VM, error
 		}
 	case NetPublic:
 	default:
-		errs = append(errs, `network must be "nat", "lan" or "public"`)
+		if IsVNet(r.Network) {
+			if msg := s.checkVNet(r.Network); msg != "" {
+				errs = append(errs, msg)
+			}
+			break
+		}
+		errs = append(errs, `network must be "nat", "lan", "public" or "vnet:NAME"`)
 	}
 	if msg := s.checkStorage(r.Storage); msg != "" {
 		errs = append(errs, msg)

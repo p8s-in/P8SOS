@@ -1038,7 +1038,7 @@ function renderVMs(){
     const ip = v.ip ? `<span class="mono copy" data-copy="ssh ${esc(v.user || "debian")}@${esc(v.ip)}" title="Click to copy the SSH command">${esc(v.ip)}</span>` : `<span class="muted">${v.state !== "running" ? "—" : v.iso ? "installing? open Console" : "booting…"}</span>`;
     return `<tr data-n="${esc(v.name)}">
       <td data-k="State"><span class="state ${esc(v.state)}"><span class="dot"></span>${b ? "working…" : esc(v.state)}</span></td>
-      <td data-k="Name"><b>${esc(v.name)}</b><div class="sub">${esc(templates.find(t => t.name === v.template)?.label || v.template.replace(/^iso:/, "from "))}${v.os_type === "windows11" ? " · Windows (UEFI, TPM)" : v.os_type === "windows" ? " · Windows" : ""}${v.network === "lan" ? (v.vlan ? " · VLAN " + v.vlan : " · home network") : ""}${v.public ? " · public IP" : ""}${v.iso ? " · CD in drive" : ""}${v.node_id && v.node_id !== "n1" ? " · on " + esc(v.node) : ""}${isAdmin() && v.owner ? ` · <b>${esc(v.owner)}</b>` : ""}</div></td>
+      <td data-k="Name"><b>${esc(v.name)}</b><div class="sub">${esc(templates.find(t => t.name === v.template)?.label || v.template.replace(/^iso:/, "from "))}${v.os_type === "windows11" ? " · Windows (UEFI, TPM)" : v.os_type === "windows" ? " · Windows" : ""}${v.network === "lan" ? (v.vlan ? " · VLAN " + v.vlan : " · home network") : (v.network || "").startsWith("vnet:") ? " · " + esc(v.network.slice(5)) : ""}${v.public ? " · public IP" : ""}${v.iso ? " · CD in drive" : ""}${v.node_id && v.node_id !== "n1" ? " · on " + esc(v.node) : ""}${isAdmin() && v.owner ? ` · <b>${esc(v.owner)}</b>` : ""}</div></td>
       <td data-k="IP">${ip}${sshLine(v.name, v.user)}</td>
       <td data-k="CPU">${v.vcpus}</td><td data-k="RAM">${ramCell(v.mem_used_mib, v.memory_mib)}</td><td data-k="Disk">${v.disk_gb}${(v.disks || []).length ? " + " + v.disks.reduce((n, d) => n + d.size_gb, 0) : ""} GB</td>
       <td data-k="Autostart">${v.autostart ? "yes" : "no"}</td>
@@ -1110,6 +1110,7 @@ async function openCreate(){
     o.textContent = `Public IP — ${p.name} (${p.free} free)`;
     $("#cNet").append(o);
   }
+  await vnetOptions($("#cNet"), "Virtual network");
   if (!lan && $("#cNet").value === "lan") $("#cNet").value = "nat";
   netHint();
   const stores = host?.storages || [];
@@ -1121,6 +1122,10 @@ async function openCreate(){
 function netHint(){
   const lan = isAdmin() ? !!host?.networks?.includes("lan") : !!me?.lan;
   $("#cVlanBox").hidden = !(isAdmin() && host?.vlans && $("#cNet").value === "lan");
+  if ($("#cNet").value.startsWith("vnet:")) {
+    $("#cNetHint").textContent = "On this virtual network on every server: it reaches the other VMs on it wherever they run.";
+    return;
+  }
   if ($("#cNet").value.startsWith("pool:")) {
     $("#cNetHint").textContent = "Gets its own public IP address: reachable from the whole internet. Consider turning on its firewall (Manage).";
     return;
@@ -2151,6 +2156,7 @@ document.addEventListener("DOMContentLoaded", render); // after cloud.js has loa
 <script src="/ha.js"></script>
 <script src="/security.js"></script>
 <script src="/dcfirewall.js"></script>
+<script src="/vnets.js"></script>
 <script src="/remote.js"></script>
 <script src="/acme.js"></script>
 <script src="/disks.js"></script>
