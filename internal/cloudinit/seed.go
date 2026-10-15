@@ -41,6 +41,11 @@ type Static struct {
 	Gateway string   // e.g. 203.0.113.9
 	DNS     []string // name servers
 	OnLink  bool     // gateway outside the network (routed /32): on-link route
+	Extra   []string // more IPv4 addresses (same prefix)
+	// IPv6 address, prefix length and gateway ("" = none).
+	IP6      string
+	Prefix6  int
+	Gateway6 string
 }
 
 // NetworkConfig renders cloud-init network config v2 for a static address.
@@ -48,10 +53,20 @@ func NetworkConfig(st Static) string {
 	var b strings.Builder
 	b.WriteString("version: 2\nethernets:\n  eth0:\n")
 	fmt.Fprintf(&b, "    match:\n      macaddress: %q\n    set-name: eth0\n", strings.ToLower(st.MAC))
-	fmt.Fprintf(&b, "    addresses: [\"%s/%d\"]\n", st.IP, st.Prefix)
+	addrs := []string{fmt.Sprintf("%q", fmt.Sprintf("%s/%d", st.IP, st.Prefix))}
+	for _, x := range st.Extra {
+		addrs = append(addrs, fmt.Sprintf("%q", fmt.Sprintf("%s/%d", x, st.Prefix)))
+	}
+	if st.IP6 != "" {
+		addrs = append(addrs, fmt.Sprintf("%q", fmt.Sprintf("%s/%d", st.IP6, st.Prefix6)))
+	}
+	fmt.Fprintf(&b, "    addresses: [%s]\n", strings.Join(addrs, ", "))
 	fmt.Fprintf(&b, "    routes:\n      - to: 0.0.0.0/0\n        via: %s\n", st.Gateway)
 	if st.OnLink {
 		b.WriteString("        on-link: true\n")
+	}
+	if st.IP6 != "" && st.Gateway6 != "" {
+		fmt.Fprintf(&b, "      - to: \"::/0\"\n        via: %s\n", st.Gateway6)
 	}
 	if len(st.DNS) > 0 {
 		q := make([]string, len(st.DNS))

@@ -164,6 +164,8 @@ type Server struct {
 	LocalMoves cluster.LocalMover
 	// LocalISOs is this server's ISO library (the master copies ISOs here); nil = none.
 	LocalISOs LocalISOs
+	// LocalPublicIPs changes VMs' public addresses (VMs with public IPs run here); nil = off.
+	LocalPublicIPs PublicIPChanger
 	// LocalLive / LocalCPU: this server's side of live moves and CPU types (vm.Service).
 	LocalLive cluster.LocalLive
 	LocalCPU  cluster.LocalCPU
@@ -372,6 +374,8 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("POST /api/v1/ippools", s.addPool)
 	auth.HandleFunc("PATCH /api/v1/ippools/{pool}", s.updatePool)
 	auth.HandleFunc("DELETE /api/v1/ippools/{pool}", s.deletePool)
+	auth.HandleFunc("POST /api/v1/vms/{name}/public-ips", s.changePublicIPs)
+	auth.HandleFunc("POST /api/v1/containers/{name}/public-ips", s.changePublicIPs)
 	auth.HandleFunc("GET /api/v1/tunnel", s.getTunnel)
 	auth.HandleFunc("POST /api/v1/tunnel/setup", s.setupTunnel)
 	auth.HandleFunc("DELETE /api/v1/tunnel", s.disconnectTunnel)

@@ -357,7 +357,7 @@ dialog.as-page #ndClose{display:none}
   </div>
 
   <div data-tab="summary">
-  <div id="mPubBox" hidden><h3>Public IP</h3>
+  <div id="mPubBox" hidden><h3>Public IP addresses</h3>
     <div class="sub" id="mPub"></div></div>
 
   <div id="mCD" hidden><h3>Installer CD</h3>
@@ -536,6 +536,10 @@ dialog.as-page #ndClose{display:none}
       <div><label for="pBridge">Bridge</label><input id="pBridge" value="br0" autocomplete="off"></div>
       <div><label for="pDns">DNS servers</label><input id="pDns" value="1.1.1.1, 8.8.8.8" autocomplete="off"></div>
       <div><label for="pEx">Don't use</label><input id="pEx" placeholder="e.g. 203.0.113.10" autocomplete="off"></div>
+    </div>
+    <div class="row">
+      <div><label for="pCidr6">IPv6 network (optional)</label><input id="pCidr6" placeholder="2001:db8:5::/64" autocomplete="off"></div>
+      <div><label for="pGw6">IPv6 gateway</label><input id="pGw6" placeholder="fe80::1 or 2001:db8:5::1" autocomplete="off"></div>
     </div>
     <label class="check"><input id="pCust" type="checkbox"> Customers may use this pool</label>
     <div class="hint">Bridge: the host bridge on the network cable these addresses arrive on (br0 after "p8 lan-setup").
@@ -1395,9 +1399,13 @@ function renderManage(){
   if (typeof loadShares === "function") loadShares(v);
   $("#mPubBox").hidden = !v.public;
   if (v.public) {
-    const p = v.public;
-    $("#mPub").innerHTML = `<b class="mono">${esc(p.ip)}/${p.prefix}</b> · gateway <span class="mono">${esc(p.gateway)}</span> · DNS <span class="mono">${esc((p.dns || []).join(", "))}</span> · pool ${esc(p.pool)}` +
-      (v.iso ? `<div class="hint">Installing from an ISO: enter these in the installer's network settings (static/manual IPv4).</div>` : "");
+    const p = v.public, hint = v.iso ? "Installing from an ISO: enter these in the installer's network settings (static/manual)." : "";
+    const key = JSON.stringify(p) + v.state;
+    if ($("#mPub").dataset.key !== key) { // don't redraw (and lose typing) on every refresh
+      $("#mPub").dataset.key = key;
+      if (typeof renderPublicIPs === "function") renderPublicIPs($("#mPub"), "vms", v.name, p, {hint, onChanged: () => { $("#mPub").dataset.key = ""; if (typeof refresh === "function") refresh(); }});
+      else $("#mPub").innerHTML = `<b class="mono">${esc(p.ip)}/${p.prefix}</b> · gateway <span class="mono">${esc(p.gateway)}</span>`;
+    }
   }
   $("#mCD").hidden = !v.iso;
   if (v.iso) {
@@ -1988,16 +1996,17 @@ async function loadPools(){
   $("#pList").innerHTML = l.length ? l.map(p => {
     const used = Object.entries(p.used || {}).sort((a, b) => a[0].localeCompare(b[0], undefined, {numeric: true}));
     return `<tr data-pool="${esc(p.name)}"><td><b>${esc(p.name)}</b>${p.customers ? '<span class="pill on">customers</span>' : ""}
-      <div class="sub mono">${esc(p.cidr)} · gw ${esc(p.gateway)} · ${esc(p.bridge)} · DNS ${esc((p.dns || []).join(", "))}</div>
-      <div class="sub">${p.size - p.free} of ${p.size} used${used.length ? ": " + used.map(([ip, vm]) => `${esc(ip)} ${esc(vm)}`).join(" · ") : ""}</div></td>
-      <td><button class="btn" data-p="cust">${p.customers ? "Admins only" : "Open to customers"}</button><button class="btn danger" data-p="del">Delete</button></td></tr>`;
+      <div class="sub mono">${esc(p.cidr)} · gw ${esc(p.gateway)} · ${esc(p.bridge)} · DNS ${esc((p.dns || []).join(", "))}${p.cidr6 ? ` · IPv6 ${esc(p.cidr6)} gw ${esc(p.gateway6)}` : ""}</div>
+      <div class="sub">${p.size - p.free} of ${p.size} used${used.length ? ": " + used.map(([ip, vm]) => `${esc(ip)} ${esc(vm)}`).join(" · ") : ""}${Object.keys(p.extra || {}).length ? " · extra: " + Object.entries(p.extra).map(([ip, vm]) => `${esc(ip)} ${esc(vm)}`).join(" · ") : ""}</div></td>
+      <td><button class="btn" data-p="v6">IPv6…</button><button class="btn" data-p="cust">${p.customers ? "Admins only" : "Open to customers"}</button><button class="btn danger" data-p="del">Delete</button></td></tr>`;
   }).join("") : `<tr><td class="muted">No pools yet.</td></tr>`;
   $("#pList").dataset.pools = JSON.stringify(l);
 }
 const csv = v => v.split(/[,\s]+/).map(x => x.trim()).filter(Boolean);
 $("#pGo").onclick = async () => {
   const body = {name: $("#pName").value.trim(), cidr: $("#pCidr").value.trim(), gateway: $("#pGw").value.trim(),
-    bridge: $("#pBridge").value.trim(), dns: csv($("#pDns").value), exclude: csv($("#pEx").value), customers: $("#pCust").checked};
+    bridge: $("#pBridge").value.trim(), dns: csv($("#pDns").value), exclude: csv($("#pEx").value), customers: $("#pCust").checked,
+    cidr6: $("#pCidr6").value.trim(), gateway6: $("#pGw6").value.trim()};
   try {
     const p = await call("POST", "/ippools", body);
     toast(`Pool ${p.name}: ${p.size} addresses`); $("#pName").value = $("#pCidr").value = $("#pGw").value = $("#pEx").value = "";
@@ -2011,6 +2020,12 @@ $("#pList").addEventListener("click", async e => {
     if (b.dataset.p === "del") {
       if (!armed(b, "Delete — sure?")) return;
       await call("DELETE", `/ippools/${encodeURIComponent(name)}`); toast(`Pool ${name} deleted`);
+    } else if (b.dataset.p === "v6") {
+      const c6 = prompt(`IPv6 network for pool ${name} (empty = none), e.g. 2001:db8:5::/64`, p.cidr6 || ""); if (c6 === null) return;
+      let g6 = "";
+      if (c6.trim()) { g6 = prompt("IPv6 gateway (fe80::1 or an address in that network)", p.gateway6 || "fe80::1"); if (g6 === null) return; }
+      await call("PATCH", `/ippools/${encodeURIComponent(name)}`, {dns: p.dns, exclude: p.exclude || [], customers: p.customers, cidr6: c6.trim(), gateway6: g6.trim()});
+      toast(c6.trim() ? `Pool ${name}: new VMs get IPv6 too; existing ones: Manage → + IPv6` : `Pool ${name}: IPv6 off`);
     } else {
       await call("PATCH", `/ippools/${encodeURIComponent(name)}`, {dns: p.dns, exclude: p.exclude || [], customers: !p.customers});
     }
@@ -2169,6 +2184,7 @@ document.addEventListener("DOMContentLoaded", render); // after cloud.js has loa
 <script src="/acme.js"></script>
 <script src="/disks.js"></script>
 <script src="/nics.js"></script>
+<script src="/publicips.js"></script>
 <script src="/devices.js"></script>
 <script src="/shares.js"></script>
 <script src="/filerestore.js"></script>

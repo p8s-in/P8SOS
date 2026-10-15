@@ -57,10 +57,12 @@ type Container struct {
 	MAC       string `json:"mac"`
 	Network   string `json:"network"` // nat, lan, public or vnet:NAME
 	PublicIP  string `json:"public_ip,omitempty"`
-	Owner     string `json:"owner,omitempty"`
-	Autostart bool   `json:"autostart"`
-	Created   string `json:"created"`
-	User      string `json:"user"` // login user (root)
+	// Public is the whole lease: extra addresses, IPv6.
+	Public    *ippool.Lease `json:"public,omitempty"`
+	Owner     string        `json:"owner,omitempty"`
+	Autostart bool          `json:"autostart"`
+	Created   string        `json:"created"`
+	User      string        `json:"user"` // login user (root)
 	// Node / NodeID: the cluster server it runs on (set by the cluster).
 	Node   string `json:"node,omitempty"`
 	NodeID string `json:"node_id,omitempty"`
@@ -528,6 +530,13 @@ func (s *Service) config(name string, m *meta, bridge string) string {
 		if !l.OnLink {
 			fmt.Fprintf(&b, "lxc.net.0.ipv4.gateway = %s\n", l.Gateway)
 		}
+		for _, x := range l.Extra {
+			fmt.Fprintf(&b, "lxc.net.0.ipv4.address = %s/%d\n", x, l.Prefix)
+		}
+		if l.IP6 != "" {
+			fmt.Fprintf(&b, "lxc.net.0.ipv6.address = %s/%d\n", l.IP6, l.Prefix6)
+			fmt.Fprintf(&b, "lxc.net.0.ipv6.gateway = %s\n", l.Gateway6)
+		}
 	}
 	fmt.Fprintf(&b, "lxc.cgroup2.memory.max = %dM\n", m.MemoryMiB)
 	fmt.Fprintf(&b, "lxc.cgroup2.memory.swap.max = %dM\n", min(m.MemoryMiB, 512))
@@ -594,6 +603,7 @@ func (s *Service) view(ctx context.Context, name string, m meta) Container {
 	}
 	if l, ok := s.lease(name); ok && m.Network == vm.NetPublic {
 		c.PublicIP = l.IP
+		c.Public = &l
 	}
 	c.DiskUsed = s.used(ctx, name)
 	return c

@@ -4,6 +4,10 @@
 // lives on; each new VM gets one free address, configured inside the VM by
 // cloud-init (static, no DHCP). Pools and who has which address are kept in
 // one JSON file.
+//
+// A pool can also have an IPv6 network: every VM from it then gets one IPv6
+// address too. A VM can have extra IPv4 addresses from its pool, and its
+// address can be changed later (Change).
 package ippool
 
 import (
@@ -29,8 +33,15 @@ type Pool struct {
 	Exclude []string `json:"exclude,omitempty"` // addresses not to hand out (used elsewhere)
 	// Customers may pick this pool (admins always can).
 	Customers bool `json:"customers"`
-	// Used: address -> VM name.
+	// Used: address -> VM name (each VM's main address).
 	Used map[string]string `json:"used"`
+	// Extra: additional IPv4 addresses -> VM name.
+	Extra map[string]string `json:"extra,omitempty"`
+	// IPv6: the pool's IPv6 network (e.g. 2001:db8:5::/64) and gateway (an
+	// address in it, or a link-local one like fe80::1); "" = IPv4 only.
+	CIDR6    string            `json:"cidr6,omitempty"`
+	Gateway6 string            `json:"gateway6,omitempty"`
+	Used6    map[string]string `json:"used6,omitempty"` // IPv6 address -> VM name
 }
 
 // Lease is one VM's address with what the VM needs to configure it.
@@ -42,7 +53,19 @@ type Lease struct {
 	DNS     []string `json:"dns"`
 	Bridge  string   `json:"bridge"`
 	OnLink  bool     `json:"on_link"` // gateway is outside the network (needs an on-link route)
+	// Extra IPv4 addresses (same network and gateway).
+	Extra []string `json:"extra,omitempty"`
+	// IPv6 address, its network's prefix length and the gateway ("" = none).
+	IP6      string `json:"ip6,omitempty"`
+	Prefix6  int    `json:"prefix6,omitempty"`
+	Gateway6 string `json:"gateway6,omitempty"`
 }
+
+// MaxExtra is how many extra IPv4 addresses one VM can have.
+const MaxExtra = 8
+
+// Addrs4 are all the lease's IPv4 addresses (main first).
+func (l Lease) Addrs4() []string { return append([]string{l.IP}, l.Extra...) }
 
 // View is a pool as the API shows it.
 type View struct {
@@ -87,23 +110,35 @@ func (s *Store) load() ([]Pool, error) {
 		return nil, fmt.Errorf("%s: %w", s.Path, err)
 	}
 	for i := range l {
-		if l[i].Used == nil {
-			l[i].Used = map[string]string{}
-		}
+		fill(&l[i])
 	}
 	return l, nil
+}
+
+func fill(p *Pool) {
+	if p.Used == nil {
+		p.Used = map[string]string{}
+	}
+	if p.Extra == nil {
+		p.Extra = map[string]string{}
+	}
+	if p.Used6 == nil {
+		p.Used6 = map[string]string{}
+	}
+}
+
+func copyMap(m map[string]string) map[string]string {
+	out := map[string]string{}
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
 }
 
 func clone(l []Pool) []Pool {
 	out := make([]Pool, len(l))
 	for i, p := range l {
-		p.Used = func() map[string]string {
-			m := map[string]string{}
-			for k, v := range p.Used {
-				m[k] = v
-			}
-			return m
-		}()
+		p.Used, p.Extra, p.Used6 = copyMap(p.Used), copyMap(p.Extra), copyMap(p.Used6)
 		p.DNS = append([]string(nil), p.DNS...)
 		p.Exclude = append([]string(nil), p.Exclude...)
 		out[i] = p
@@ -226,17 +261,61 @@ func Validate(p Pool) (Pool, error) {
 	if len(h) == 0 {
 		return p, fmt.Errorf("%w: no usable addresses left in %s", ErrInvalid, p.CIDR)
 	}
-	if p.Used == nil {
-		p.Used = map[string]string{}
+	p.CIDR6, p.Gateway6 = strings.TrimSpace(p.CIDR6), strings.TrimSpace(p.Gateway6)
+	if p.CIDR6 != "" || p.Gateway6 != "" {
+		p6, err := netip.ParsePrefix(p.CIDR6)
+		if err != nil || !p6.Addr().Is6() || p6.Addr().Is4In6() || p6.Bits() > 120 || p6.Bits() < 32 {
+			return p, fmt.Errorf("%w: IPv6 network %q must look like 2001:db8:5::/64", ErrInvalid, p.CIDR6)
+		}
+		p6 = p6.Masked()
+		p.CIDR6 = p6.String()
+		g6, err := netip.ParseAddr(p.Gateway6)
+		if err != nil || !g6.Is6() || g6.Is4In6() || (!p6.Contains(g6) && !g6.IsLinkLocalUnicast()) {
+			return p, fmt.Errorf("%w: IPv6 gateway %q must be in %s or link-local (fe80::…)", ErrInvalid, p.Gateway6, p.CIDR6)
+		}
+		p.Gateway6 = g6.String()
 	}
+	fill(&p)
 	return p, nil
+}
+
+// hosts6First is the first IPv6 host number handed out (::100 and up; the low
+// ones are usually the router's).
+const hosts6First = 0x100
+
+// nextFree6 picks a free IPv6 address in the pool's IPv6 network.
+func nextFree6(p Pool) (string, error) {
+	p6, err := netip.ParsePrefix(p.CIDR6)
+	if err != nil {
+		return "", fmt.Errorf("%w: pool %s has no IPv6 network", ErrInvalid, p.Name)
+	}
+	a := p6.Addr().Next() // not the network's ::0
+	if p6.Bits() <= 112 { // big networks: from ::100 (the low ones are usually the router's)
+		b := p6.Addr().As16()
+		b[14], b[15] = byte(hosts6First>>8), byte(hosts6First&0xff)
+		a = netip.AddrFrom16(b)
+	}
+	for i := 0; i < 4*MaxSize && p6.Contains(a); i, a = i+1, a.Next() {
+		if _, used := p.Used6[a.String()]; used || a.String() == p.Gateway6 {
+			continue
+		}
+		return a.String(), nil
+	}
+	return "", fmt.Errorf("%w for IPv6 in pool %s", ErrFull, p.Name)
+}
+
+// taken: an IPv4 address of the pool is someone's (main or extra).
+func taken(p Pool, ip string) bool {
+	_, a := p.Used[ip]
+	_, b := p.Extra[ip]
+	return a || b
 }
 
 func view(p Pool) View {
 	h, _ := hosts(p)
 	free := 0
 	for _, a := range h {
-		if _, used := p.Used[a.String()]; !used {
+		if !taken(p, a.String()) {
 			free++
 		}
 	}
@@ -277,7 +356,7 @@ func (s *Store) Add(p Pool) (View, error) {
 	if err != nil {
 		return View{}, err
 	}
-	p.Used = map[string]string{}
+	p.Used, p.Extra, p.Used6 = map[string]string{}, map[string]string{}, map[string]string{}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	l, err := s.load()
@@ -302,6 +381,15 @@ func (s *Store) Add(p Pool) (View, error) {
 // Update changes the parts of a pool that don't move addresses: DNS,
 // excluded addresses (not ones in use), customers flag.
 func (s *Store) Update(name string, dns, exclude []string, customers bool) (View, error) {
+	return s.UpdateV6(name, dns, exclude, customers, nil)
+}
+
+// V6 sets a pool's IPv6 network (both "" = none).
+type V6 struct{ CIDR6, Gateway6 string }
+
+// UpdateV6 is Update that can also set the IPv6 network (v6 != nil; only
+// while no VM has an IPv6 address from it).
+func (s *Store) UpdateV6(name string, dns, exclude []string, customers bool, v6 *V6) (View, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	l, err := s.load()
@@ -313,12 +401,21 @@ func (s *Store) Update(name string, dns, exclude []string, customers bool) (View
 			continue
 		}
 		p.DNS, p.Exclude, p.Customers = dns, exclude, customers
+		if v6 != nil && (v6.CIDR6 != p.CIDR6 || v6.Gateway6 != p.Gateway6) {
+			if len(p.Used6) > 0 {
+				return View{}, fmt.Errorf("%w: %d VM(s) have IPv6 addresses from %s", ErrInUse, len(p.Used6), p.CIDR6)
+			}
+			p.CIDR6, p.Gateway6 = v6.CIDR6, v6.Gateway6
+		}
 		np, err := Validate(p)
 		if err != nil {
 			return View{}, err
 		}
 		for _, e := range np.Exclude {
 			if vm, used := np.Used[e]; used {
+				return View{}, fmt.Errorf("%w: %s is used by %s", ErrInUse, e, vm)
+			}
+			if vm, used := np.Extra[e]; used {
 				return View{}, fmt.Errorf("%w: %s is used by %s", ErrInUse, e, vm)
 			}
 		}
@@ -359,7 +456,25 @@ func (s *Store) Delete(name string) error {
 func lease(p Pool, ip string) Lease {
 	pfx := netip.MustParsePrefix(p.CIDR)
 	gw, _ := netip.ParseAddr(p.Gateway)
-	return Lease{Pool: p.Name, IP: ip, Prefix: pfx.Bits(), Gateway: p.Gateway, DNS: p.DNS, Bridge: p.Bridge, OnLink: !pfx.Contains(gw)}
+	l := Lease{Pool: p.Name, IP: ip, Prefix: pfx.Bits(), Gateway: p.Gateway, DNS: p.DNS, Bridge: p.Bridge, OnLink: !pfx.Contains(gw)}
+	vm := p.Used[ip]
+	for x, v := range p.Extra {
+		if v == vm {
+			l.Extra = append(l.Extra, x)
+		}
+	}
+	sort.Slice(l.Extra, func(i, j int) bool {
+		a, _ := netip.ParseAddr(l.Extra[i])
+		b, _ := netip.ParseAddr(l.Extra[j])
+		return a.Less(b)
+	})
+	for x, v := range p.Used6 {
+		if v == vm {
+			p6 := netip.MustParsePrefix(p.CIDR6)
+			l.IP6, l.Prefix6, l.Gateway6 = x, p6.Bits(), p.Gateway6
+		}
+	}
+	return l
 }
 
 // Allocate gives vm an address from the pool: prefer if it is free (a VM
@@ -388,7 +503,7 @@ func (s *Store) Allocate(pool, vm, prefer string) (Lease, error) {
 		}
 		pick := ""
 		for _, a := range h {
-			if _, used := p.Used[a.String()]; used {
+			if taken(p, a.String()) {
 				continue
 			}
 			if a.String() == prefer {
@@ -403,12 +518,206 @@ func (s *Store) Allocate(pool, vm, prefer string) (Lease, error) {
 			return Lease{}, fmt.Errorf("%w in pool %s (%d of %d used)", ErrFull, pool, len(p.Used), len(h))
 		}
 		l[i].Used[pick] = vm
+		if p.CIDR6 != "" {
+			ip6, err := nextFree6(l[i])
+			if err != nil {
+				return Lease{}, err
+			}
+			l[i].Used6[ip6] = vm
+		}
 		if err := s.save(l); err != nil {
 			return Lease{}, err
 		}
-		return lease(p, pick), nil
+		return lease(l[i], pick), nil
 	}
 	return Lease{}, fmt.Errorf("%w: ip pool %q", ErrNotFound, pool)
+}
+
+// find is the pool index and main address of vm's lease (-1 = none).
+func find(l []Pool, vm string) (int, string) {
+	for i, p := range l {
+		for ip, v := range p.Used {
+			if v == vm {
+				return i, ip
+			}
+		}
+	}
+	return -1, ""
+}
+
+// AddExtra gives vm one more IPv4 address from the pool of its main one
+// (want = that address if free, "" = the lowest free).
+func (s *Store) AddExtra(vm, want string) (Lease, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	l, err := s.load()
+	if err != nil {
+		return Lease{}, err
+	}
+	i, main := find(l, vm)
+	if i < 0 {
+		return Lease{}, fmt.Errorf("%w: %s has no public address", ErrNotFound, vm)
+	}
+	p := l[i]
+	if n := len(lease(p, main).Extra); n >= MaxExtra {
+		return Lease{}, fmt.Errorf("%w: %s has %d extra addresses already (at most %d)", ErrInvalid, vm, n, MaxExtra)
+	}
+	h, err := hosts(p)
+	if err != nil {
+		return Lease{}, err
+	}
+	pick := ""
+	for _, a := range h {
+		if taken(p, a.String()) {
+			continue
+		}
+		if want == "" || a.String() == want {
+			pick = a.String()
+			break
+		}
+	}
+	if pick == "" {
+		if want != "" {
+			return Lease{}, fmt.Errorf("%w: %s isn't a free address of pool %s", ErrInvalid, want, p.Name)
+		}
+		return Lease{}, fmt.Errorf("%w in pool %s", ErrFull, p.Name)
+	}
+	l[i].Extra[pick] = vm
+	if err := s.save(l); err != nil {
+		return Lease{}, err
+	}
+	return lease(l[i], main), nil
+}
+
+// RemoveExtra takes an extra address back from vm.
+func (s *Store) RemoveExtra(vm, ip string) (Lease, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	l, err := s.load()
+	if err != nil {
+		return Lease{}, err
+	}
+	i, main := find(l, vm)
+	if i < 0 {
+		return Lease{}, fmt.Errorf("%w: %s has no public address", ErrNotFound, vm)
+	}
+	if ip == main {
+		return Lease{}, fmt.Errorf("%w: %s is %s's main address; change it instead", ErrInvalid, ip, vm)
+	}
+	if l[i].Extra[ip] != vm {
+		return Lease{}, fmt.Errorf("%w: %s isn't an extra address of %s", ErrNotFound, ip, vm)
+	}
+	delete(l[i].Extra, ip)
+	if err := s.save(l); err != nil {
+		return Lease{}, err
+	}
+	return lease(l[i], main), nil
+}
+
+// AddV6 gives vm an IPv6 address (its pool must have an IPv6 network).
+func (s *Store) AddV6(vm string) (Lease, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	l, err := s.load()
+	if err != nil {
+		return Lease{}, err
+	}
+	i, main := find(l, vm)
+	if i < 0 {
+		return Lease{}, fmt.Errorf("%w: %s has no public address", ErrNotFound, vm)
+	}
+	if lease(l[i], main).IP6 != "" {
+		return Lease{}, fmt.Errorf("%w: %s has an IPv6 address already", ErrExists, vm)
+	}
+	ip6, err := nextFree6(l[i])
+	if err != nil {
+		return Lease{}, err
+	}
+	l[i].Used6[ip6] = vm
+	if err := s.save(l); err != nil {
+		return Lease{}, err
+	}
+	return lease(l[i], main), nil
+}
+
+// Change gives vm a new main address: from pool (its own when ""), want if
+// free ("" = the lowest free). Extra addresses stay when the pool stays (and
+// are given back otherwise); the IPv6 address stays in the same pool and is
+// renewed in another one that has IPv6. Returns the old and the new lease.
+func (s *Store) Change(vm, pool, want string) (Lease, Lease, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	l, err := s.load()
+	if err != nil {
+		return Lease{}, Lease{}, err
+	}
+	i, main := find(l, vm)
+	if i < 0 {
+		return Lease{}, Lease{}, fmt.Errorf("%w: %s has no public address", ErrNotFound, vm)
+	}
+	old := lease(l[i], main)
+	if pool == "" {
+		pool = l[i].Name
+	}
+	j := -1
+	for k := range l {
+		if l[k].Name == pool {
+			j = k
+		}
+	}
+	if j < 0 {
+		return Lease{}, Lease{}, fmt.Errorf("%w: ip pool %q", ErrNotFound, pool)
+	}
+	if want == main && i == j {
+		return Lease{}, Lease{}, fmt.Errorf("%w: %s has %s already", ErrInvalid, vm, want)
+	}
+	h, err := hosts(l[j])
+	if err != nil {
+		return Lease{}, Lease{}, err
+	}
+	pick := ""
+	for _, a := range h {
+		ip := a.String()
+		if taken(l[j], ip) && !(i == j && l[j].Extra[ip] == vm && ip == want) {
+			continue
+		}
+		if want == "" || ip == want {
+			pick = ip
+			break
+		}
+	}
+	if pick == "" {
+		if want != "" {
+			return Lease{}, Lease{}, fmt.Errorf("%w: %s isn't a free address of pool %s", ErrInvalid, want, pool)
+		}
+		return Lease{}, Lease{}, fmt.Errorf("%w in pool %s", ErrFull, pool)
+	}
+	delete(l[i].Used, main)
+	delete(l[j].Extra, pick) // an extra address promoted to the main one
+	l[j].Used[pick] = vm
+	if i != j {
+		for x, v := range l[i].Extra {
+			if v == vm {
+				delete(l[i].Extra, x)
+			}
+		}
+		for x, v := range l[i].Used6 {
+			if v == vm {
+				delete(l[i].Used6, x)
+			}
+		}
+		if l[j].CIDR6 != "" {
+			ip6, err := nextFree6(l[j])
+			if err != nil {
+				return Lease{}, Lease{}, err
+			}
+			l[j].Used6[ip6] = vm
+		}
+	}
+	if err := s.save(l); err != nil {
+		return Lease{}, Lease{}, err
+	}
+	return old, lease(l[j], pick), nil
 }
 
 // Release frees vm's address (no error if it had none).
@@ -421,10 +730,12 @@ func (s *Store) Release(vm string) error {
 	}
 	changed := false
 	for _, p := range l {
-		for ip, v := range p.Used {
-			if v == vm {
-				delete(p.Used, ip)
-				changed = true
+		for _, m := range []map[string]string{p.Used, p.Extra, p.Used6} {
+			for ip, v := range m {
+				if v == vm {
+					delete(m, ip)
+					changed = true
+				}
 			}
 		}
 	}

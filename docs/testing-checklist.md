@@ -530,6 +530,17 @@ Build a new ISO on the laptop: `sudo bash iso/build-installer.sh ~/P8SOS/dist` (
 - [ ] Automatic placement with an ISO → may pick the worker (no longer refused)
 - [ ] Delete the ISO on the master (no VM using it) → gone on the worker too; with a worker VM still having it inserted → the worker keeps its copy
 
+## 49. Public IPs: extra addresses, IPv6, changing the address
+
+- [ ] Pool with IPv6 (`p8 ippool add dc6 … ipv6=2001:db8:5::/64 gw6=fe80::1`, or IPv6… on an existing pool) → a new public VM gets an IPv6 address (`ip -6 a` inside, ping6 the gateway if the network has IPv6)
+- [ ] Manage → + Extra IPv4 on a running VM → the address appears inside at once (`ip a`), still there after a reboot; ping it from outside
+- [ ] ✕ removes it (gone inside too); + IPv6 on an older VM → set inside
+- [ ] Change address (empty) → the VM gets the next free one, the old one is gone inside, SSH on the new one works; the pool list shows it
+- [ ] Change to a pool on another bridge while running → refused; shut down → works, the VM's card is on the new bridge, it boots with the new address
+- [ ] Containers: the same on a public container (applied at once, after restart too)
+- [ ] Anti-spoofing: inside the VM `ip addr add <a free pool address>` and ping out → dropped; IPv6 from an address not its own → dropped
+- [ ] `p8 ip web1`, `p8 ip add web1`, `p8 ip change web1 --pool dc2` print the addresses
+
 ## Add new features here as they are built
 
 (Every new feature adds its own lines above before it counts as done.)

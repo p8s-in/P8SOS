@@ -49,7 +49,11 @@ type VM struct {
 	// LockIP pins a VM with a public address: frames from its ports must
 	// carry its own MAC and this IPv4 (no taking a neighbour's address).
 	LockIP string
-	Ports  []string // the VM's ports on the host (vnetN) while it runs
+	// LockMore are its extra IPv4 addresses, LockIP6 its IPv6 ones (link-local
+	// IPv6 is always allowed; with LockIP set, other IPv6 sources are dropped).
+	LockMore []string
+	LockIP6  []string
+	Ports    []string // the VM's ports on the host (vnetN) while it runs
 }
 
 // ErrInvalid wraps every validation problem.
@@ -198,18 +202,36 @@ func RulesWith(vms []VM, g Global) (string, error) {
 			return "", fmt.Errorf("firewall: vm %q has a bad MAC %q", v.Name, v.MAC)
 		}
 		if v.LockIP != "" {
-			ip, err := netip.ParseAddr(v.LockIP)
-			if err != nil || !ip.Is4() {
-				return "", fmt.Errorf("firewall: vm %q: bad address %q", v.Name, v.LockIP)
+			var v4 []string
+			for _, a := range append([]string{v.LockIP}, v.LockMore...) {
+				ip, err := netip.ParseAddr(a)
+				if err != nil || !ip.Is4() {
+					return "", fmt.Errorf("firewall: vm %q: bad address %q", v.Name, a)
+				}
+				v4 = append(v4, ip.String())
 			}
+			v6 := []string{"fe80::/10", "::"} // link-local and duplicate address detection
+			for _, a := range v.LockIP6 {
+				ip, err := netip.ParseAddr(a)
+				if err != nil || !ip.Is6() || ip.Is4In6() {
+					return "", fmt.Errorf("firewall: vm %q: bad IPv6 address %q", v.Name, a)
+				}
+				v6 = append(v6, ip.String())
+			}
+			set4 := v4[0]
+			if len(v4) > 1 {
+				set4 = "{ " + strings.Join(v4, ", ") + " }"
+			}
+			set6 := "{ " + strings.Join(v6, ", ") + " }"
 			for _, p := range v.Ports {
 				if !rePort.MatchString(p) {
 					return "", fmt.Errorf("firewall: vm %q: bad port name %q", v.Name, p)
 				}
 				locks = append(locks,
 					fmt.Sprintf("\t\tiifname %q ether saddr != %s counter drop comment %q\n", p, mac, v.Name+": not its MAC"),
-					fmt.Sprintf("\t\tiifname %q ether type ip ip saddr != %s counter drop comment %q\n", p, ip, v.Name+": not its IP"),
-					fmt.Sprintf("\t\tiifname %q ether type arp arp saddr ip != %s counter drop comment %q\n", p, ip, v.Name+": ARP for another IP"))
+					fmt.Sprintf("\t\tiifname %q ether type ip ip saddr != %s counter drop comment %q\n", p, set4, v.Name+": not its IP"),
+					fmt.Sprintf("\t\tiifname %q ether type arp arp saddr ip != %s counter drop comment %q\n", p, set4, v.Name+": ARP for another IP"),
+					fmt.Sprintf("\t\tiifname %q ether type ip6 ip6 saddr != %s counter drop comment %q\n", p, set6, v.Name+": not its IPv6"))
 			}
 		}
 		if !v.FW.Enabled {

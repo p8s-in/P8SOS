@@ -93,8 +93,9 @@ customers only a reference (`ref 1a2b3c4d`); the details are in p8sd's log.
 | endpoint | who | what |
 |---|---|---|
 | `GET /ippools` | signed in | admins: pools with `used` (address → VM), size, free; customers: name/free/size of pools open to them |
-| `POST /ippools` | admin | `{"name","bridge","cidr","gateway","dns":[],"exclude":[],"customers":false}` |
-| `PATCH /ippools/{pool}` | admin | `{"dns","exclude","customers"}` |
+| `POST /ippools` | admin | `{"name","bridge","cidr","gateway","dns":[],"exclude":[],"customers":false,"cidr6","gateway6"}` (IPv6 optional) |
+| `PATCH /ippools/{pool}` | admin | `{"dns","exclude","customers"}`; with `"cidr6","gateway6"` also the IPv6 network (`"cidr6":""` = none; only while no VM has IPv6 from it) |
+| `POST /vms/{name}/public-ips` · `/containers/{name}/public-ips` | admin | `{"action":"add","ip"?}` extra IPv4 · `{"action":"remove","ip"}` · `{"action":"ipv6"}` · `{"action":"change","ip"?,"pool"?}` new main address → `{"public":{lease},"applied":true,"note"}` (applied = set inside the guest now) |
 | `DELETE /ippools/{pool}` | admin | only when no VM uses it |
 | `POST /vms` with `"ip_pool":"dc1"` | admin, customer (open pool, `quota.public_ips`) | VM on the pool's bridge with the next free address (cloud-init static); the VM object gets `"network":"public"` and `"public":{"pool","ip","prefix","gateway","dns","bridge"}` |
 

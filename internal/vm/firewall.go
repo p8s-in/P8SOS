@@ -161,6 +161,10 @@ func (s *Service) applyFirewalls(ctx context.Context, m map[string]firewall.Sett
 			// on every start; the first card is listed first).
 			if ports, err := s.HV.Ports(ctx, Prefix+v.Name); err == nil && len(ports) > 0 {
 				e.LockIP, e.Ports = v.Public.IP, ports[:1]
+				e.LockMore = v.Public.Extra
+				if v.Public.IP6 != "" {
+					e.LockIP6 = []string{v.Public.IP6}
+				}
 			}
 		}
 		if e.FW.Enabled || e.LockIP != "" {

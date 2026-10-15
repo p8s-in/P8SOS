@@ -112,3 +112,86 @@ func equal(a, b []string) bool {
 	}
 	return true
 }
+
+func TestExtrasV6Change(t *testing.T) {
+	s := &Store{}
+	if _, err := s.Add(Pool{Name: "dc1", Bridge: "br0", CIDR: "203.0.113.8/29", Gateway: "203.0.113.9",
+		CIDR6: "2001:db8:5::/64", Gateway6: "fe80::1"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Add(Pool{Name: "dc2", Bridge: "br0", CIDR: "198.51.100.0/29", Gateway: "198.51.100.1"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Add(Pool{Name: "bad", Bridge: "br0", CIDR: "192.0.2.0/29", Gateway: "192.0.2.1", CIDR6: "2001:db8:9::/64", Gateway6: "2001:db8:1::1"}); err == nil {
+		t.Fatal("gateway6 outside the network accepted")
+	}
+	l, err := s.Allocate("dc1", "web", "")
+	if err != nil || l.IP != "203.0.113.10" || l.IP6 != "2001:db8:5::100" || l.Prefix6 != 64 || l.Gateway6 != "fe80::1" {
+		t.Fatalf("%+v %v", l, err)
+	}
+	l2, _ := s.Allocate("dc1", "db", "")
+	if l2.IP != "203.0.113.11" || l2.IP6 != "2001:db8:5::101" {
+		t.Fatalf("%+v", l2)
+	}
+	// extras
+	l, err = s.AddExtra("web", "")
+	if err != nil || len(l.Extra) != 1 || l.Extra[0] != "203.0.113.12" {
+		t.Fatalf("%+v %v", l, err)
+	}
+	l, _ = s.AddExtra("web", "203.0.113.14")
+	if got := l.Addrs4(); len(got) != 3 || got[2] != "203.0.113.14" {
+		t.Fatalf("%v", got)
+	}
+	if _, err := s.AddExtra("web", "203.0.113.11"); err == nil {
+		t.Fatal("someone else's address given")
+	}
+	if v, _ := s.Get("dc1"); v.Free != 1 { // .10 .11 .12 .14 used of .10-.14
+		t.Fatalf("free %d", v.Free)
+	}
+	// the next VM doesn't get an extra address
+	if l3, _ := s.Allocate("dc1", "mail", ""); l3.IP != "203.0.113.13" {
+		t.Fatalf("%+v", l3)
+	}
+	s.Release("mail")
+	if _, err := s.RemoveExtra("web", "203.0.113.10"); err == nil {
+		t.Fatal("main address removed as extra")
+	}
+	l, err = s.RemoveExtra("web", "203.0.113.12")
+	if err != nil || len(l.Extra) != 1 {
+		t.Fatalf("%+v %v", l, err)
+	}
+	// change in the same pool: extras and IPv6 stay
+	old, nw, err := s.Change("web", "", "203.0.113.13")
+	if err != nil || old.IP != "203.0.113.10" || nw.IP != "203.0.113.13" || nw.IP6 != "2001:db8:5::100" || len(nw.Extra) != 1 {
+		t.Fatalf("%+v %+v %v", old, nw, err)
+	}
+	// promote the extra address
+	_, nw, err = s.Change("web", "", "203.0.113.14")
+	if err != nil || nw.IP != "203.0.113.14" || len(nw.Extra) != 0 {
+		t.Fatalf("%+v %v", nw, err)
+	}
+	// to another pool (no IPv6 there): extras and IPv6 are given back
+	s.AddExtra("web", "")
+	_, nw, err = s.Change("web", "dc2", "")
+	if err != nil || nw.Pool != "dc2" || nw.IP6 != "" || len(nw.Extra) != 0 {
+		t.Fatalf("%+v %v", nw, err)
+	}
+	if v, _ := s.Get("dc1"); len(v.Used6) != 1 || len(v.Extra) != 0 {
+		t.Fatalf("left behind %+v", v.Pool)
+	}
+	// IPv6 later: set on dc2, then AddV6
+	if _, err := s.UpdateV6("dc2", nil, nil, false, &V6{CIDR6: "2001:db8:7::/120", Gateway6: "2001:db8:7::1"}); err != nil {
+		t.Fatal(err)
+	}
+	l, err = s.AddV6("web")
+	if err != nil || l.IP6 != "2001:db8:7::2" {
+		t.Fatalf("%+v %v", l, err)
+	}
+	if _, err := s.UpdateV6("dc2", nil, nil, false, &V6{}); err == nil {
+		t.Fatal("IPv6 network removed while in use")
+	}
+	s.Release("web")
+	if v, _ := s.Get("dc2"); len(v.Used6)+len(v.Used)+len(v.Extra) != 0 {
+		t.Fatalf("not released %+v", v.Pool)
+	}
+}

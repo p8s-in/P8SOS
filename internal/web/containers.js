@@ -73,6 +73,7 @@ document.body.insertAdjacentHTML("beforeend", `
   <h3>Password</h3>
   <div class="inline"><input id="cmUser" value="root" style="flex:0 0 120px" aria-label="User"><input id="cmPw" type="password" minlength="8" placeholder="new password" autocomplete="new-password" style="flex:1"><button class="btn" id="cmPwGo">Set</button></div>
   <div id="cmOwnerBox" hidden><h3>Owner</h3><div class="inline"><select id="cmOwner" style="flex:1"></select><button class="btn" id="cmOwnerGo">Change</button></div></div>
+  <div id="cmPubBox" hidden><h3>Public IP addresses</h3><div id="cmPub"></div></div>
   <div id="cmMoveBox" hidden><h3>Move to another server</h3>
     <div class="inline"><select id="cmMoveTo" style="flex:1"></select>
       <label style="display:flex;gap:6px;align-items:center;font-weight:400;margin:0"><input type="checkbox" id="cmMoveStart" style="width:auto" checked> start it there</label>
@@ -316,6 +317,14 @@ function renderCTManage(){
     : `<button class="btn primary" data-cm="start">Start</button>`;
   for (const b of $("#cmPower").querySelectorAll("[data-cm]")) b.onclick = () => b.dataset.cm === "console" ? ctConsole(c.name) : ctPower(c.name, b.dataset.cm);
   $("#cmCPU").value = c.vcpus; $("#cmRAM").value = c.memory_mib; $("#cmDisk").value = c.disk_gb; $("#cmAuto").checked = c.autostart;
+  $("#cmPubBox").hidden = !c.public;
+  if (c.public && typeof renderPublicIPs === "function") {
+    const key = JSON.stringify(c.public) + c.state;
+    if ($("#cmPub").dataset.key !== key) {
+      $("#cmPub").dataset.key = key;
+      renderPublicIPs($("#cmPub"), "containers", c.name, c.public, {onChanged: async () => { $("#cmPub").dataset.key = ""; await loadCTs(); renderCTManage(); }});
+    }
+  }
 }
 
 async function loadCTSnaps(){

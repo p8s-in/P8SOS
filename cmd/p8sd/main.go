@@ -308,6 +308,12 @@ func serve(args []string) error {
 				e := firewall.VM{Name: "ct:" + c.Name, MAC: c.MAC}
 				if c.PublicIP != "" { // pin the address to its veth (fixed name, also before it starts)
 					e.LockIP, e.Ports = c.PublicIP, []string{ct.HostPort(c.Name)}
+					if c.Public != nil {
+						e.LockMore = c.Public.Extra
+						if c.Public.IP6 != "" {
+							e.LockIP6 = []string{c.Public.IP6}
+						}
+					}
 				}
 				out = append(out, e)
 			}
@@ -603,7 +609,8 @@ func serve(args []string) error {
 	}
 	apiSrv.Migrate, apiSrv.LocalMoves = cvms, svc // moving VMs between servers
 	apiSrv.LocalISOs = svc                        // the master copies its ISOs here
-	apiSrv.LocalLive, apiSrv.LocalCPU = svc, svc  // live moves, CPU types
+	apiSrv.LocalPublicIPs = svc
+	apiSrv.LocalLive, apiSrv.LocalCPU = svc, svc // live moves, CPU types
 	apiSrv.Dial, apiSrv.RemoteMetrics = cvms.Dial, cvms.RemoteMetrics
 	go clu.Loop(ctx, 15*time.Second)
 	go clu.Watch(ctx, 5*time.Second) // elections when the master is gone

@@ -64,6 +64,8 @@ var (
 	disksJS []byte
 	//go:embed nics.js
 	nicsJS []byte
+	//go:embed publicips.js
+	publicIPsJS []byte
 	//go:embed devices.js
 	devicesJS []byte
 	//go:embed shares.js
@@ -115,6 +117,7 @@ var assets = map[string]asset{
 	"/remote.js":      {remoteJS, "text/javascript; charset=utf-8", "no-cache"},
 	"/disks.js":       {disksJS, "text/javascript; charset=utf-8", "no-cache"},
 	"/nics.js":        {nicsJS, "text/javascript; charset=utf-8", "no-cache"},
+	"/publicips.js":   {publicIPsJS, "text/javascript; charset=utf-8", "no-cache"},
 	"/devices.js":     {devicesJS, "text/javascript; charset=utf-8", "no-cache"},
 	"/shares.js":      {sharesJS, "text/javascript; charset=utf-8", "no-cache"},
 	"/acme.js":        {acmeJS, "text/javascript; charset=utf-8", "no-cache"},

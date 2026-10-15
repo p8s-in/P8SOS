@@ -56,7 +56,8 @@ func (s *Service) lease(pool, vm, prefer string) (*ippool.Lease, func(), error) 
 }
 
 func static(l *ippool.Lease, mac string) *cloudinit.Static {
-	return &cloudinit.Static{MAC: mac, IP: l.IP, Prefix: l.Prefix, Gateway: l.Gateway, DNS: l.DNS, OnLink: l.OnLink}
+	return &cloudinit.Static{MAC: mac, IP: l.IP, Prefix: l.Prefix, Gateway: l.Gateway, DNS: l.DNS, OnLink: l.OnLink,
+		Extra: l.Extra, IP6: l.IP6, Prefix6: l.Prefix6, Gateway6: l.Gateway6}
 }
 
 // releaseIP frees a deleted VM's address and its pinning rules.

@@ -64,7 +64,40 @@ Note: the VM guard (VMs can't reach the server itself) covers the NAT and home
 bridges; on a routed bridge, protect the host with its own firewall or with
 `vm_allow`/guard settings.
 
+## Several addresses, IPv6, changing the address
+
+Manage → **Public IP addresses** (admins), or `p8 ip`:
+
+| | Dashboard | CLI |
+|---|---|---|
+| See them | the list in Manage | `p8 ip web1` |
+| One more IPv4 (same pool, up to 8 extra) | **+ Extra IPv4** | `p8 ip add web1 [203.0.113.12]` |
+| Give an extra one back | ✕ next to it | `p8 ip rm web1 203.0.113.12` |
+| An IPv6 address | **+ IPv6** (pool with IPv6) | `p8 ip ipv6 web1` |
+| A new main address | **Change address** (empty = next free; or pick another pool) | `p8 ip change web1 [IP] [--pool dc2]` |
+
+- **Inside the guest:** for a running VM with the QEMU guest agent (every
+  P8S template has it) the new addresses are set at once and kept after
+  reboots (netplan, systemd-networkd or ifupdown files; cloud-init's network
+  setup is switched off so it doesn't bring the old address back). Otherwise
+  the result says what to set by hand. Containers: their network files are
+  rewritten and the change is made inside at once when it runs.
+- **Another pool on another bridge** needs the VM/container shut down (its
+  network card moves to that bridge). Extra addresses stay with the old pool's
+  main address only when the pool stays; IPv6 is renewed in the new pool.
+- Promote an extra address to the main one: Change address → type it.
+- The anti-spoofing rules follow every change (all its IPv4s, its IPv6 and
+  link-local IPv6; other IPv6 sources are dropped).
+
+**IPv6 for a pool:** Settings → Public IP pools → **IPv6…** (or when adding:
+IPv6 network + gateway), `p8 ippool ipv6 dc1 2001:db8:5::/64 fe80::1`. New VMs
+then get one IPv6 address each (from `::100` on), set by cloud-init like the
+IPv4 one; existing VMs get one with **+ IPv6**. The gateway is the provider's
+router: an address in the network or a link-local one (often `fe80::1`).
+
 ## Not yet
 
-IPv6 prefixes per VM, several addresses per VM, changing a VM's address
-after creation, provider virtual MACs.
+IPv6 prefixes routed to a VM (a whole /64 per VM), provider virtual MACs,
+extra addresses from another pool, extra addresses in backups (a restored VM
+gets its main address back; add the others again), extra IPs in customer plans
+(admins add them).

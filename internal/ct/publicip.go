@@ -1,6 +1,7 @@
 package ct
 
 import (
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -96,7 +97,8 @@ func (s *Service) writeNet(name string, mac string, l *ippool.Lease) error {
 	if has("var/lib/cloud/seed/nocloud") {
 		if l != nil {
 			put("var/lib/cloud/seed/nocloud/network-config", cloudinit.NetworkConfig(cloudinit.Static{
-				MAC: mac, IP: l.IP, Prefix: l.Prefix, Gateway: l.Gateway, DNS: l.DNS, OnLink: l.OnLink}), 0o600)
+				MAC: mac, IP: l.IP, Prefix: l.Prefix, Gateway: l.Gateway, DNS: l.DNS, OnLink: l.OnLink,
+				Extra: l.Extra, IP6: l.IP6, Prefix6: l.Prefix6, Gateway6: l.Gateway6}), 0o600)
 		} else {
 			_ = os.Remove(filepath.Join(root, "var/lib/cloud/seed/nocloud/network-config"))
 		}
@@ -106,9 +108,16 @@ func (s *Service) writeNet(name string, mac string, l *ippool.Lease) error {
 		if l == nil {
 			y += "      dhcp4: true\n"
 		} else {
-			y += fmt.Sprintf("      addresses: [%q]\n      routes:\n        - to: default\n          via: %s\n", cidr, l.Gateway)
+			q := []string{fmt.Sprintf("%q", cidr)}
+			for _, a := range extraCIDRs(l) {
+				q = append(q, fmt.Sprintf("%q", a))
+			}
+			y += fmt.Sprintf("      addresses: [%s]\n      routes:\n        - to: default\n          via: %s\n", strings.Join(q, ", "), l.Gateway)
 			if l.OnLink {
 				y += "          on-link: true\n"
+			}
+			if l.IP6 != "" {
+				y += fmt.Sprintf("        - to: \"::/0\"\n          via: %s\n", l.Gateway6)
 			}
 			if len(l.DNS) > 0 {
 				y += fmt.Sprintf("      nameservers:\n        addresses: [%s]\n", strings.Join(l.DNS, ", "))
@@ -122,12 +131,18 @@ func (s *Service) writeNet(name string, mac string, l *ippool.Lease) error {
 			n += "DHCP=yes\n"
 		} else {
 			n += "Address=" + cidr + "\n"
+			for _, a := range extraCIDRs(l) {
+				n += "Address=" + a + "\n"
+			}
 			for _, d := range l.DNS {
 				n += "DNS=" + d + "\n"
 			}
 			n += "\n[Route]\nGateway=" + l.Gateway + "\n"
 			if l.OnLink {
 				n += "GatewayOnLink=yes\n"
+			}
+			if l.IP6 != "" {
+				n += "\n[Route]\nGateway=" + l.Gateway6 + "\n"
 			}
 		}
 		put("etc/systemd/network/eth0.network", n, 0o644)
@@ -142,6 +157,14 @@ func (s *Service) writeNet(name string, mac string, l *ippool.Lease) error {
 		default:
 			n += fmt.Sprintf("iface eth0 inet static\n\taddress %s\n\tgateway %s\n", cidr, l.Gateway)
 		}
+		if l != nil {
+			for _, a := range l.Extra {
+				n += fmt.Sprintf("\tup ip addr add %s/%d dev eth0\n", a, l.Prefix)
+			}
+			if l.IP6 != "" {
+				n += fmt.Sprintf("\niface eth0 inet6 static\n\taddress %s/%d\n\tgateway %s\n", l.IP6, l.Prefix6, l.Gateway6)
+			}
+		}
 		if err := s.rewrite(root, "etc/network/interfaces", []byte(n)); err != nil {
 			errs = append(errs, err)
 		}
@@ -152,11 +175,18 @@ func (s *Service) writeNet(name string, mac string, l *ippool.Lease) error {
 			n += "method=auto\n"
 		} else {
 			n += fmt.Sprintf("method=manual\naddress1=%s,%s\n", cidr, l.Gateway)
+			for i, a := range l.Extra {
+				n += fmt.Sprintf("address%d=%s/%d\n", i+2, a, l.Prefix)
+			}
 			if len(l.DNS) > 0 {
 				n += "dns=" + strings.Join(l.DNS, ";") + ";\n"
 			}
 		}
-		n += "\n[ipv6]\nmethod=auto\n"
+		if l != nil && l.IP6 != "" {
+			n += fmt.Sprintf("\n[ipv6]\nmethod=manual\naddress1=%s/%d,%s\n", l.IP6, l.Prefix6, l.Gateway6)
+		} else {
+			n += "\n[ipv6]\nmethod=auto\n"
+		}
 		put("etc/NetworkManager/system-connections/eth0.nmconnection", n, 0o600)
 	}
 	if has("etc/sysconfig/network-scripts") {
@@ -165,6 +195,12 @@ func (s *Service) writeNet(name string, mac string, l *ippool.Lease) error {
 			n += "BOOTPROTO=dhcp\n"
 		} else {
 			n += fmt.Sprintf("BOOTPROTO=none\nIPADDR=%s\nPREFIX=%d\nGATEWAY=%s\n", l.IP, l.Prefix, l.Gateway)
+			for i, a := range l.Extra {
+				n += fmt.Sprintf("IPADDR%d=%s\nPREFIX%d=%d\n", i+1, a, i+1, l.Prefix)
+			}
+			if l.IP6 != "" {
+				n += fmt.Sprintf("IPV6INIT=yes\nIPV6ADDR=%s/%d\nIPV6_DEFAULTGW=%s\n", l.IP6, l.Prefix6, l.Gateway6)
+			}
 			for i, d := range l.DNS {
 				n += fmt.Sprintf("DNS%d=%s\n", i+1, d)
 			}
@@ -182,4 +218,105 @@ func (s *Service) writeNet(name string, mac string, l *ippool.Lease) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// extraCIDRs are a lease's other addresses as address/prefix (IPv4 extras, then IPv6).
+func extraCIDRs(l *ippool.Lease) []string {
+	var out []string
+	for _, a := range l.Extra {
+		out = append(out, fmt.Sprintf("%s/%d", a, l.Prefix))
+	}
+	if l.IP6 != "" {
+		out = append(out, fmt.Sprintf("%s/%d", l.IP6, l.Prefix6))
+	}
+	return out
+}
+
+// ChangePublicIPs applies one change to a container's public addresses: the
+// pool, its config and network files at once, and inside it right away when
+// it runs (a pool on another bridge needs it stopped).
+func (s *Service) ChangePublicIPs(ctx context.Context, name string, r vm.PublicIPRequest) (vm.PublicIPResult, error) {
+	if s.Pools == nil {
+		return vm.PublicIPResult{}, fmt.Errorf("%w: public IP pools are not available on this host", vm.ErrConflict)
+	}
+	m, err := s.get(name)
+	if err != nil {
+		return vm.PublicIPResult{}, err
+	}
+	old, ok := s.lease(name)
+	if !ok || m.Network != vm.NetPublic {
+		return vm.PublicIPResult{}, fmt.Errorf("%w: container %s has no public address", vm.ErrConflict, name)
+	}
+	running := s.state(ctx, name) == "running"
+	var nw ippool.Lease
+	switch r.Action {
+	case "add":
+		nw, err = s.Pools.AddExtra(name, strings.TrimSpace(r.IP))
+	case "remove":
+		nw, err = s.Pools.RemoveExtra(name, strings.TrimSpace(r.IP))
+	case "ipv6":
+		nw, err = s.Pools.AddV6(name)
+	case "change":
+		if r.Pool != "" && r.Pool != old.Pool {
+			p, gerr := s.Pools.Get(r.Pool)
+			if gerr != nil {
+				return vm.PublicIPResult{}, vm.PoolError(gerr)
+			}
+			if p.Bridge != old.Bridge {
+				if s.BridgeUp != nil && !s.BridgeUp(p.Bridge) {
+					return vm.PublicIPResult{}, fmt.Errorf("%w: the bridge %s of pool %s is not up on this host", vm.ErrInvalid, p.Bridge, p.Name)
+				}
+				if running {
+					return vm.PublicIPResult{}, fmt.Errorf("%w: pool %s is on another bridge (%s): stop %s first", vm.ErrConflict, p.Name, p.Bridge, name)
+				}
+			}
+		}
+		_, nw, err = s.Pools.Change(name, r.Pool, strings.TrimSpace(r.IP))
+	default:
+		return vm.PublicIPResult{}, fmt.Errorf(`%w: action must be "add", "remove", "ipv6" or "change"`, vm.ErrInvalid)
+	}
+	if err != nil {
+		return vm.PublicIPResult{}, vm.PoolError(err)
+	}
+	res := vm.PublicIPResult{Lease: nw}
+	if err := s.writeConfig(name, &m, nw.Bridge); err != nil {
+		return res, err
+	}
+	if err := s.writeNet(name, m.MAC, &nw); err != nil {
+		return res, fmt.Errorf("the container's network files: %w", err)
+	}
+	if s.Refresh != nil {
+		_ = s.Refresh(ctx)
+	}
+	if !running {
+		res.Note = "takes effect when it starts"
+		return res, nil
+	}
+	var remove []string
+	for _, a := range old.Addrs4() {
+		if !contains(nw.Addrs4(), a) {
+			remove = append(remove, fmt.Sprintf("%s/%d", a, old.Prefix))
+		}
+	}
+	if old.IP6 != "" && old.IP6 != nw.IP6 {
+		remove = append(remove, fmt.Sprintf("%s/%d", old.IP6, old.Prefix6))
+	}
+	st := cloudinit.Static{MAC: m.MAC, IP: nw.IP, Prefix: nw.Prefix, Gateway: nw.Gateway, DNS: nw.DNS, OnLink: nw.OnLink,
+		Extra: nw.Extra, IP6: nw.IP6, Prefix6: nw.Prefix6, Gateway6: nw.Gateway6}
+	out, err := s.Run.Run(ctx, "lxc-attach", "-n", name, "--clear-env", "--", "/bin/sh", "-c", cloudinit.ApplyScript(st, remove, false))
+	if err != nil {
+		res.Note = fmt.Sprintf("saved; restart the container to use it (setting it now failed: %v %s)", err, strings.TrimSpace(string(out)))
+		return res, nil
+	}
+	res.Applied, res.Note = true, "set inside the container (and kept after restarts)"
+	return res, nil
+}
+
+func contains(l []string, s string) bool {
+	for _, x := range l {
+		if x == s {
+			return true
+		}
+	}
+	return false
 }

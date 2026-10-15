@@ -99,7 +99,13 @@ p8 — manage P8S OS virtual machines
                                    P8S OS updates from the update server (VMs keep running)
   p8 ippools                       public IP pools and who has which address
   p8 ippool add NAME NETWORK GATEWAY [bridge=br0] [customers=yes]
-                                   e.g. p8 ippool add dc1 203.0.113.8/29 203.0.113.9
+                                   e.g. p8 ippool add dc1 203.0.113.8/29 203.0.113.9 ipv6=2001:db8:5::/64 gw6=fe80::1
+  p8 ippool ipv6 NAME NETWORK GATEWAY  give a pool an IPv6 network (NETWORK "off" = none)
+  p8 ip NAME                       a VM's / container's public addresses
+  p8 ip add NAME [IP]              one more IPv4 address from its pool
+  p8 ip ipv6 NAME                  an IPv6 address (the pool needs an IPv6 network)
+  p8 ip rm NAME IP                 give an extra address back
+  p8 ip change NAME [IP] [--pool P]  a new main address (same pool, or another)
   p8 create NAME ... --ip POOL     VM with a public IP from POOL (static, set automatically)
   p8 tunnel setup                  put the dashboard and websites on the internet (Cloudflare Tunnel)
   p8 tunnel [dashboard NAME|off]   status / publish the dashboard as NAME.yourdomain
@@ -942,17 +948,21 @@ TXT
     b=$(call GET /ippools) || exit 1
     [[ $(jq '.pools | length' <<<"$b") == 0 ]] && { echo "No public IP pools. Add one: p8 ippool add dc1 203.0.113.8/29 203.0.113.9"; exit 0; }
     jq -r '.pools[] | "\(.name)  \(.cidr)  gw \(.gateway)  bridge \(.bridge)  \(.size - .free)/\(.size) used\(if .customers then "  (customers)" else "" end)",
-      (.used // {} | to_entries | sort_by(.key)[] | "    \(.key)  \(.value)")' <<<"$b" ;;
+      (if .cidr6 then "    IPv6 \(.cidr6)  gw \(.gateway6)" else empty end),
+      (.used // {} | to_entries | sort_by(.key)[] | "    \(.key)  \(.value)"),
+      (.extra // {} | to_entries | sort_by(.key)[] | "    \(.key)  \(.value) (extra)"),
+      (.used6 // {} | to_entries | sort_by(.key)[] | "    \(.key)  \(.value)")' <<<"$b" ;;
 
   ippool|pool)
     sub=${1:-}; shift || true
     case $sub in
       add)
         [[ -n ${1:-} && -n ${2:-} && -n ${3:-} ]] || { red "usage: p8 ippool add NAME NETWORK GATEWAY [bridge=br0] [dns=1.1.1.1,8.8.8.8] [exclude=IP,IP] [customers=yes]"; exit 1; }
-        n=$1 c=$2 g=$3; shift 3; br=br0 dns="" ex="" cu=false
-        for kv in "$@"; do case $kv in bridge=*) br=${kv#*=} ;; dns=*) dns=${kv#*=} ;; exclude=*) ex=${kv#*=} ;; customers=yes|customers=true) cu=true ;; *) red "unknown $kv"; exit 1 ;; esac; done
-        b=$(call POST /ippools "$(jq -nc --arg n "$n" --arg c "$c" --arg g "$g" --arg b "$br" --arg d "$dns" --arg e "$ex" --argjson cu "$cu" \
-          '{name:$n, cidr:$c, gateway:$g, bridge:$b, dns:($d|split(",")|map(select(.!=""))), exclude:($e|split(",")|map(select(.!=""))), customers:$cu}')") || exit 1
+        n=$1 c=$2 g=$3; shift 3; br=br0 dns="" ex="" cu=false c6="" g6=""
+        for kv in "$@"; do case $kv in bridge=*) br=${kv#*=} ;; dns=*) dns=${kv#*=} ;; exclude=*) ex=${kv#*=} ;; customers=yes|customers=true) cu=true ;;
+          ipv6=*) c6=${kv#*=} ;; gw6=*) g6=${kv#*=} ;; *) red "unknown $kv"; exit 1 ;; esac; done
+        b=$(call POST /ippools "$(jq -nc --arg n "$n" --arg c "$c" --arg g "$g" --arg b "$br" --arg d "$dns" --arg e "$ex" --argjson cu "$cu" --arg c6 "$c6" --arg g6 "$g6" \
+          '{name:$n, cidr:$c, gateway:$g, bridge:$b, dns:($d|split(",")|map(select(.!=""))), exclude:($e|split(",")|map(select(.!=""))), customers:$cu, cidr6:$c6, gateway6:$g6}')") || exit 1
         green "✔ pool $(jq -r '"\(.name): \(.cidr), \(.size) usable addresses, gateway \(.gateway), on \(.bridge)"' <<<"$b")"
         echo "  New VM with one of them:  p8 create web1 --ip $n" ;;
       open|close)
@@ -960,9 +970,37 @@ TXT
         [[ -n $cur ]] || { red "no pool $1"; exit 1; }
         call PATCH "/ippools/$1" "$(jq -c --argjson c "$([[ $sub == open ]] && echo true || echo false)" '{dns, exclude:(.exclude // []), customers:$c}' <<<"$cur")" >/dev/null || exit 1
         green "✔ pool $1 is $([[ $sub == open ]] && echo "open to customers" || echo "admins only")" ;;
+      ipv6)
+        [[ -n ${1:-} && -n ${2:-} ]] || { red "usage: p8 ippool ipv6 NAME NETWORK GATEWAY   (NETWORK off = none)"; exit 1; }
+        cur=$(call GET /ippools | jq -c --arg n "$1" '.pools[] | select(.name==$n)')
+        [[ -n $cur ]] || { red "no pool $1"; exit 1; }
+        c6=$2; [[ $c6 == off ]] && c6=""
+        call PATCH "/ippools/$1" "$(jq -c --arg c6 "$c6" --arg g6 "${3:-}" '{dns, exclude:(.exclude // []), customers, cidr6:$c6, gateway6:$g6}' <<<"$cur")" >/dev/null || exit 1
+        green "✔ pool $1: $([[ -n $c6 ]] && echo "IPv6 $c6 (new VMs get an address; existing ones: p8 ip ipv6 NAME)" || echo "no IPv6")" ;;
       rm|delete)
         need "${1:-}"; call DELETE "/ippools/$1" >/dev/null || exit 1; green "✔ pool $1 deleted" ;;
-      *) red "usage: p8 ippool add|open|close|rm ..."; exit 1 ;;
+      *) red "usage: p8 ippool add|open|close|ipv6|rm ..."; exit 1 ;;
+    esac ;;
+
+  ip|ips)
+    sub=${1:-}
+    case $sub in add|ipv6|rm|remove|change) shift ;; *) sub=show ;; esac
+    need "${1:-}"; name=$1; shift
+    kind=vms; call GET "/vms/$name" >/dev/null 2>&1 || kind=containers
+    cur=$(call GET "/$kind/$name") || exit 1
+    show_ips() { jq -r 'if .public == null then "no public address (network: \(.network))" else .public |
+      .prefix as $p | "\(.ip)/\($p) (main)", ((.extra // [])[] | "\(.)/\($p) (extra)"), (if .ip6 then "\(.ip6)/\(.prefix6) (IPv6, gateway \(.gateway6))" else empty end),
+      "gateway \(.gateway)  pool \(.pool)" end' <<<"$1"; }
+    case $sub in
+      show) show_ips "$cur" ;;
+      *)
+        act=$sub; [[ $act == rm ]] && act=remove
+        ip="" pool=""
+        while (($#)); do case $1 in --pool) pool=${2:-}; shift ;; --pool=*) pool=${1#*=} ;; *) ip=$1 ;; esac; shift; done
+        [[ $act == remove && -z $ip ]] && { red "usage: p8 ip rm NAME IP"; exit 1; }
+        r=$(call POST "/$kind/$name/public-ips" "$(jq -nc --arg a "$act" --arg i "$ip" --arg p "$pool" '{action:$a} + (if $i != "" then {ip:$i} else {} end) + (if $p != "" then {pool:$p} else {} end)')") || exit 1
+        green "✔ $name: $(jq -r '.note' <<<"$r")"
+        show_ips "$(jq -c '{public}' <<<"$r")" ;;
     esac ;;
 
   plans)

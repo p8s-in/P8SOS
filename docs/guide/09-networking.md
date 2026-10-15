@@ -21,7 +21,7 @@ Summary: Private, home, public-IP, VLAN and virtual networks, bonding, IPv6, fir
 | --- | --- |
 | Two cables (failover or both at once) | Server → Home network → **Add as second cable**, or `sudo p8 bond-setup enp4s0 [--mode 802.3ad]` |
 | IPv6 | Home-network VMs get it from your router. Private network: `sudo p8 ipv6 on` |
-| Public IP pools | Settings → Public IP pools, or `p8 ippool add dc1 203.0.113.8/29 203.0.113.9`; then create with `--ip dc1`. Anti-spoofing stops a VM from using another's IP |
+| Public IP pools | Settings → Public IP pools, or `p8 ippool add dc1 203.0.113.8/29 203.0.113.9`; then create with `--ip dc1`. Anti-spoofing stops a VM from using another's IP. A pool can have an IPv6 network too; Manage → Public IP addresses adds extra IPv4s, IPv6, or changes the address (`p8 ip …`) |
 | Per-VM firewall | Manage → Firewall, or `p8 fw web1 on`, `p8 fw web1 allow tcp 443` |
 | Datacenter firewall (every VM, every server) | Settings → **Datacenter firewall**: **IP sets** (named address lists, used as a rule's source `+office` here and in any VM's firewall), **Blocked** addresses (no VM talks to or hears from them), and **Allowed** rules every VM with its firewall on gets first. Saved on the master, applied on all servers |
 | Virtual networks (one switch across every server) | Settings → **Virtual networks** → name + optional subnet (`p8 vnet-add office 10.60.0.0/24`). VMs on it talk to each other wherever they run and keep their addresses when they move; with a subnet the master gives addresses (DHCP), DNS and internet. VXLAN inside the cluster tunnel; cards get MTU 1230. VMs only (not containers) |
