@@ -41,6 +41,7 @@ import (
 	"p8sos/internal/cluster"
 	"p8sos/internal/config"
 	"p8sos/internal/ct"
+	"p8sos/internal/diskmgr"
 	"p8sos/internal/execx"
 	"p8sos/internal/firewall"
 	"p8sos/internal/guard"
@@ -122,7 +123,22 @@ func serve(args []string) error {
 	// Ceph across the cluster's servers (Server → Ceph): VM disks every server sees
 	cephMgr := &ceph.Manager{Run: run, Etc: "/etc/ceph", Lib: "/var/lib/ceph", Name: cephName(), Log: log}
 	var cephClu *cluster.Manager // set below, once the cluster is loaded
-	disks := &storage.ZFS{Run: run, Dataset: cfg.VMDataset, Pools: nets.VMPools,
+	// the server's own disks (Server page → Disks): pools made there are VM storages too
+	diskMgr := &diskmgr.Manager{Run: run, DataDir: cfg.DataDir, Taken: func() []string {
+		var l []string
+		for _, st := range nets.All() {
+			l = append(l, st.Name)
+		}
+		return l
+	}}
+	vmPools := func() map[string]string {
+		m := nets.VMPools()
+		for k, v := range diskMgr.VMPools() {
+			m[k] = v
+		}
+		return m
+	}
+	disks := &storage.ZFS{Run: run, Dataset: cfg.VMDataset, Pools: vmPools,
 		Ceph: &storage.RBD{Run: run, Pool: ceph.Pool, MapsFile: "/etc/p8s/rbd-maps", Ready: cephMgr.PoolReady}}
 	pools := &ippool.Store{Path: filepath.Join(cfg.DataDir, "ippools.json")}
 	svc := &vm.Service{
@@ -394,6 +410,7 @@ func serve(args []string) error {
 		Users:      &users.Store{Path: filepath.Join(cfg.DataDir, "users.json")},
 		Shares:     &users.Shares{Path: filepath.Join(cfg.DataDir, "vm-shares.json")}, // per-VM permissions
 		DCFirewall: dcFirewall,
+		DiskMgr:    diskMgr,
 		Sessions:   sessions,
 		Tunnel:     tun,
 		Pools:      pools,

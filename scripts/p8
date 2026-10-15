@@ -103,6 +103,12 @@ p8 — manage P8S OS virtual machines
   p8 tunnel [dashboard NAME|off]   status / publish the dashboard as NAME.yourdomain
   p8 publish VM NAME PORT [--https]  website: https://NAME.yourdomain -> VM:PORT
   p8 sites / p8 unpublish HOST     list / remove websites
+  p8 hostdisks                     this server's physical disks: use, SMART health, protection
+  p8 disk-wipe DISK                clear a disk that isn't in use (asks you to type its name if it has data)
+  p8 disk-protect DISK [off]       never wipe or use this disk (keep its data)
+  p8 pool-make NAME single|mirror|raidz1|raidz2 DISK...
+                                   ZFS pool from empty disks: a new VM storage NAME
+  p8 pool-rm NAME                  destroy a pool made with pool-make (no VM disks on it)
   p8 vnets                         virtual networks across the servers (VMs on one talk wherever they run)
   p8 vnet-add NAME [SUBNET] [--no-internet] [--comment TEXT]
                                    add one; with SUBNET (10.60.0.0/24) the master is gateway + DHCP + NAT
@@ -375,6 +381,44 @@ case $cmd in
     [[ ${3:-} == --vlan ]] && { [[ ${4:-} =~ ^[0-9]+$ ]] || { red "--vlan needs a number 1-4094"; exit 1; }; vlan=$4; }
     body=$(call POST "/vms/$1/nics" "$(jq -nc --arg n "$net" --argjson v "$vlan" '{network:$n,vlan:$v}')") || exit 1
     green "✔ $(jq -r .note <<<"$body")" ;;
+
+  hostdisks)
+    body=$(call GET /node/disks) || exit 1
+    jq -r '.disks[] | [.name, ((.size/1e9|floor|tostring) + " GB"), .kind, (.model // ""), (if .protected then "PROTECTED " else "" end) + .usage,
+      (if .smart == null then "" elif (.smart.available | not) then "SMART n/a" elif .smart.passed then "healthy" + (if (.smart.reallocated // 0) > 0 then " (\(.smart.reallocated) reallocated)" else "" end) else "FAILING" end)] | @tsv' <<<"$body" |
+      { command -v column >/dev/null && column -t -s $'\t' || cat; }
+    [[ $(jq '.pools | length' <<<"$body") -gt 0 ]] && { echo; echo "Pools made here:"; jq -r '.pools[] | "  \(.name)  \(.pool)  \(.layout)  \(.health)  \(.vm_disks) VM disk(s)"' <<<"$body"; }
+    exit 0 ;;
+
+  disk-wipe)
+    [[ -n ${1:-} ]] || { red "usage: p8 disk-wipe DISK   (see: p8 hostdisks)"; exit 1; }
+    body=$(call GET "/node/disks?smart=0") || exit 1
+    d=$(jq -c --arg n "$1" '.disks[] | select(.name == $n)' <<<"$body")
+    [[ -n $d ]] || { red "no disk $1"; exit 1; }
+    confirm=""
+    if [[ $(jq -r .empty <<<"$d") != true ]]; then
+      echo "$1 has data: $(jq -r '.contents | join(", ")' <<<"$d"). Everything on it will be gone for good."
+      read -rp "Type $1 to wipe it: " confirm
+      [[ $confirm == "$1" ]] || { echo "Not wiped."; exit 1; }
+    fi
+    call POST "/node/disks/$1/wipe" "$(jq -nc --arg c "$confirm" '{confirm:$c}')" >/dev/null && green "✔ $1 wiped" ;;
+
+  disk-protect)
+    [[ -n ${1:-} ]] || { red "usage: p8 disk-protect DISK [off]"; exit 1; }
+    on=true; [[ ${2:-} == off ]] && on=false
+    call POST "/node/disks/$1/protect" "{\"on\":$on}" >/dev/null && green "✔ $1 $([[ $on == true ]] && echo "is protected" || echo "is no longer protected")" ;;
+
+  pool-make)
+    [[ -n ${1:-} && -n ${2:-} && -n ${3:-} ]] || { red "usage: p8 pool-make NAME single|mirror|raidz1|raidz2 DISK..."; exit 1; }
+    name=$1 layout=$2; shift 2
+    r=$(call POST /node/pools "$(jq -nc --arg n "$name" --arg l "$layout" '{name:$n, layout:$l, disks:$ARGS.positional}' --args "$@")") || exit 1
+    green "✔ $(jq -r .note <<<"$r")" ;;
+
+  pool-rm)
+    [[ -n ${1:-} ]] || { red "usage: p8 pool-rm NAME"; exit 1; }
+    read -rp "Destroy storage $1? Type $1 to confirm: " c
+    [[ $c == "$1" ]] || { echo "Not destroyed."; exit 1; }
+    call DELETE "/node/pools/$1?confirm=$1" >/dev/null && green "✔ storage $1 destroyed" ;;
 
   vnets)
     body=$(call GET /sdn) || exit 1

@@ -435,6 +435,18 @@ Needs a third always-on Linux box (a Raspberry Pi, another PC, a small VM on you
 - [ ] Reboot p8s-vm1 with a VM on `office` set to start at boot: it starts (bridge made at boot by p8s-vlans.service) and gets its address again
 - [ ] From another PC on the home network, a VXLAN packet to the server's LAN IP (UDP 4789) is dropped (`nft list table inet p8s_sdn` shows the rule)
 
+## 39. Disks view
+
+- [ ] Server page → Storage → Disks on p8s-node: the NVMe/system disk shows *system*, the 1 TB HDD `sda` shows *data* with its partitions; SMART shows temperature / age (on p8s-vm1, a VirtualBox disk: "SMART: n/a")
+- [ ] **Protect `sda` first** → 🔒 protected; it has no Wipe button and `p8 disk-wipe sda` is refused
+- [ ] The system disk and the disk of pool tank have no Wipe button; the API refuses them too (`p8 disk-wipe <system disk>` → "can't be wiped")
+- [ ] On p8s-vm1: add two empty 20 GB disks in VirtualBox → both show *empty*; Make pool `fast` mirror of both → `zpool status p8s-fast` ONLINE; Create VM → Storage offers `fast`; the VM's disk is `p8s-fast/vms/NAME-disk0`
+- [ ] Reboot p8s-vm1: the pool is back (`zpool list`), the VM on it starts
+- [ ] Destroy `fast` while the VM is on it → refused; delete or move the VM, Destroy (type the name) → disks show *empty* again
+- [ ] A disk with old data (e.g. one that was a Ceph OSD after removal, or formatted elsewhere): Wipe asks to type its name, then it shows *empty*
+- [ ] On the master, the Server picker → p8s-vm1 shows p8s-vm1's disks; actions there work
+- [ ] Operator account: sees the Disks list, no buttons; API changes → 403
+
 ## Add new features here as they are built
 
 (Every new feature adds its own lines above before it counts as done.)

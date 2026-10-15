@@ -19,6 +19,7 @@ Run on the server (over SSH or the dashboard's shell). `p8 help` lists everythin
 | Storage | `p8 storage` · `p8 storage grow` · `p8 storages` · `p8 storages add-nfs NAME SERVER EXPORT [--backups]` · `p8 storages find SERVER` · `p8 storages add-iscsi NAME SERVER TARGET [LUN] [--format]` · `p8 storages connect\|rm NAME` |
 | Ceph | `p8 ceph` · `p8 ceph install [SERVER]` · `p8 ceph init NETWORK` · `p8 ceph mon\|mgr SERVER` · `p8 ceph osd SERVER DISK` · `p8 ceph osd-rm ID` · `p8 ceph pool [COPIES]` |
 | Cluster | `p8 cluster` · `p8 cluster find` · `p8 cluster invite NAME` · `p8 cluster accept\|decline` · `p8 cluster add [PUBLIC_ADDR]` · `p8 join URL CODE` · `p8 cluster remove ID [--force]` · `p8 cluster leave` · `p8 cluster promote` · `p8 cluster witness URL KEY FINGERPRINT\|off` |
+| Disks | `p8 hostdisks` · `p8 disk-protect DISK [off]` · `p8 disk-wipe DISK` · `p8 pool-make NAME single\|mirror\|raidz1\|raidz2 DISK…` · `p8 pool-rm NAME` |
 | Virtual networks | `p8 vnets` · `p8 vnet-add NAME [SUBNET] [--no-internet]` · `p8 vnet-rm NAME` · `p8 create NAME --net NAME` · `p8 nic-add VM vnet:NAME` |
 | Moves | `p8 move NAME SERVER [--live]` · `p8 cpu NAME host\|compatible` |
 | Users | `p8 users` · `p8 user add NAME [--admin] [vms=N cpus=N ram=MB disk=GB]` · `p8 user quota NAME ...` · `p8 user passwd\|disable\|enable\|2fa-off\|rm NAME` · `p8 give VM USER` · `p8 audit [N]` |

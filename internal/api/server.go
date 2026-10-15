@@ -27,6 +27,7 @@ import (
 	"p8sos/internal/config"
 	"p8sos/internal/console"
 	"p8sos/internal/ct"
+	"p8sos/internal/diskmgr"
 	"p8sos/internal/firewall"
 	"p8sos/internal/ippool"
 	"p8sos/internal/ldap"
@@ -109,6 +110,8 @@ type Server struct {
 	DCFirewall *firewall.GlobalStore
 	// VNets are the virtual networks across the servers (internal/sdn); nil = off.
 	VNets *sdn.Manager
+	// DiskMgr is the server's disks (Server page → Disks); nil = off.
+	DiskMgr *diskmgr.Manager
 	// Browse opens backups for file-level restore; nil = off.
 	Browse *browse.Manager
 	// Shares: VMs shared with users besides their owner (per-VM permissions); nil = off.
@@ -373,6 +376,10 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("GET /api/v1/firewall", s.getDCFirewall)
 	auth.HandleFunc("PUT /api/v1/firewall", s.putDCFirewall)
 	auth.HandleFunc("GET /api/v1/sdn", s.getSDN)
+	auth.HandleFunc("GET /api/v1/node/disks", s.getDisks)
+	auth.HandleFunc("POST /api/v1/node/disks/{disk}/{action}", s.diskAction)
+	auth.HandleFunc("POST /api/v1/node/pools", s.createDiskPool)
+	auth.HandleFunc("DELETE /api/v1/node/pools/{name}", s.deleteDiskPool)
 	auth.HandleFunc("PUT /api/v1/sdn", s.putSDN)
 	auth.HandleFunc("GET /api/v1/vms/{name}/firewall", s.getFirewall)
 	auth.HandleFunc("PUT /api/v1/vms/{name}/firewall", s.putFirewall)

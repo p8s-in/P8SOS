@@ -19,6 +19,15 @@ See what's used: **Server → Storage**, `p8 storage`, `zpool status`, `zfs list
 - A disk in a mirror or RAID died? `zpool status` names it. Put in a new disk and follow *Replacing a failed disk* in Troubleshooting (section 15). The server keeps running and every remaining disk can boot it.
 - Check pool health monthly with a scrub: `sudo zpool scrub tank` (Health & alerts warns on errors).
 
+## Disks: see them, wipe them, make more VM storage
+
+Server page → Storage → **Disks** lists every physical disk of the server (on the master: pick any cluster server): size, type, model, what is on it (*system*, *ZFS pool tank*, *LVM / Ceph*, *data*, *empty*) and its SMART health (temperature, age, worn %, reallocated sectors — *check it* means plan a replacement).
+
+- **Protect** a disk whose data you keep (for example the laptop's own data disk): it can then never be wiped or used for a pool.
+- **Wipe** clears a disk that isn't in use. The system disk, disks in a ZFS pool or in Ceph, mounted disks and protected disks are never offered; a disk with data is only wiped after you type its name.
+- **Make pool** (under *ZFS pools for VM disks*): tick empty disks, give a name and a layout — single disk, mirror (2+), RAID-Z1 (3+) or RAID-Z2 (4+). The pool `p8s-NAME` becomes a storage like `local`: pick it under *Storage* when making a VM, or move disks onto it (Hardware → Disk storage). Health & alerts watch it like the main pool. **Destroy** removes it again once no VM disks are on it.
+- Commands: `p8 hostdisks`, `p8 disk-protect sda`, `p8 disk-wipe sdb`, `p8 pool-make fast mirror sdb sdc`, `p8 pool-rm fast`.
+
 ## NAS and SAN
 
 - **NAS share:** on the NAS, share a folder over NFS to this server, read-write, root allowed. Then Server → Network storage → Add, or `p8 storages add-nfs nas 192.168.0.20 /mnt/tank/p8s --backups`. Every backup gets a copy there; ISOs you put in `p8s/iso` appear in the ISO library.

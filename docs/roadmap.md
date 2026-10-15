@@ -63,6 +63,7 @@ Each phase ships something usable on its own.
 - [x] Off-site backups: folder / S3-compatible / SSH targets, optional encryption, retention per place, bring back ([offsite-backups.md](offsite-backups.md))
 - [x] Several network cards per VM (nat / home network / VLAN, hot-plug, firewall on every card, kept on moves and failover, new MACs on clones)
 - [x] Disk and network speed limits per VM (MB/s, IOPS, Mbit/s; live), CPU and RAM hot-plug (ceilings, live resize)
+- [x] Disks view: every physical disk with use and SMART health, protect, wipe (typed confirmation for data), ZFS pools from empty disks as extra VM storages (single / mirror / RAID-Z1 / RAID-Z2)
 - [x] Virtual networks across the servers (SDN, VXLAN in the cluster tunnel): one switch for VMs wherever they run; optional subnet with gateway, DHCP, DNS and NAT on the master ([sdn.md](sdn.md))
 - [x] Witness for two-server clusters (like Proxmox's QDevice): `p8s-witness` on a Pi / NAS / VPS is the third vote, so the surviving server takes over by itself (`p8 cluster witness`)
 - [x] Datacenter firewall: IP sets, blocked addresses and rules for every VM on every server
