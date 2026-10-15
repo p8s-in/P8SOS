@@ -600,6 +600,14 @@ Build a new ISO on the laptop: `sudo bash iso/build-installer.sh ~/P8SOS/dist` (
 - [ ] Cut the move short (unplug the target's cable during the first copy) → job fails, container keeps running on the old server; no half disk left on the target after it is back (or the next move cleans it up)
 - [ ] A stopped container still moves as before (start only if ticked); a container with a public IP → refused
 
+## 55. Removing an offline server
+
+- [ ] Worker switched off → master's Server → Cluster shows it offline with a **Remove (offline)** button; one confirmation explains its VMs stay there → removed within a second or two (no long wait)
+- [ ] Online worker → **Remove** → it is told to stand alone (its own dashboard shows no cluster); with VMs on it a second confirmation asks "remove it anyway?"
+- [ ] On the removed server once it runs again: Server → Cluster → **Leave the cluster** (or `p8 cluster leave`) → stands alone; can be added again with + Add a server
+- [ ] `sudo p8 cluster …` (and any `sudo p8 …`) works: it uses the token of the user who ran sudo
+- [ ] `p8 cluster remove n2` on an offline server with VMs → refused naming a VM; `p8 cluster remove n2 --force` → removed at once
+
 ## Add new features here as they are built
 
 (Every new feature adds its own lines above before it counts as done.)

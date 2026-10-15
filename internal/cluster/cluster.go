@@ -552,6 +552,7 @@ func (m *Manager) Remove(ctx context.Context, id string) error {
 		m.mu.Unlock()
 		return fmt.Errorf("%w: server %s", ErrNotFound, id)
 	}
+	online := m.status[id] != nil && m.status[id].Online
 	delete(m.status, id)
 	err := m.save()
 	m.mu.Unlock()
@@ -561,7 +562,7 @@ func (m *Manager) Remove(ctx context.Context, id string) error {
 	// tell it, while the tunnel is still up: it stands alone again (best effort —
 	// an offline server is told nothing and still thinks it is a worker until
 	// someone presses Leave the cluster on it)
-	if gone.Token != "" {
+	if gone.Token != "" && online { // an offline one isn't waited for
 		cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		if err := m.call(cctx, gone, "POST", "/cluster/leave", struct{}{}, nil); err != nil && m.Log != nil {
 			m.Log.Warn("removed server not told", "id", id, "err", err)

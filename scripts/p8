@@ -5,6 +5,9 @@ set -uo pipefail
 
 URL=${P8S_URL:-https://127.0.0.1:8006/api/v1}  # self-signed cert: curl -k
 TOKEN=${P8S_TOKEN:-$(cat "$HOME/.p8s-token" 2>/dev/null || true)}
+if [[ -z $TOKEN && -n ${SUDO_USER:-} ]]; then # sudo p8 …: the token of the user who ran sudo
+  TOKEN=$(cat "$(getent passwd "$SUDO_USER" | cut -d: -f6)/.p8s-token" 2>/dev/null || true)
+fi
 PUBKEY=${PUBKEY:-$HOME/.ssh/id_ed25519.pub}
 SSH_OPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR)
 

@@ -95,7 +95,7 @@ async function loadCluster(){
       <td style="white-space:nowrap">${on ? `<span class="state running"><span class="dot"></span>online</span>`
         : n.status?.connecting ? `<span class="state" title="Just joined: its tunnel and P8S OS are starting"><span class="dot" style="background:var(--warn)"></span>connecting…</span>`
         : `<span class="state stopped"><span class="dot"></span>offline</span>`}</td>
-      <td style="text-align:right;white-space:nowrap">${role === "master" && !n.self ? `<button class="btn" data-clsh="${esc(n.id)}" data-name="${esc(n.name)}" type="button" title="Root shell of ${esc(n.name)}">&gt;_ Shell</button> <button class="btn" data-clren="${esc(n.id)}" data-name="${esc(n.name)}" type="button" title="Give ${esc(n.name)} a new name">Rename</button> <button class="btn danger" data-clrm="${esc(n.id)}" data-name="${esc(n.name)}" type="button">Remove</button>` : ""}</td></tr>`;
+      <td style="text-align:right;white-space:nowrap">${role === "master" && !n.self ? `<button class="btn" data-clsh="${esc(n.id)}" data-name="${esc(n.name)}" type="button" title="Root shell of ${esc(n.name)}">&gt;_ Shell</button> <button class="btn" data-clren="${esc(n.id)}" data-name="${esc(n.name)}" type="button" title="Give ${esc(n.name)} a new name">Rename</button> <button class="btn danger" data-clrm="${esc(n.id)}" data-name="${esc(n.name)}" data-on="${on ? 1 : ""}" type="button"${on ? "" : ` title="${esc(n.name)} is offline: remove it from this cluster now"`}>${on ? "Remove" : "Remove (offline)"}</button>` : ""}</td></tr>`;
   }).join("");
   $("#clActions").innerHTML = role === "worker"
     ? `<span class="spacer"></span><button class="btn danger" id="clLeave" type="button">Leave the cluster</button>`
@@ -135,7 +135,7 @@ async function loadCluster(){
     try { await call("DELETE", "/cluster/witness"); toast("Witness removed."); loadCluster(); } catch (e) { toast(e.message, true); }
   };
   if ($("#clLeave")) $("#clLeave").onclick = async () => {
-    if (!confirm("Leave the cluster? This server's VMs keep running here; the master won't show them any more.")) return;
+    if (!confirm("Leave the cluster? This server's VMs and containers keep running here; the master won't show them any more. This works also when the master is offline (then press Remove on the master later, if it still lists this server).")) return;
     try { await call("POST", "/cluster/leave"); toast("This server stands alone again. On the master it shows as offline: press Remove there."); loadCluster(); } catch (e) { toast(e.message, true); }
   };
 }
@@ -227,14 +227,17 @@ $("#clNodes").addEventListener("click", async e => {
     return;
   }
   const b = e.target.closest("[data-clrm]"); if (!b) return;
-  const id = b.dataset.clrm;
-  if (!confirm(`Remove ${b.dataset.name || id} from the cluster? It is told to stand alone again (its VMs keep running there, but this dashboard no longer shows them). You can add it again later with + Add a server.`)) return;
-  try { await call("DELETE", `/cluster/nodes/${encodeURIComponent(id)}`); }
+  const id = b.dataset.clrm, nm = b.dataset.name || id, online = !!b.dataset.on;
+  if (!confirm(online
+    ? `Remove ${nm} from the cluster? It is told to stand alone again (its VMs and containers keep running there, but this dashboard no longer shows them). You can add it again later with + Add a server.`
+    : `Remove ${nm} from the cluster now? It is offline, so it can't be told: its VMs and containers stay on it, untouched, and disappear from this dashboard.\n\nWhen ${nm} is running again, open its own dashboard → Server → Cluster → Leave the cluster (or run: p8 cluster leave) before adding it again.`)) return;
+  b.disabled = true; b.textContent = "Removing…";
+  try { await call("DELETE", `/cluster/nodes/${encodeURIComponent(id)}${online ? "" : "?force=1"}`); }
   catch (err) {
-    if (!/still has VMs/.test(err.message) || !confirm(err.message + "\n\nRemove it anyway? Its VMs keep running there but disappear from this dashboard.")) return toast(err.message, true);
-    try { await call("DELETE", `/cluster/nodes/${encodeURIComponent(id)}?force=1`); } catch (e2) { return toast(e2.message, true); }
+    if (!/still has VMs/.test(err.message) || !confirm(err.message + "\n\nRemove it anyway? Its VMs keep running there but disappear from this dashboard.")) { b.disabled = false; b.textContent = online ? "Remove" : "Remove (offline)"; return toast(err.message, true); }
+    try { await call("DELETE", `/cluster/nodes/${encodeURIComponent(id)}?force=1`); } catch (e2) { b.disabled = false; return toast(e2.message, true); }
   }
-  toast(id + " removed from the cluster"); loadCluster();
+  toast(online ? `${nm} removed; it stands alone again` : `${nm} removed. When it is back, press Leave the cluster on it.`); loadCluster();
 });
 if (typeof openNode === "function") {
   const _openNode = openNode;
