@@ -55,12 +55,15 @@ type Container struct {
 	DiskUsed  int64  `json:"disk_used,omitempty"` // bytes
 	IP        string `json:"ip,omitempty"`
 	MAC       string `json:"mac"`
-	Network   string `json:"network"` // nat, lan or public
+	Network   string `json:"network"` // nat, lan, public or vnet:NAME
 	PublicIP  string `json:"public_ip,omitempty"`
 	Owner     string `json:"owner,omitempty"`
 	Autostart bool   `json:"autostart"`
 	Created   string `json:"created"`
 	User      string `json:"user"` // login user (root)
+	// Node / NodeID: the cluster server it runs on (set by the cluster).
+	Node   string `json:"node,omitempty"`
+	NodeID string `json:"node_id,omitempty"`
 }
 
 // Template is an installed container template.
@@ -84,7 +87,8 @@ type CreateRequest struct {
 	SSHKeys       []string `json:"ssh_keys"`
 	Start         *bool    `json:"start"`
 	Autostart     *bool    `json:"autostart"`
-	NoDefaultKeys bool     `json:"-"`
+	NoDefaultKeys bool     `json:"no_default_keys,omitempty"` // a customer's container: not the host's keys
+	Node          string   `json:"node,omitempty"`            // cluster server to make it on ("" = chosen)
 }
 
 // ResizeRequest changes limits (0 = unchanged). Disk can grow, or shrink down to what's used.
@@ -148,6 +152,10 @@ type Service struct {
 	Refresh func(ctx context.Context) error
 	// AfterBackup is told about every finished backup (off-site copies); nil = nothing.
 	AfterBackup func(kind, guest, id string)
+	// VNets are the cluster's virtual networks ("vnet:NAME"); nil = none.
+	VNets vm.VNets
+	// Cmd runs streaming commands (moves); nil = exec.CommandContext.
+	Cmd func(ctx context.Context, name string, args ...string) *exec.Cmd
 
 	mu    sync.Mutex
 	metas map[string]*meta
@@ -305,7 +313,13 @@ func (s *Service) bridgeFor(name, network string) (string, error) {
 		}
 		return s.LANBridge, nil
 	}
-	return "", fmt.Errorf("%w: network must be nat, lan or public", vm.ErrInvalid)
+	if vm.IsVNet(network) {
+		if s.VNets == nil {
+			return "", fmt.Errorf("%w: virtual networks aren't available on this server", vm.ErrInvalid)
+		}
+		return s.VNets.BridgeOf(context.Background(), strings.TrimPrefix(network, vm.NetVNetPrefix))
+	}
+	return "", fmt.Errorf("%w: network must be nat, lan, public or vnet:NAME", vm.ErrInvalid)
 }
 
 func (s *Service) validate(r *CreateRequest) error {
@@ -505,6 +519,9 @@ func (s *Service) config(name string, m *meta, bridge string) string {
 	b.WriteString("lxc.apparmor.profile = generated\nlxc.apparmor.allow_nesting = 0\n")
 	fmt.Fprintf(&b, "lxc.net.0.type = veth\nlxc.net.0.link = %s\nlxc.net.0.flags = up\nlxc.net.0.name = eth0\nlxc.net.0.hwaddr = %s\n", bridge, m.MAC)
 	fmt.Fprintf(&b, "lxc.net.0.veth.pair = %s\n", HostPort(name)) // fixed name: the firewall pins public addresses to it
+	if strings.HasPrefix(bridge, "vxb") {                         // a virtual network: frames travel inside the cluster tunnel
+		b.WriteString("lxc.net.0.mtu = 1230\n")
+	}
 	if l, ok := s.lease(name); ok && m.Network == vm.NetPublic {
 		fmt.Fprintf(&b, "lxc.net.0.ipv4.address = %s/%d\n", l.IP, l.Prefix)
 		if !l.OnLink {

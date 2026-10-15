@@ -117,7 +117,7 @@ func (s *Server) createCT(w http.ResponseWriter, r *http.Request) {
 		if !s.canAfford(w, r, p.Name, plan) {
 			return
 		}
-	} else if req.Owner != "" {
+	} else if req.Owner != "" && !p.Cluster { // the master checked it already
 		if s.Users == nil {
 			writeErr(w, http.StatusBadRequest, "invalid", "user accounts are not enabled on this host")
 			return
@@ -499,7 +499,29 @@ func (s *Server) terminalSocket(w http.ResponseWriter, r *http.Request) {
 		}
 		term, name = localShell{t}, "server (root shell, "+hostUser+")"
 	default:
-		t, err := s.CTs.Shell(r.Context(), name)
+		if mv, ok := s.CTs.(ctMover); ok { // a container on another server: through the tunnel
+			if n, remote := mv.Where(r.Context(), name); remote {
+				dial, ok := s.CTs.(interface {
+					DialShell(ctx context.Context, n cluster.Node, name string) (net.Conn, error)
+				})
+				if !ok {
+					writeErr(w, http.StatusNotFound, "not_found", "this container's terminal isn't reachable from here")
+					return
+				}
+				conn, err := dial.DialShell(r.Context(), n, name)
+				if err != nil {
+					s.fail(w, r, err)
+					return
+				}
+				term = remoteShell{conn}
+				break
+			}
+		}
+		if s.CTLocal == nil {
+			writeErr(w, http.StatusNotFound, "not_found", "containers are not available on this host")
+			return
+		}
+		t, err := s.CTLocal.Shell(r.Context(), name)
 		if err != nil {
 			s.fail(w, r, err)
 			return

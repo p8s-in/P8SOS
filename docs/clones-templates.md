@@ -6,8 +6,9 @@ Dashboard: **Manage → Options → Clone** (admins and operators). Command line
 
 - A new VM with a **full copy of every disk** (root and data disks), taken at one instant — also while the
   VM runs (its file systems are frozen for that instant through the guest agent).
-- Same CPUs, memory, disk sizes, network, VLAN, CPU type and firewall rules. On the same storage
-  (local ZFS, SAN pool or Ceph) and the same server.
+- Same CPUs, memory, disk sizes, network, VLAN, CPU type and firewall rules. On the same server and,
+  unless you pick another (the storage list next to the name, or `p8 clone web1 web2 --storage ceph`),
+  the same storage (local ZFS, SAN pool or Ceph).
 - Its own name, MAC address and IP. VMs made from a template get a new cloud-init disk: the new name,
   new SSH host keys, DHCP by MAC (so the copy never asks for the original's address).
 - VMs installed from an ISO are copied **exactly** (same computer name and IDs inside). Windows: run
@@ -25,7 +26,9 @@ Set up one VM the way you want (packages, settings), then **Manage → Options �
   gets new SSH host keys when started.
 - If it is already shut down it is copied as it is (start it and make the template while it runs to
   get it cleaned).
-- The VM's root disk is copied into `tank/p8s/templates/<name>` (data disks are not part of a template).
+- The VM's root disk is copied into `tank/p8s/templates/<name>`, its data disks into
+  `<name>-disk1` … — VMs made from the template get copies of the data disks too.
+- VMs on Ceph work as well: their disks are copied out of Ceph into the local template.
 - **New VM → Operating system → "Made from your VMs"**, or `p8 create web7 --os web-base`. New VMs
   are instant copies, like with the built-in templates, and their size starts at the template's.
 - In a cluster the template lives on the server where its VM was; VMs made from it are created there.
@@ -40,5 +43,5 @@ Set up one VM the way you want (packages, settings), then **Manage → Options �
 
 ## Not yet
 
-- Templates from VMs on Ceph; templates with data disks; linked clones (a clone is always a full copy).
-- Cloning to another server or another storage in one step (clone, then move it).
+- Linked clones of VMs (a clone is always a full copy; VMs made from templates already are instant ZFS clones).
+- Cloning to another server in one step (clone, then move it).

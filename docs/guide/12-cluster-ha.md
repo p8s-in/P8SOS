@@ -33,7 +33,9 @@ Give every server its own name before joining (two servers both called `p8s-node
 | Ceph, shut down | Same | Instant | No disk copied |
 | Ceph, live | Same | Seconds | Only memory moves |
 
-Not yet live: UEFI VMs (Windows 11), SAN-disk VMs, VMs with a public IP or a CD inserted — move those shut down. Snapshots and old backups stay behind; take a new backup after a move.
+UEFI and Windows 11 VMs move live too (UEFI variables and TPM state come along); a VM on a SAN disk lands on the other server's local storage. Not live: VMs with a public IP, a CD inserted or PCI/USB devices — move those shut down. VMs with data disks move (live or shut down) and are protected by HA with all their disks. Snapshots and old backups stay behind; take a new backup after a move.
+
+Containers run on any server too (pick the server when creating). Move a stopped one with Manage → **Move to server** or `p8 ct-move web2 n2`; containers with a public IP stay on the master, and HA doesn't cover containers yet.
 
 ## No single master (3+ servers)
 

@@ -67,4 +67,5 @@ stays on the SAN either way.
   the other server's local storage).
 - A SAN disk must not be used by two servers at once (ZFS isn't a cluster
   file system); the SAN's initiator list is what prevents that.
-- Restoring a deleted VM puts it on local storage.
+- Restoring a deleted VM puts it on local storage; a backup restored as a new VM (copy) can go
+  onto a SAN pool or Ceph (Backups → Copy → pick the storage).

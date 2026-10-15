@@ -171,3 +171,38 @@ func TestTemplateFromVM(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func (d *cloneDisksFake) MakeTemplateDisk(_ context.Context, vm string, i int, snap, ds string) (string, error) {
+	d.templates[ds] = true
+	return ds + "@" + snap, nil
+}
+func (d *cloneDisksFake) CloneExtra(ctx context.Context, snapshot, vm string, i, gb int) (string, error) {
+	d.copies = append(d.copies, fmt.Sprintf("%s->%s/%d", snapshot, vm, i))
+	return d.CreateExtra(ctx, vm, i, gb)
+}
+
+func TestTemplateWithDataDisks(t *testing.T) {
+	ctx := context.Background()
+	svc, hv, cd, _ := cloneSvc(t)
+	if _, err := svc.Create(ctx, CreateRequest{Name: "db-base", Template: "debian-13", DiskGB: 10}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.AddDisk(ctx, "db-base", 30); err != nil {
+		t.Fatal(err)
+	}
+	j, _ := svc.StartMakeTemplate(ctx, "db-base", TemplateRequest{Name: "db"})
+	if got := waitJob(t, svc, j); got.State != "done" || !strings.Contains(got.Message, "1 data disk") {
+		t.Fatalf("job %+v", got)
+	}
+	if !cd.templates["tank/t/db-disk1"] {
+		t.Fatalf("data disk not in the template: %v", cd.templates)
+	}
+	v, err := svc.Create(ctx, CreateRequest{Name: "db7", Template: "db"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sp, _ := virt.ParseDomainXML(hv.doms["p8s-db7"])
+	if len(v.Disks) != 1 || v.Disks[0].SizeGB != 30 || len(sp.Extra) != 1 || !strings.Contains(strings.Join(cd.copies, " "), "tank/t/db-disk1@") {
+		t.Fatalf("vm from template: %+v %+v %v", v.Disks, sp.Extra, cd.copies)
+	}
+}

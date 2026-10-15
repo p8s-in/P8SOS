@@ -400,13 +400,14 @@ VMs show `"os_type"` and `"drivers_iso"`. See [windows.md](windows.md).
 | Method | Path | |
 |---|---|---|
 | GET | `/api/v1/containers` | containers the caller may see, `enabled` false when LXC isn't installed |
-| POST | `/api/v1/containers` | `{"name","template","vcpus","memory_mib","disk_gb","network","ip_pool","plan","root_password","ssh_keys","owner","start","autostart"}` |
+| POST | `/api/v1/containers` | `{"name","template","vcpus","memory_mib","disk_gb","network","ip_pool","plan","root_password","ssh_keys","owner","start","autostart","node"}` — `node` picks the server in a cluster (master only); `network` may be `vnet:NAME`; items in the list carry `node` |
 | GET / DELETE / PATCH | `/api/v1/containers/{name}` | details / delete with its disk / resize `{"vcpus","memory_mib","disk_gb","autostart"}` (live) |
 | POST | `/api/v1/containers/{name}/start` · `/stop` (`{"force":true}`) · `/reboot` | power |
 | GET / POST | `/api/v1/containers/{name}/snapshots` | list / take `{"name"}` |
 | POST / DELETE | `/api/v1/containers/{name}/snapshots/{snap}/rollback` · `/snapshots/{snap}` | roll back (stopped; `{"destroy_newer":true}`) / delete |
 | POST | `/api/v1/containers/{name}/password` | `{"user","password"}` (running) |
 | PUT | `/api/v1/containers/{name}/owner` | `{"owner"}` (admins) |
+| POST | `/api/v1/containers/{name}/move` | `{"to","start"}` stopped container to another server (staff; 202 + job) |
 | POST | `/api/v1/containers/{name}/console` | one-time ticket for `GET /api/v1/terminal?ticket=` (WebSocket: binary = terminal bytes, text = `{"cols","rows"}`) |
 | GET / PUT | `/api/v1/containers/{name}/firewall` | same body as the VM firewall `{"enabled","rules":[{"proto","ports","source","comment"}]}` |
 | GET / POST | `/api/v1/containers/{name}/backups` | list / start a backup (202 + job, follow `/api/v1/jobs/{id}`) |

@@ -36,12 +36,20 @@ type replicaDisks interface {
 	RetireDisk(ctx context.Context, vm string) error
 }
 
+// replicaMulti copies VMs with data disks (all disks in one stream).
+type replicaMulti interface {
+	SendReplicaDisks(ctx context.Context, vm string, idx []int, base string, header func(snap string, bases []string) error, w io.Writer) error
+	RecvReplicaDisks(ctx context.Context, vm string, idx []int, bases []string, r io.Reader) error
+	ReplicaSnapsDisks(ctx context.Context, vm string, idx []int) ([]string, error)
+}
+
 // ReplicaHeader is the first line of a copy stream.
 type ReplicaHeader struct {
 	MoveHeader
-	Base string `json:"base,omitempty"` // "" = full copy
-	Snap string `json:"snap"`
-	From string `json:"from,omitempty"` // server name it came from
+	Base  string   `json:"base,omitempty"`  // "" = full copy
+	Bases []string `json:"bases,omitempty"` // with data disks: per disk (root first), "" = full
+	Snap  string   `json:"snap"`
+	From  string   `json:"from,omitempty"` // server name it came from
 }
 
 // Replica is a copy of a VM held on this server.
@@ -89,8 +97,8 @@ func (s *Service) HACheck(ctx context.Context, name string) (string, error) {
 		return "it has a public IP from this server's pool (it can't follow the VM to another server)", nil
 	}
 	shared := s.shared(Prefix + name) // on Ceph: no copies needed, every server has the disks
-	if len(v.Disks) > 0 && !shared {
-		return "it has extra disks; high availability copies only VMs with one disk for now", nil
+	if _, multi := s.Disks.(replicaMulti); len(v.Disks) > 0 && !shared && !multi {
+		return "it has extra disks; this server's storage copies only VMs with one disk", nil
 	}
 	if v.Storage != "" && !shared {
 		return "its disks are on network storage " + v.Storage + "; high availability copies only VMs on local storage for now", nil
@@ -109,6 +117,14 @@ func (s *Service) ReplicaSnaps(ctx context.Context, name string) ([]string, erro
 	}
 	if h, err := s.loadReplica(name); err == nil && h.Shared != "" {
 		return []string{h.Snap}, nil
+	} else if err == nil && len(h.Extra) > 0 {
+		if mr, ok := s.Disks.(replicaMulti); ok {
+			l, err := mr.ReplicaSnapsDisks(ctx, Prefix+name, extraIdx(h.Extra))
+			if l == nil {
+				l = []string{}
+			}
+			return l, err
+		}
 	}
 	l, err := rd.ReplicaSnaps(ctx, Prefix+name)
 	if l == nil {
@@ -154,6 +170,18 @@ func (s *Service) SendReplica(ctx context.Context, name string, have []string, f
 		}
 	}
 	rh := ReplicaHeader{MoveHeader: h, Base: base, From: from}
+	if len(h.Extra) > 0 { // data disks: all of them, snapshotted together
+		mr, ok := rd.(replicaMulti)
+		if !ok {
+			return fmt.Errorf("%w: this server's storage can't copy data disks", ErrConflict)
+		}
+		return mr.SendReplicaDisks(ctx, dom, extraIdx(h.Extra), base, func(snap string, bases []string) error {
+			rh.Snap, rh.Bases = snap, bases
+			b, _ := json.Marshal(rh)
+			_, err := w.Write(append(b, '\n'))
+			return err
+		}, w)
+	}
 	return rd.SendReplica(ctx, dom, base, func(snap string) error {
 		rh.Snap = snap
 		b, _ := json.Marshal(rh)
@@ -191,7 +219,15 @@ func (s *Service) RecvReplica(ctx context.Context, r io.Reader) (Replica, error)
 		}
 		return s.replicaInfo(ctx, rd, h), nil
 	}
-	if err := rd.RecvReplica(ctx, dom, h.Base, br); err != nil {
+	if len(h.Extra) > 0 {
+		mr, ok := rd.(replicaMulti)
+		if !ok {
+			return Replica{}, fmt.Errorf("%w: this server's storage can't keep copies of data disks", ErrConflict)
+		}
+		if err := mr.RecvReplicaDisks(ctx, dom, extraIdx(h.Extra), h.Bases, br); err != nil {
+			return Replica{}, err
+		}
+	} else if err := rd.RecvReplica(ctx, dom, h.Base, br); err != nil {
 		return Replica{}, err
 	}
 	if err := s.saveReplica(h); err != nil {
@@ -306,6 +342,20 @@ func (s *Service) PromoteReplica(ctx context.Context, name string) (VM, string, 
 		return VM{}, "", err
 	}
 	undo := []func(){func() { s.logErr("undo failover disk", rd.RetireDisk(bg, dom)) }}
+	if len(h.Extra) > 0 { // the data disks' copies became the data disks
+		ew, ok := s.Disks.(extraWaiter)
+		for i := range h.Extra {
+			if !ok {
+				break
+			}
+			p, err := ew.WaitExtra(ctx, dom, h.Extra[i].Index)
+			if err != nil {
+				rd.RetireDisk(bg, dom)
+				return VM{}, "", fmt.Errorf("data disk %d of the copy: %w", h.Extra[i].Index, err)
+			}
+			h.Extra[i].Path = p
+		}
+	}
 	v, note, err := s.defineMoved(ctx, h.MoveHeader, disk, &undo)
 	if err != nil {
 		for i := len(undo) - 1; i >= 0; i-- {

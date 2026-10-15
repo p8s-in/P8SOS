@@ -71,12 +71,6 @@ func (s *Server) addDisk(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
-	if s.HA != nil {
-		if _, protected := s.HA.Config(r.Context(), cur.Name); protected {
-			writeErr(w, http.StatusConflict, "conflict", "high availability copies only VMs with one disk for now; turn HA off for this VM first")
-			return
-		}
-	}
 	release, ok := s.diskChange(w, r, cur, req.SizeGB)
 	if !ok {
 		return

@@ -28,6 +28,21 @@ type diskMover interface {
 	RecvDisk(ctx context.Context, vm string, r io.Reader) (string, error)
 }
 
+// disksMover moves a VM with data disks (root + data disks in one stream).
+type disksMover interface {
+	SendDisks(ctx context.Context, vm string, idx []int, w io.Writer) error
+	RecvDisks(ctx context.Context, vm string, idx []int, r io.Reader) (string, map[int]string, error)
+}
+
+// extraIdx are the indexes of a header's data disks.
+func extraIdx(l []virt.ExtraDisk) []int {
+	var out []int
+	for _, e := range l {
+		out = append(out, e.Index)
+	}
+	return out
+}
+
 // MoveHeader describes the VM in the stream.
 type MoveHeader struct {
 	Name      string             `json:"name"`
@@ -53,7 +68,7 @@ type MoveHeader struct {
 	// Shared names the storage every server sees ("ceph"): no disk follows
 	// the header, the other server opens the same disks.
 	Shared string           `json:"shared,omitempty"`
-	Extra  []virt.ExtraDisk `json:"extra,omitempty"` // data disks (shared storage)
+	Extra  []virt.ExtraDisk `json:"extra,omitempty"` // data disks (shared storage: opened there; local: streamed after the root disk)
 	TPM    []byte           `json:"tpm,omitempty"`   // software TPM state (Windows 11, BitLocker)
 	NICs   []NIC            `json:"nics,omitempty"`  // the other network cards (same MACs)
 }
@@ -149,12 +164,14 @@ func (s *Service) moveHeader(ctx context.Context, name string) (MoveHeader, erro
 	}
 	if s.shared(dom) {
 		h.Shared = s.storageOf(dom)
-		for _, d := range sp.Extra {
-			h.Extra = append(h.Extra, virt.ExtraDisk{Index: d.Index, SizeGB: d.SizeGB})
-		}
+	}
+	for _, d := range sp.Extra {
+		h.Extra = append(h.Extra, virt.ExtraDisk{Index: d.Index, SizeGB: d.SizeGB})
 	}
 	return h, nil
 }
+
+func (s *Service) canMoveDisks() bool { _, ok := s.Disks.(disksMover); return ok }
 
 // MoveCheck says whether a VM can be moved now ("" = yes).
 func (s *Service) MoveCheck(ctx context.Context, name string) (string, error) {
@@ -172,8 +189,8 @@ func (s *Service) MoveCheck(ctx context.Context, name string) (string, error) {
 		return "it has a public IP from this server's pool; release it first", nil
 	case v.ISO != "" || v.Drivers != "":
 		return "eject its CDs first (Manage → Installer CD)", nil
-	case len(v.Disks) > 0 && !s.shared(Prefix+name):
-		return "it has extra disks; moving those isn't supported yet (back it up and restore it on the other server instead)", nil
+	case len(v.Disks) > 0 && !s.shared(Prefix+name) && !s.canMoveDisks():
+		return "it has extra disks; this server's storage can't move those", nil
 	case len(v.PCI)+len(v.USB) > 0:
 		return "it has PCI/USB devices of this server; take them away first (Hardware → PCI and USB devices)", nil
 	}
@@ -201,6 +218,9 @@ func (s *Service) ExportVM(ctx context.Context, name string, w io.Writer) error 
 	}
 	if h.Shared != "" {
 		return nil // the other server opens the same disks
+	}
+	if len(h.Extra) > 0 {
+		return s.Disks.(disksMover).SendDisks(ctx, dom, extraIdx(h.Extra), w)
 	}
 	return s.Disks.(diskMover).SendDisk(ctx, dom, w)
 }
@@ -243,9 +263,25 @@ func (s *Service) ImportMovedVM(ctx context.Context, r io.Reader) (VM, string, e
 		return v, note, nil
 	}
 	_ = s.dropLeftover(ctx, dom) // leftover of an interrupted move
-	disk, err := mv.RecvDisk(ctx, dom, br)
-	if err != nil {
-		return fail(err)
+	var disk string
+	if len(h.Extra) > 0 { // data disks follow the root disk in the stream
+		dm, ok := s.Disks.(disksMover)
+		if !ok {
+			return fail(fmt.Errorf("%w: this server's storage can't receive data disks", ErrConflict))
+		}
+		root, paths, err := dm.RecvDisks(ctx, dom, extraIdx(h.Extra), br)
+		if err != nil {
+			return fail(err)
+		}
+		disk = root
+		for i := range h.Extra {
+			h.Extra[i].Path = paths[h.Extra[i].Index]
+		}
+	} else {
+		disk, err = mv.RecvDisk(ctx, dom, br)
+		if err != nil {
+			return fail(err)
+		}
 	}
 	undo = append(undo, func() { s.logErr("rollback moved disk", s.Disks.DestroyDisk(bg, dom)) })
 	v, note, err := s.defineMoved(ctx, h, disk, &undo)
@@ -285,8 +321,8 @@ func (s *Service) defineMoved(ctx context.Context, h MoveHeader, disk string, un
 	spec := virt.Spec{Name: dom, UUID: h.UUID, VCPUs: h.VCPUs, MemoryMiB: h.MemoryMiB, DiskGB: h.DiskGB, DiskPath: disk, SeedISO: seed,
 		Bridge: bridge, MAC: h.MAC, OSType: h.OSType, Template: h.Template, CreatedAt: h.CreatedAt, Owner: h.Owner,
 		DiskBus: h.DiskBus, NICModel: h.NICModel, Firmware: h.Firmware}
-	if h.Shared != "" {
-		spec.Extra = h.Extra // opened by attachShared: paths on this server
+	if len(h.Extra) > 0 && h.Extra[0].Path != "" {
+		spec.Extra = h.Extra // opened (shared) or received (local) here: paths on this server
 	}
 	for _, n := range h.NICs { // the other cards, on this server's bridges
 		nw := n.Network

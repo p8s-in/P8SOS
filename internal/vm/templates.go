@@ -30,6 +30,12 @@ type templateDisks interface {
 	DestroyTemplate(ctx context.Context, ds string) error
 }
 
+// templateDataDisks copies data disks into a template and back (storage.ZFS).
+type templateDataDisks interface {
+	MakeTemplateDisk(ctx context.Context, vm string, i int, snap, ds string) (string, error)
+	CloneExtra(ctx context.Context, snapshot, vm string, i, sizeGB int) (string, error)
+}
+
 // guestExec runs a script in a guest through its agent (virt.Virsh).
 type guestExec interface {
 	GuestExec(ctx context.Context, name, script string, timeout time.Duration) (int, string, error)
@@ -162,9 +168,6 @@ func (s *Service) StartMakeTemplate(ctx context.Context, name string, r Template
 	if err != nil {
 		return Job{}, err
 	}
-	if v.Storage == SharedStorage {
-		return Job{}, fmt.Errorf("%w: templates are made from VMs on local storage (%s is on Ceph)", ErrConflict, name)
-	}
 	if v.State == virt.Running {
 		if _, ok := s.HV.(guestExec); !ok {
 			return Job{}, fmt.Errorf("%w: shut it down first", ErrConflict)
@@ -247,6 +250,23 @@ func (s *Service) makeTemplate(ctx context.Context, name string, r TemplateReque
 	src, _ := s.template(sp.Template)
 	t := config.Template{Name: r.Name, Snapshot: tsnap, MinDiskGB: max(sp.DiskGB, 1), OSVariant: src.OSVariant,
 		Label: r.Label, DefaultUser: src.DefaultUser}
+	if len(sp.Extra) > 0 { // data disks come along: new VMs get copies of them
+		tdd, ok := s.Disks.(templateDataDisks)
+		if !ok {
+			s.logErr("drop template", td.DestroyTemplate(bg, ds))
+			return "", fmt.Errorf("this server's storage can't put data disks in a template")
+		}
+		for _, e := range sp.Extra {
+			p(fmt.Sprintf("copying data disk %d", e.Index))
+			es, err := tdd.MakeTemplateDisk(ctx, dom, e.Index, snap, fmt.Sprintf("%s-disk%d", ds, e.Index))
+			if err != nil {
+				s.logErr("drop template", td.DestroyTemplate(bg, ds))
+				return "", err
+			}
+			t.Extra = append(t.Extra, config.TemplateDisk{Index: e.Index, Snapshot: es, SizeGB: max(e.SizeGB, 1)})
+		}
+		note += fmt.Sprintf("; with %d data disk(s)", len(t.Extra))
+	}
 	if t.Label == "" {
 		t.Label = r.Name + " (from " + name + ")"
 	}

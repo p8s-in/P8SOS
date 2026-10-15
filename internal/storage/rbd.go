@@ -408,13 +408,13 @@ func (z *ZFS) cephTemplate(ctx context.Context, snapshot string) (string, error)
 	return img, nil
 }
 
-func (z *ZFS) cephClone(ctx context.Context, snapshot, vm string, sizeGB int) (string, error) {
+func (z *ZFS) cephClone(ctx context.Context, snapshot, vm string, i, sizeGB int) (string, error) {
 	r := z.Ceph
 	tpl, err := z.cephTemplate(ctx, snapshot)
 	if err != nil {
 		return "", err
 	}
-	img := r.image(vm, 0)
+	img := r.image(vm, i)
 	if _, err := r.rbd(ctx, "clone", r.spec(tpl)+"@base", r.spec(img)); err != nil {
 		if strings.Contains(errStderr(err), "exists") {
 			return "", fmt.Errorf("a Ceph disk %s already exists (another VM of that name?)", img)

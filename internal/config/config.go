@@ -80,6 +80,15 @@ type Template struct {
 	DefaultUser string `json:"default_user"`
 	// SourceURL: where an image added by address came from (Server page → Add another).
 	SourceURL string `json:"source_url,omitempty"`
+	// Extra are data disks a template made from a VM brings along (new VMs get copies).
+	Extra []TemplateDisk `json:"extra,omitempty"`
+}
+
+// TemplateDisk is a template's data disk.
+type TemplateDisk struct {
+	Index    int    `json:"index"`
+	Snapshot string `json:"snapshot"`
+	SizeGB   int    `json:"size_gb"`
 }
 
 // User returns the template's login user (older configs have none: Debian).

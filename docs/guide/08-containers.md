@@ -19,3 +19,5 @@ A container shares the server's Linux kernel, so it starts in about a second and
 4. Manage: resources (changed live), snapshots, backups, firewall, owner — the same as VMs.
 
 Each container is its own ZFS dataset (`tank/p8s/ct/NAME`), runs as systemd unit `p8s-ct-NAME`, and keeps running if p8sd restarts. Mark it *start with the server* to have it come back after a reboot.
+
+In a cluster, pick the **Server** in the create dialog (or Automatic); the master lists and manages every server's containers. Move a stopped container with Manage → **Move to server** or `p8 ct-move web2 n2 --start`. Containers can join virtual networks (`vnet:NAME`) like VMs.

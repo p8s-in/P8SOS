@@ -58,6 +58,7 @@ p8 — manage P8S OS virtual machines
   p8 disk-rm NAME N                remove extra disk N and everything on it
   p8 verify NAME BACKUP_ID         restore test of a backup (scratch disk; the VM isn't touched)
   p8 move NAME SERVER [--live]     move a VM to another cluster server (--live: while it runs)
+  p8 ct-move NAME SERVER [--start] move a stopped container to another cluster server
   p8 cpu NAME host|compatible      CPU type (compatible: can move live between different CPUs)
   p8 snap NAME [SNAPNAME] [--ram]  take a snapshot of the VM's disk (instant); --ram also saves its memory
   p8 snaps NAME                    list snapshots
@@ -66,6 +67,7 @@ p8 — manage P8S OS virtual machines
   p8 backup NAME                   full backup to a file now (VM can keep running)
   p8 backups [NAME]                list backups (also of deleted VMs)
   p8 restore NAME ID [NEWNAME]     put a backup back (asks first); NEWNAME = as a new VM copy
+                                   (P8_STORAGE=ceph p8 restore … NEWNAME: the copy's disks on that storage)
   p8 rmbackup NAME ID              delete a backup
   p8 autobackup NAME on [KEEP]|off daily automatic backup, keeping the last KEEP (default 7)
   p8 jobs                          recent background jobs (backups, restores)
@@ -654,6 +656,13 @@ case $cmd in
     echo "Moving $1 (job $(jq -r .id <<<"$j")). You can press Ctrl+C; it continues in the background."
     follow_job "$(jq -r .id <<<"$j")" ;;
 
+  ct-move)
+    [[ -n ${1:-} && -n ${2:-} ]] || { red "usage: p8 ct-move NAME SERVER [--start]   (SERVER: name or id from p8 cluster)"; exit 1; }
+    st=false; [[ ${3:-} == --start ]] && st=true
+    j=$(call POST "/containers/$1/move" "$(jq -nc --arg t "$2" --argjson s "$st" '{to:$t, start:$s}')") || exit 1
+    echo "Moving container $1 (job $(jq -r .id <<<"$j")). You can press Ctrl+C; it continues in the background."
+    follow_job "$(jq -r .id <<<"$j")" ;;
+
   cpu)
     [[ -n ${1:-} && ${2:-} =~ ^(host|compatible)$ ]] || { red "usage: p8 cpu NAME host|compatible"; exit 1; }
     body=$(call PUT "/vms/$1/cpu" "{\"type\":\"$2\"}") || exit 1
@@ -667,8 +676,10 @@ case $cmd in
     follow_job "$(jq -r .id <<<"$j")" ;;
 
   clone)
-    [[ -n ${1:-} && -n ${2:-} ]] || { red "usage: p8 clone VM NEW-NAME [--start]"; exit 1; }
-    req=$(jq -nc --arg n "$2" --argjson s "$([[ ${3:-} == --start ]] && echo true || echo false)" '{name:$n, start:$s}')
+    [[ -n ${1:-} && -n ${2:-} ]] || { red "usage: p8 clone VM NEW-NAME [--start] [--storage NAME]"; exit 1; }
+    st=false; store=""; a=("${@:3}")
+    for ((i = 0; i < ${#a[@]}; i++)); do case ${a[$i]} in --start) st=true ;; --storage) store=${a[$((i+1))]:-}; i=$((i+1)) ;; --storage=*) store=${a[$i]#*=} ;; esac; done
+    req=$(jq -nc --arg n "$2" --argjson s "$st" --arg st "$store" '{name:$n, start:$s} + (if $st != "" then {storage:$st} else {} end)')
     j=$(call POST "/vms/$1/clone" "$req") || exit 1
     echo "Copying $1 to $2 (job $(jq -r .id <<<"$j")). Ctrl+C is fine; it continues in the background."
     follow_job "$(jq -r .id <<<"$j")" ;;
@@ -712,7 +723,7 @@ case $cmd in
         echo "$n doesn't exist any more; it will be recreated from backup $id."
       fi
     fi
-    req='{}'; [[ -n $new ]] && req=$(jq -nc --arg n "$new" '{name:$n}')
+    req='{}'; [[ -n $new ]] && req=$(jq -nc --arg n "$new" --arg s "${P8_STORAGE:-}" '{name:$n} + (if $s != "" then {storage:$s} else {} end)')
     j=$(call POST "/backups/$n/$id/restore" "$req") || { start_again "$n"; exit 1; }
     follow_job "$(jq -r .id <<<"$j")" || exit 1
     start_again "$n" ;;

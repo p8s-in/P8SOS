@@ -464,6 +464,44 @@ Build a new ISO on the laptop: `sudo bash iso/build-installer.sh ~/P8SOS/dist` (
 - [ ] Installed system has no Firefox or cage (`dpkg -l firefox-esr` → not installed)
 - [ ] After `git pull && sudo bash update.sh` with a changed source, update.sh builds p8sd with Go as before
 
+## 41. High availability and moves of VMs with data disks
+
+- [ ] VM with a data disk (`p8 disk-add web1 20`, put a file on it): HA on → the copy on the other server has both disks (`zfs list -r tank/p8s/vms/replica` shows `p8s-web1-disk0` and `-disk1`)
+- [ ] Add a second data disk while HA is on: the next copy includes it (full once), later copies are small
+- [ ] Switch the VM's server off: the VM starts on the other one with both data disks and the file
+- [ ] Shut it down, Move to the other server: both disks arrive (`p8 disks web1`), the file is there
+- [ ] Remove the data disk again: the next copy drops `-disk1` on the other server
+
+## 42. Live moves of UEFI / Windows 11 / SAN VMs
+
+- [ ] A UEFI Linux VM (or the Windows 11 VM) running: Move → live → it keeps running on the other server; reboot it there: it boots (UEFI boot entries kept); Windows 11: BitLocker / TPM still fine (no recovery key prompt)
+- [ ] A VM on the SAN disk (iSCSI) running: live move → it runs on the other server, its disk is now on local storage (`p8 show`)
+
+## 43. Restore a backup onto another storage
+
+- [ ] Backups → a backup → Copy: a storage picker appears (local / SAN pool / ceph); pick the SAN pool (or ceph) → the new VM starts and `p8 show NAME` says that storage
+- [ ] `P8_STORAGE=fast p8 restore web1 ID web1-b` puts the copy on the pool `fast` (Disks view)
+- [ ] Restoring over the VM itself with a storage is refused ("pick a storage only for a new VM")
+
+## 44. Templates from Ceph VMs and with data disks; clone onto another storage
+
+- [ ] A VM with a data disk (files on it): Make a template → the job says "with 1 data disk"; New VM from it → it has the data disk with the files
+- [ ] A VM on Ceph: Make a template → works; new VMs from it (local or Ceph) boot
+- [ ] Delete the template: refused while VMs from it exist; after deleting them: gone (`zfs list -r tank/p8s/templates`)
+- [ ] Clone with the storage list → ceph (or the SAN pool): the copy's disks are on that storage (`p8 show`); `p8 clone web1 web2 --storage fast`
+
+## 45. Containers across the cluster
+
+- [ ] Master: New container → the Server list shows the workers; pick p8s-vm1 → the container runs there (`lxc-ls` on the worker), the list says "on p8s-vm1"
+- [ ] Automatic with a template only the worker has → it lands on the worker; a template nobody has → clear error
+- [ ] A container with a public IP → always made on the master
+- [ ] From the master on a worker's container: start/stop, resize, snapshot + rollback, backup + restore, set password, Terminal (types and resizes)
+- [ ] Manage → Move to server (stopped) → job finishes; it's gone from the old server, there on the new one with its files; "start after" starts it
+- [ ] Move a running one or one with a public IP → refused with a clear message
+- [ ] `p8 ct-move NAME SERVER --start` works the same
+- [ ] Network `vnet:NAME`: two containers (or a container and a VM) on different servers ping each other; `ip link` in the container shows mtu 1230
+- [ ] Auditor accounts can't use the move or cluster ct endpoints
+
 ## Add new features here as they are built
 
 (Every new feature adds its own lines above before it counts as done.)

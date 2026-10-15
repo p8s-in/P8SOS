@@ -49,8 +49,9 @@ you aren't sure): otherwise the VM runs twice with the same disk and IP.
 
 ## Limits
 
-- VMs only (containers later). One disk per VM — except VMs on **Ceph** ([ceph.md](ceph.md)): they
-  need no copies at all, start from the same disk (with all their data disks) and lose nothing.
+- VMs only (containers later). VMs with data disks are copied with all their disks, snapshotted at
+  the same instant (a disk added later is copied in full once, then only its changes). VMs on
+  **Ceph** ([ceph.md](ceph.md)) need no copies at all: they start from the same disks and lose nothing.
 - Not for VMs with a public IP from a pool (the IP belongs to one server).
 - The copy needs room on the second server's pool (about the used size of the disk).
 - With 2 servers on the same network, a broken switch port between them while

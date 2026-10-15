@@ -138,8 +138,10 @@ type Server struct {
 	CertInfo func() (tlsutil.ACMEInfo, bool)
 	// CFIni is where the Cloudflare token for certificates is kept ("" = /etc/p8s/cloudflare.ini).
 	CFIni string
-	// CTs are the containers (LXC); nil = not available.
-	CTs *ct.Service
+	// CTs are the containers (LXC): this server's, or the cluster's on a
+	// master (cluster.CTs); nil = not available. CTLocal is this server's own.
+	CTs     CTService
+	CTLocal *ct.Service
 	// RemoteMetrics serves charts of VMs on other cluster servers (ok=false: local).
 	RemoteMetrics func(name string) (any, bool)
 	// Cluster joins servers (master/worker); nil = standalone only.
@@ -427,6 +429,7 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("DELETE /api/v1/containers/{name}", s.deleteCT)
 	auth.HandleFunc("PATCH /api/v1/containers/{name}", s.resizeCT)
 	auth.HandleFunc("POST /api/v1/containers/{name}/{action}", s.ctPower)
+	auth.HandleFunc("POST /api/v1/containers/{name}/move", s.moveCT)
 	auth.HandleFunc("POST /api/v1/containers/{name}/console", s.ctConsole)
 	auth.HandleFunc("POST /api/v1/containers/{name}/password", s.ctPassword)
 	auth.HandleFunc("GET /api/v1/containers/{name}/login", s.ctLogin)
@@ -450,6 +453,9 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("GET /api/v1/cluster/candidates", s.clusterCandidates)
 	auth.HandleFunc("GET /api/v1/cluster/vnc/{name}", s.clusterVNC)
 	auth.HandleFunc("GET /api/v1/cluster/shell", s.clusterShell)
+	auth.HandleFunc("GET /api/v1/cluster/ct-shell/{name}", s.ctClusterShell)
+	auth.HandleFunc("GET /api/v1/cluster/ct-export/{name}", s.ctExport)
+	auth.HandleFunc("POST /api/v1/cluster/ct-import", s.ctImport)
 	auth.HandleFunc("GET /api/v1/cluster/discover", s.clusterDiscover)
 	auth.HandleFunc("POST /api/v1/cluster/invite-send", s.clusterInviteSend)
 	auth.HandleFunc("GET /api/v1/cluster/invites", s.clusterInvites)
@@ -919,7 +925,8 @@ func (s *Server) deleteBackup(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) restoreBackup(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Name string `json:"name"` // new VM name; empty = restore over the original VM
+		Name    string `json:"name"`    // new VM name; empty = restore over the original VM
+		Storage string `json:"storage"` // new VM: where its disks go ("" = local)
 	}
 	if r.ContentLength != 0 && !decode(w, r, &body) {
 		return
@@ -954,7 +961,20 @@ func (s *Server) restoreBackup(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	j, err := s.VMs.StartRestore(r.Context(), r.PathValue("name"), r.PathValue("id"), body.Name)
+	var j vm.Job
+	var err error
+	if body.Storage != "" && body.Storage != "local" {
+		rt, ok := s.VMs.(interface {
+			StartRestoreTo(ctx context.Context, name, id, newName, storage string) (vm.Job, error)
+		})
+		if !ok {
+			writeErr(w, http.StatusBadRequest, "invalid", "choosing a storage isn't available here")
+			return
+		}
+		j, err = rt.StartRestoreTo(r.Context(), r.PathValue("name"), r.PathValue("id"), body.Name, body.Storage)
+	} else {
+		j, err = s.VMs.StartRestore(r.Context(), r.PathValue("name"), r.PathValue("id"), body.Name)
+	}
 	if err != nil {
 		s.fail(w, r, err)
 		return

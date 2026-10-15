@@ -24,6 +24,8 @@ document.body.insertAdjacentHTML("beforeend", `
     <div><label for="ctDisk">Disk (GB)</label><input id="ctDisk" type="number" min="1" value="8"></div>
   </div>
   <label for="ctNet">Network</label><select id="ctNet"><option value="nat">Private (NAT) — reaches the internet</option></select>
+  <div id="ctNodeBox" hidden><label for="ctNode">Server</label><select id="ctNode"></select>
+    <div class="hint">Automatic: the server with the most free memory that has the template.</div></div>
   <label for="ctPw">Root password</label><input id="ctPw" type="password" minlength="8" autocomplete="new-password" placeholder="leave empty: P8S makes one and shows it">
   <label for="ctKeys">SSH public keys (one per line)</label><textarea id="ctKeys" placeholder="ssh-ed25519 AAAA…"></textarea>
   <div id="ctOwnerBox" hidden><label for="ctOwner">Owner</label><select id="ctOwner"></select></div>
@@ -71,6 +73,11 @@ document.body.insertAdjacentHTML("beforeend", `
   <h3>Password</h3>
   <div class="inline"><input id="cmUser" value="root" style="flex:0 0 120px" aria-label="User"><input id="cmPw" type="password" minlength="8" placeholder="new password" autocomplete="new-password" style="flex:1"><button class="btn" id="cmPwGo">Set</button></div>
   <div id="cmOwnerBox" hidden><h3>Owner</h3><div class="inline"><select id="cmOwner" style="flex:1"></select><button class="btn" id="cmOwnerGo">Change</button></div></div>
+  <div id="cmMoveBox" hidden><h3>Move to another server</h3>
+    <div class="inline"><select id="cmMoveTo" style="flex:1"></select>
+      <label style="display:flex;gap:6px;align-items:center;font-weight:400;margin:0"><input type="checkbox" id="cmMoveStart" style="width:auto" checked> start it there</label>
+      <button class="btn" id="cmMoveGo">Move</button></div>
+    <div class="hint">Shut it down first. Its disk is copied over the cluster tunnel, then deleted here. Snapshots and backups stay behind.</div></div>
   </div>
   <div data-tab="summary" class="page-only"><div id="cmSummary"></div></div>
   <div data-tab="console" class="page-only"><div class="console-frame" id="cmConsole"></div></div>
@@ -114,7 +121,7 @@ function renderCTs(){
     const used = c.disk_used ? (c.disk_used < 107374182 ? "<0.1" : (c.disk_used / 1073741824).toFixed(1)) + " of " : "";
     return `<tr data-ct="${esc(c.name)}">
       <td data-k="State"><span class="state ${esc(c.state)}"><span class="dot"></span>${b ? "working…" : esc(c.state)}</span></td>
-      <td data-k="Name"><b>${esc(c.name)}</b><div class="sub">container · ${esc(ctTplLabel(c.template))}${c.network === "lan" ? " · home network" : ""}${c.public_ip ? ` · public <span class="mono">${esc(c.public_ip)}</span>` : ""}${isAdmin() && c.owner ? ` · <b>${esc(c.owner)}</b>` : ""}</div></td>
+      <td data-k="Name"><b>${esc(c.name)}</b><div class="sub">container · ${esc(ctTplLabel(c.template))}${c.network === "lan" ? " · home network" : (c.network || "").startsWith("vnet:") ? " · " + esc(c.network.slice(5)) : ""}${c.node && cts.some(x => x.node && x.node !== c.node) ? " · on " + esc(c.node) : ""}${c.public_ip ? ` · public <span class="mono">${esc(c.public_ip)}</span>` : ""}${isAdmin() && c.owner ? ` · <b>${esc(c.owner)}</b>` : ""}</div></td>
       <td data-k="IP">${ip}${typeof sshLine === "function" ? sshLine(c.name, "root") : ""}</td><td data-k="CPU">${c.vcpus}</td><td data-k="RAM">${ramCell(c.mem_used_mib, c.memory_mib)}</td>
       <td data-k="Disk">${used}${c.disk_gb} GB</td><td data-k="Autostart">${c.autostart ? "yes" : "no"}</td>
       <td><div class="actions">${main}<button class="btn" data-c="manage" ${dis}>Manage</button>${more}</div></td></tr>`;
@@ -196,6 +203,11 @@ async function openCreateCT(){
   const pools = (await call("GET", "/ippools").catch(() => ({pools: []}))).pools || [];
   for (const p of pools) $("#ctNet").insertAdjacentHTML("beforeend",
     `<option value="pool:${esc(p.name)}" ${p.free ? "" : "disabled"}>Public IP — ${esc(p.name)} (${p.free} free)</option>`);
+  if (typeof vnetOptions === "function") await vnetOptions($("#ctNet"), "Virtual network");
+  let servers = [];
+  if (isAdmin()) { try { const c = await call("GET", "/cluster"); if (c.role === "master") servers = c.nodes || []; } catch {} }
+  $("#ctNodeBox").hidden = servers.length < 2;
+  $("#ctNode").innerHTML = `<option value="">Automatic</option>` + servers.map(n => `<option value="${esc(n.id)}">${esc(n.name)}</option>`).join("");
   await loadCTPlans();
   $("#ctKeys").value = !isAdmin() && me?.ssh_keys?.length ? me.ssh_keys.join("\n") : "";
   $("#ctOwnerBox").hidden = !(isAdmin() && me?.accounts_on);
@@ -247,6 +259,7 @@ $("#fCT").addEventListener("submit", async e => {
     disk_gb: +$("#ctDisk").value, ...($("#ctNet").value.startsWith("pool:") ? {ip_pool: $("#ctNet").value.slice(5)} : {network: $("#ctNet").value}), root_password: $("#ctPw").value,
     ssh_keys: $("#ctKeys").value.split("\n").map(s => s.trim()).filter(Boolean), start: $("#ctStart").checked};
   if (!$("#ctOwnerBox").hidden && $("#ctOwner").value) body.owner = $("#ctOwner").value;
+  if (!$("#ctNodeBox").hidden && $("#ctNode").value) body.node = $("#ctNode").value;
   if (ctPlan) { body.plan = ctPlan.id; delete body.vcpus; delete body.memory_mib; delete body.disk_gb; if (ctPlan.public_ip) { delete body.ip_pool; delete body.network; } }
   $("#ctGo").disabled = true;
   try {
@@ -274,13 +287,30 @@ async function openCTManage(name){
     const c = cts.find(x => x.name === name);
     $("#cmOwner").innerHTML = `<option value="">Admins only</option>` + (userList || []).filter(u => u.role !== "admin").map(u => `<option ${u.name === c?.owner ? "selected" : ""}>${esc(u.name)}</option>`).join("");
   }
+  $("#cmMoveBox").hidden = true;
+  if (isAdmin()) {
+    try {
+      const cl = await call("GET", "/cluster"), c = cts.find(x => x.name === name);
+      const others = cl.role === "master" ? (cl.nodes || []).filter(n => n.id !== c?.node_id) : [];
+      $("#cmMoveBox").hidden = !others.length;
+      $("#cmMoveTo").innerHTML = others.map(n => `<option value="${esc(n.id)}">${esc(n.name)}</option>`).join("");
+    } catch {}
+  }
 }
+$("#cmMoveGo").onclick = async () => {
+  const to = $("#cmMoveTo").value; if (!to) return;
+  try {
+    const j = await call("POST", `/containers/${encodeURIComponent(ctCur)}/move`, {to, start: $("#cmMoveStart").checked});
+    toast(`Moving ${ctCur} …`);
+    if (typeof trackJob === "function") trackJob(j, async () => { await loadCTs(); renderCTs(); renderCTManage(); });
+  } catch (err) { toast(err.message, true); }
+};
 
 function renderCTManage(){
   const c = cts.find(x => x.name === ctCur);
   if (!c) return;
   $("#cmTitle").textContent = c.name;
-  $("#cmSub").innerHTML = `Container · ${esc(ctTplLabel(c.template))} · <span class="state ${esc(c.state)}"><span class="dot"></span>${esc(c.state)}</span>${c.ip ? ` · <span class="mono">${esc(c.ip)}</span>` : ""}`;
+  $("#cmSub").innerHTML = `Container · ${esc(ctTplLabel(c.template))}${c.node ? " · on " + esc(c.node) : ""} · <span class="state ${esc(c.state)}"><span class="dot"></span>${esc(c.state)}</span>${c.ip ? ` · <span class="mono">${esc(c.ip)}</span>` : ""}`;
   $("#cmPower").innerHTML = c.state === "running"
     ? `<button class="btn" data-cm="console">Console</button><button class="btn" data-cm="stop">Shutdown</button><button class="btn" data-cm="reboot">Reboot</button><button class="btn" data-cm="kill">Force off</button>`
     : `<button class="btn primary" data-cm="start">Start</button>`;

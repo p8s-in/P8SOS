@@ -50,15 +50,23 @@ func (z *ZFS) HasReplica(ctx context.Context, vm string) bool {
 	return err == nil
 }
 
-// ReplicaBytes is the space the copy takes.
+// ReplicaBytes is the space the copy takes (all its disks).
 func (z *ZFS) ReplicaBytes(ctx context.Context, vm string) int64 {
-	out, err := z.Run.Run(ctx, "zfs", "get", "-H", "-p", "-o", "value", "used", z.replicaDataset(vm))
-	if err != nil {
-		return 0
+	idx := z.replicaDisks(ctx, vm)
+	if len(idx) == 0 {
+		idx = []int{0}
 	}
-	var n int64
-	fmt.Sscan(strings.TrimSpace(string(out)), &n)
-	return n
+	var total int64
+	for _, i := range idx {
+		out, err := z.Run.Run(ctx, "zfs", "get", "-H", "-p", "-o", "value", "used", z.replicaDisk(vm, i))
+		if err != nil {
+			continue
+		}
+		var n int64
+		fmt.Sscan(strings.TrimSpace(string(out)), &n)
+		total += n
+	}
+	return total
 }
 
 // SendReplica snapshots the VM's disk (it may be running: the copy is like
@@ -102,6 +110,11 @@ func (z *ZFS) SendReplica(ctx context.Context, vm, base string, name func(snap s
 // Afterwards only the newest snapshot is kept.
 func (z *ZFS) RecvReplica(ctx context.Context, vm, base string, r io.Reader) error {
 	ds := z.replicaDataset(vm)
+	for _, i := range z.replicaDisks(ctx, vm) { // the VM has no data disks (any more)
+		if i > 0 {
+			_, _ = z.Run.Run(ctx, "zfs", "destroy", "-r", z.replicaDisk(vm, i))
+		}
+	}
 	if base == "" {
 		if err := z.DropReplica(ctx, vm); err != nil {
 			return err
@@ -134,8 +147,16 @@ func (z *ZFS) RecvReplica(ctx context.Context, vm, base string, r io.Reader) err
 	return nil
 }
 
-// DropReplica deletes the copy (missing is fine).
+// DropReplica deletes the copy, all its disks (missing is fine).
 func (z *ZFS) DropReplica(ctx context.Context, vm string) error {
+	for _, i := range z.replicaDisks(ctx, vm) {
+		if i == 0 {
+			continue
+		}
+		if _, err := z.Run.Run(ctx, "zfs", "destroy", "-r", z.replicaDisk(vm, i)); err != nil && !strings.Contains(err.Error(), "does not exist") {
+			return err
+		}
+	}
 	_, err := z.Run.Run(ctx, "zfs", "destroy", "-r", z.replicaDataset(vm))
 	if err != nil && strings.Contains(err.Error(), "does not exist") {
 		return nil
@@ -150,6 +171,17 @@ func (z *ZFS) PromoteReplica(ctx context.Context, vm string) (string, error) {
 	}
 	if _, err := z.Run.Run(ctx, "zfs", "set", "volmode=dev", z.diskDataset(vm)); err != nil {
 		return "", err
+	}
+	for _, i := range z.replicaDisks(ctx, vm) { // the data disks' copies too
+		if i == 0 {
+			continue
+		}
+		if _, err := z.Run.Run(ctx, "zfs", "rename", z.replicaDisk(vm, i), z.DiskDataset(vm, i)); err != nil {
+			return "", fmt.Errorf("use the copy of data disk %d: %w", i, err)
+		}
+		if _, err := z.Run.Run(ctx, "zfs", "set", "volmode=dev", z.DiskDataset(vm, i)); err != nil {
+			return "", err
+		}
 	}
 	return z.WaitDevice(ctx, vm)
 }
@@ -166,10 +198,21 @@ func (z *ZFS) RetireDisk(ctx context.Context, vm string) error {
 	if _, err := z.Run.Run(ctx, "zfs", "create", "-p", "-o", "canmount=off", z.Dataset+"/replica"); err != nil && !strings.Contains(err.Error(), "already exists") {
 		return err
 	}
+	extras := z.Extras(ctx, vm)
+	for _, i := range extras {
+		if _, err := z.Run.Run(ctx, "zfs", "set", "volmode=none", z.DiskDataset(vm, i)); err != nil {
+			return err
+		}
+	}
 	if _, err := z.Run.Run(ctx, "zfs", "set", "volmode=none", z.diskDataset(vm)); err != nil {
 		return err
 	}
 	_, _ = z.Run.Run(ctx, "udevadm", "settle", "--timeout=5")
+	for _, i := range extras {
+		if _, err := z.Run.Run(ctx, "zfs", "rename", z.DiskDataset(vm, i), z.replicaDisk(vm, i)); err != nil {
+			return fmt.Errorf("keep old data disk %d as the copy: %w", i, err)
+		}
+	}
 	if _, err := z.Run.Run(ctx, "zfs", "rename", z.diskDataset(vm), z.replicaDataset(vm)); err != nil {
 		return fmt.Errorf("keep the old disk as the copy: %w", err)
 	}

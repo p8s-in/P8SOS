@@ -129,10 +129,6 @@ func (s *Service) LiveCheck(ctx context.Context, name string) (string, error) {
 		return "it has a public IP from this server's pool; release it first", nil
 	case v.ISO != "" || v.Drivers != "":
 		return "eject its CDs first (Manage → Installer CD)", nil
-	case v.Storage != "" && !s.shared(Prefix+name):
-		return "its disks are on network storage " + v.Storage + " (not supported yet)", nil
-	case sp.OSType == "windows11" || sp.Firmware == "uefi":
-		return "UEFI VMs (Windows 11) can't move live yet; shut it down and move it", nil
 	case hostDevsNote(sp) != "":
 		return hostDevsNote(sp), nil
 	}
@@ -262,11 +258,18 @@ func (s *Service) LivePrepare(ctx context.Context, h LiveHeader) (LivePlan, erro
 		undo = append(undo, func() { s.logErr("rollback seed", s.Seeds.Remove(dom)) })
 		repl[h.SeedPath] = seed
 	}
-	if len(h.NVRAM) > 0 {
+	if len(h.NVRAM) > 0 { // UEFI: QEMU needs the variables file to start; the live state follows
 		np := s.nvramPath(dom)
 		if err := os.MkdirAll(filepath.Dir(np), 0o755); err == nil {
 			s.logErr("write uefi variables", os.WriteFile(np, h.NVRAM, 0o600))
 		}
+		undo = append(undo, func() { _ = os.Remove(np) })
+	}
+	if len(h.TPM) > 0 && h.UUID != "" { // Windows 11: the software TPM's state (libvirt sends the live state too)
+		if err := s.writeTPM(h.UUID, h.TPM); err != nil {
+			return fail(fmt.Errorf("TPM state: %w", err))
+		}
+		undo = append(undo, func() { _ = os.RemoveAll(filepath.Dir(filepath.Dir(s.tpmFile(h.UUID)))) })
 	}
 	return LivePlan{
 		XML:           string(virt.RewriteXML([]byte(h.XML), repl)),

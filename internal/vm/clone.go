@@ -27,8 +27,9 @@ type cloneDisks interface {
 
 // CloneRequest asks for a copy of a VM.
 type CloneRequest struct {
-	Name  string `json:"name"`
-	Start bool   `json:"start"`
+	Name    string `json:"name"`
+	Start   bool   `json:"start"`
+	Storage string `json:"storage,omitempty"` // "" = the same storage as the VM
 }
 
 // CloneCheck says whether a VM can be cloned ("" = yes).
@@ -57,6 +58,14 @@ func (s *Service) StartClone(ctx context.Context, name string, r CloneRequest) (
 		return Job{}, err
 	} else if why != "" {
 		return Job{}, fmt.Errorf("%w: %s", ErrConflict, why)
+	}
+	if r.Storage != "" {
+		if msg := s.checkStorage(r.Storage); msg != "" {
+			return Job{}, fmt.Errorf("%w: %s", ErrInvalid, msg)
+		}
+		if _, ok := s.Disks.(diskRelocator); !ok {
+			return Job{}, fmt.Errorf("%w: this server can't move disks between storages", ErrInvalid)
+		}
 	}
 	if _, err := s.HV.State(ctx, Prefix+r.Name); err == nil {
 		return Job{}, fmt.Errorf("%w: vm %q", ErrExists, r.Name)
@@ -132,6 +141,16 @@ func (s *Service) clone(ctx context.Context, name string, r CloneRequest, p jobs
 		return "", err
 	}
 	undo = append(undo, func() { s.logErr("rollback cloned disks", s.Disks.DestroyDisk(bg, dst)) })
+	cur := storage
+	if cur == "" {
+		cur = "local"
+	}
+	if r.Storage != "" && r.Storage != cur { // the copy goes to another storage
+		p("moving the copy to " + r.Storage)
+		if _, err := s.Disks.(diskRelocator).Relocate(ctx, dst, r.Storage, idx, func(m string) { p(m) }); err != nil {
+			return fail(err)
+		}
+	}
 
 	p("making the new VM")
 	ns := sp

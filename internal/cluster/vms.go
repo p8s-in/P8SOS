@@ -489,6 +489,25 @@ func (c *VMs) StartRestore(ctx context.Context, name, id, newName string) (vm.Jo
 	return j, err
 }
 
+// StartRestoreTo restores a backup as a new VM on a chosen storage (on the
+// server that holds the backup).
+func (c *VMs) StartRestoreTo(ctx context.Context, name, id, newName, storage string) (vm.Job, error) {
+	n, ok := c.backupNode(name, id)
+	if !ok {
+		rt, ok := c.Local.(interface {
+			StartRestoreTo(ctx context.Context, name, id, newName, storage string) (vm.Job, error)
+		})
+		if !ok {
+			return vm.Job{}, fmt.Errorf("%w: choosing a storage isn't available here", vm.ErrInvalid)
+		}
+		return rt.StartRestoreTo(ctx, name, id, newName, storage)
+	}
+	var j vm.Job
+	err := c.call(ctx, n, "POST", "/backups/"+url.PathEscape(name)+"/"+url.PathEscape(id)+"/restore",
+		map[string]string{"name": newName, "storage": storage}, &j)
+	return j, err
+}
+
 func (c *VMs) GetSchedule(name string) (vm.Schedule, error) {
 	if !strings.Contains(name, ":") {
 		if n, ok := c.locate(context.Background(), name); ok {

@@ -422,7 +422,6 @@ func serve(args []string) error {
 		Issuer:     issuer(),
 		License:    lic,
 		Updates:    upd,
-		CTs:        cts,
 		Offsite:    off,
 		Monitor:    mon,
 		// root passwords made for new VMs/containers, shown to their owners
@@ -598,6 +597,10 @@ func serve(args []string) error {
 	}
 	cvms := &cluster.VMs{Local: svc, M: clu, Jobs: svc.Jobs}
 	apiSrv.VMs, apiSrv.Cluster, apiSrv.ClusterVMs = cvms, clu, cvms
+	if cts != nil { // containers on every server of the cluster (the master forwards)
+		cts.VNets = vnets
+		apiSrv.CTs, apiSrv.CTLocal = &cluster.CTs{Local: cts, M: clu, V: cvms}, cts
+	}
 	apiSrv.Migrate, apiSrv.LocalMoves = cvms, svc // moving VMs between servers
 	apiSrv.LocalLive, apiSrv.LocalCPU = svc, svc  // live moves, CPU types
 	apiSrv.Dial, apiSrv.RemoteMetrics = cvms.Dial, cvms.RemoteMetrics

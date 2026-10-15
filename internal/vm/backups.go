@@ -327,6 +327,17 @@ func (s *Service) DeleteBackup(name, id string) error {
 // the VM's disk is replaced — the VM must be stopped; if the VM was deleted it
 // is recreated. With another name a new VM is made from the backup (a copy).
 func (s *Service) StartRestore(ctx context.Context, name, id, newName string) (Job, error) {
+	return s.StartRestoreTo(ctx, name, id, newName, "")
+}
+
+// StartRestoreTo is StartRestore with the storage a new VM's disks go to
+// ("" = local, or Ceph for disk-image backups): local ZFS, a SAN pool or Ceph.
+func (s *Service) StartRestoreTo(ctx context.Context, name, id, newName, storage string) (Job, error) {
+	if storage != "" {
+		if msg := s.checkStorage(storage); msg != "" {
+			return Job{}, fmt.Errorf("%w: %s", ErrInvalid, msg)
+		}
+	}
 	if err := s.backupsReady(); err != nil {
 		return Job{}, err
 	}
@@ -356,12 +367,14 @@ func (s *Service) StartRestore(ctx context.Context, name, id, newName string) (J
 		return Job{}, fmt.Errorf("%w: %q is on Ceph; restore the backup as a new VM (another name) instead", ErrConflict, target)
 	case exists && st != virt.Stopped:
 		return Job{}, fmt.Errorf("%w: stop vm %q before restoring over it (it is %s)", ErrConflict, target, st)
+	case exists && storage != "":
+		return Job{}, fmt.Errorf("%w: a backup written over %q stays on its storage; pick a storage only for a new VM (another name)", ErrConflict, target)
 	}
 	j, err := s.Jobs.Start("restore", target, func(ctx context.Context, p jobs.Progress) (string, error) {
 		if exists {
 			return s.restoreInPlace(ctx, target, m, p)
 		}
-		return s.restoreAsNew(ctx, target, m, p)
+		return s.restoreAsNew(ctx, target, m, p, storage)
 	})
 	if errors.Is(err, jobs.ErrBusy) {
 		return Job{}, fmt.Errorf("%w: %v", ErrConflict, err)
@@ -428,7 +441,7 @@ func (s *Service) restoreInPlace(ctx context.Context, name string, m Backup, p j
 	return msg, nil
 }
 
-func (s *Service) restoreAsNew(ctx context.Context, name string, m Backup, p jobs.Progress) (string, error) {
+func (s *Service) restoreAsNew(ctx context.Context, name string, m Backup, p jobs.Progress, storage string) (string, error) {
 	dom := Prefix + name
 	defer s.lock(dom)()
 	if _, err := s.HV.State(ctx, dom); err == nil {
@@ -447,7 +460,11 @@ func (s *Service) restoreAsNew(ctx context.Context, name string, m Backup, p job
 	var extra []virt.ExtraDisk
 	diskGB := m.DiskGB
 	if m.Format == backup.FormatRaw { // disk images (from Ceph): onto Ceph if here, else local
-		d, ex, err := s.restoreRawDisks(ctx, dom, m, false, s.rawStorage())
+		to := storage
+		if to == "" {
+			to = s.rawStorage()
+		}
+		d, ex, err := s.restoreRawDisks(ctx, dom, m, false, to)
 		if err != nil {
 			return fail(err)
 		}
@@ -485,6 +502,29 @@ func (s *Service) restoreAsNew(ctx context.Context, name string, m Backup, p job
 		if sd, err := s.snapDisks(); err == nil {
 			if gb, err := sd.DiskSizeGB(ctx, dom); err == nil && gb > 0 {
 				diskGB = gb
+			}
+		}
+		if storage != "" && storage != "local" { // restored locally, then onto the storage asked for
+			rl, ok := s.Disks.(diskRelocator)
+			if !ok {
+				return fail(fmt.Errorf("%w: this server can't move disks between storages", ErrInvalid))
+			}
+			idx := []int{0}
+			for _, e := range extra {
+				idx = append(idx, e.Index)
+			}
+			p("moving the disks to " + storage)
+			devs, err := rl.Relocate(ctx, dom, storage, idx, func(m string) { p(m) })
+			if devs == nil && err != nil {
+				return fail(err)
+			}
+			if d, ok := devs[0]; ok {
+				disk = d
+			}
+			for i := range extra {
+				if d, ok := devs[extra[i].Index]; ok {
+					extra[i].Path = d
+				}
 			}
 		}
 	}

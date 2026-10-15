@@ -454,6 +454,22 @@ func (s *Service) Create(ctx context.Context, r CreateRequest) (VM, error) {
 		return VM{}, err
 	}
 	undo = append(undo, func() { s.logErr("rollback disk", s.Disks.DestroyDisk(bg, dom)) })
+	var extra []virt.ExtraDisk
+	if len(t.Extra) > 0 { // a template made from a VM with data disks
+		tdd, ok := s.Disks.(templateDataDisks)
+		if !ok {
+			rollback()
+			return VM{}, fmt.Errorf("%w: this server's storage can't copy the template's data disks", ErrConflict)
+		}
+		for _, e := range t.Extra {
+			p, err := tdd.CloneExtra(ctx, e.Snapshot, dom, e.Index, e.SizeGB)
+			if err != nil {
+				rollback()
+				return VM{}, err
+			}
+			extra = append(extra, virt.ExtraDisk{Index: e.Index, Path: p, SizeGB: e.SizeGB})
+		}
+	}
 
 	uuid := newUUID()
 	keys := r.SSHKeys
@@ -493,7 +509,7 @@ func (s *Service) Create(ctx context.Context, r CreateRequest) (VM, error) {
 	spec := virt.Spec{
 		Name: dom, UUID: uuid, VCPUs: r.VCPUs, MemoryMiB: r.MemoryMiB, DiskGB: r.DiskGB,
 		DiskPath: disk, SeedISO: seed, Bridge: bridge, MAC: mac,
-		Template: t.Name, CreatedAt: time.Now().UTC().Format(time.RFC3339), Owner: r.Owner,
+		Template: t.Name, CreatedAt: time.Now().UTC().Format(time.RFC3339), Owner: r.Owner, Extra: extra,
 	}
 	xml, err := virt.DomainXML(spec)
 	if err != nil {

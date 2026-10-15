@@ -58,8 +58,33 @@ func (z *ZFS) DevicePath(vm string) string {
 // template snapshot, then grows it to sizeGB. Clones are instant and use no
 // space until the guest writes.
 func (z *ZFS) CloneDisk(ctx context.Context, snapshot, vm string, sizeGB int) (string, error) {
+	return z.cloneAt(ctx, snapshot, vm, 0, sizeGB)
+}
+
+// CloneExtra makes the VM's data disk i from a template's data disk snapshot.
+func (z *ZFS) CloneExtra(ctx context.Context, snapshot, vm string, i, sizeGB int) (string, error) {
+	return z.cloneAt(ctx, snapshot, vm, i, sizeGB)
+}
+
+func (z *ZFS) cloneAt(ctx context.Context, snapshot, vm string, i, sizeGB int) (string, error) {
 	if z.Shared(vm) {
-		return z.cephClone(ctx, snapshot, vm, sizeGB)
+		return z.cephClone(ctx, snapshot, vm, i, sizeGB)
+	}
+	if i > 0 {
+		ds := z.DiskDataset(vm, i)
+		if poolOf(snapshot) != poolOf(ds) {
+			if err := z.copyTemplate(ctx, snapshot, ds); err != nil {
+				_ = z.destroy(context.WithoutCancel(ctx), ds)
+				return "", fmt.Errorf("copy template disk to %s: %w", poolOf(ds), err)
+			}
+		} else if _, err := z.Run.Run(ctx, "zfs", "clone", "-p", "-o", "volmode=dev", snapshot, ds); err != nil {
+			return "", fmt.Errorf("clone data disk: %w", err)
+		}
+		if err := z.ResizeExtra(ctx, vm, i, sizeGB); err != nil {
+			_ = z.destroy(context.WithoutCancel(ctx), ds)
+			return "", err
+		}
+		return z.WaitExtra(ctx, vm, i)
 	}
 	ds := z.diskDataset(vm)
 	if poolOf(snapshot) != poolOf(ds) { // network storage: a full copy

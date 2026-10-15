@@ -38,7 +38,23 @@ cheap Linux servers (websites, bots, databases, VPNs). Windows or a custom kerne
 Files: config `/var/lib/lxc/NAME/config` (written by p8sd), log `/var/lib/lxc/NAME/lxc.log`,
 list `/var/lib/p8s/containers.json`. Shell on the server: `p8 ct enter NAME`.
 
+## In a cluster
+
+- **Where it runs:** on the master the New container dialog has a **Server** list
+  (Automatic picks the server with the most free memory that has the template).
+  Containers with a public IP always run on the master.
+- **One list:** the master lists the containers of every server ("on NODE");
+  start/stop, resize, snapshots, backups, passwords and the terminal work the
+  same wherever the container runs.
+- **Moving:** Manage → **Move to server** (stopped containers without a public IP).
+  The disk is copied with `zfs send`, the container is removed from the old server
+  and optionally started on the new one. `p8 ct-move NAME SERVER [--start]`.
+  If its network doesn't exist on the new server it's put on the NAT network (the job says so).
+- **Virtual networks:** pick a `vnet:NAME` network in the dialog; the container gets
+  an MTU of 1230 like VMs on virtual networks.
+
 ## Not yet (next steps)
 
 - Separate (cheaper) plans for containers; plans currently are shared with VMs
-- Moving containers between servers (with clustering)
+- Containers in high availability (restart on another server when one fails)
+- Live moves of running containers

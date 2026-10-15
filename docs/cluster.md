@@ -116,8 +116,9 @@ sessions and connections normally survive. Its private IP can still change
   (`p8 cpu web1 compatible`), shut it down and start it once: it then runs on
   the newest CPU model all servers share and can move live anywhere. A server
   added later with an older CPU: set it again.
-- **Not yet live:** UEFI VMs (Windows 11), VMs on a SAN disk (iSCSI), VMs with a
-  public IP or a CD in the drive — move those shut down.
+- **Live moves** work for UEFI VMs and Windows 11 too (their UEFI variables and TPM state come
+  along) and for VMs on a SAN disk (they land on the other server's local storage, like a normal
+  move). Not live: VMs with a public IP, a CD in the drive or PCI/USB devices — move those shut down.
 - **VMs on Ceph** ([ceph.md](ceph.md)) move without copying any disk: shut down it is instant,
   running only the memory goes over.
 - **How:** libvirt on each server listens on its tunnel address only
@@ -165,7 +166,7 @@ company sign-in). The master hands it out every 15 seconds.
   UDP 51820) where they can; pairs that can't (both behind NAT on other
   networks) still go through the master.
 - **What stays on the old master:** P8S Cloud billing data and the support
-  inbox, containers (they run on the master), the update/licence server data.
+  inbox, containers with public IPs, the update/licence server data.
 
 ## High availability
 
@@ -202,7 +203,6 @@ Files: `/var/lib/p8s/cluster/state.json` (roles, keys, tokens; root only),
 
 ## Not yet
 
-- Moving containers; live moves of UEFI VMs and VMs on network storage
-- Containers in high availability (VMs: see [ha.md](ha.md)); shared storage (Ceph/NFS)
-- Containers on workers (containers run on the master), ISO installs and public IPs on workers
+- Containers in high availability (VMs: see [ha.md](ha.md)); live moves of running containers
+- Public IPs for containers on workers (they stay on the master)
 - One shared ISO library and template list
