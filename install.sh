@@ -132,43 +132,60 @@ ok "template $SNAP (${MIN_GB} GB)"
 
 # ---------------------------------------------------------------------------
 say "Building p8sd"
-GO=""
-for g in /usr/local/go/bin/go "$(command -v go || true)"; do
-  [[ -x $g ]] || continue
-  minor=$("$g" env GOVERSION | sed -E 's/^go1\.([0-9]+).*/\1/')
-  (( minor >= 24 )) && { GO=$g; break; }
-done
-if [[ -z $GO ]]; then
-  apt-get install -y golang-go >/dev/null 2>&1 || true
-  if command -v go >/dev/null && (( $(go env GOVERSION | sed -E 's/^go1\.([0-9]+).*/\1/') >= 24 )); then
-    GO=$(command -v go)
-  else
-    echo "      Debian's Go is too old; installing the latest from go.dev"
-    J=$(curl -fsSL 'https://go.dev/dl/?mode=json')
-    F=$(jq -r '[.[0].files[] | select(.os=="linux" and .arch=="amd64" and .kind=="archive")][0].filename' <<<"$J")
-    SUM=$(jq -r --arg f "$F" '.[0].files[] | select(.filename==$f) | .sha256' <<<"$J")
-    curl -fsSL -o "/tmp/$F" "https://go.dev/dl/$F"
-    echo "$SUM  /tmp/$F" | sha256sum -c --quiet
-    rm -rf /usr/local/go && tar -C /usr/local -xzf "/tmp/$F" && rm "/tmp/$F"
-    GO=/usr/local/go/bin/go
+# The installer ISO carries p8sd and its tools pre-built for the exact source
+# it ships (prebuilt/, with the source's fingerprint): then no Go, no build.
+PRE=$REPO/prebuilt
+if [[ -x $PRE/p8sd && -f $PRE/source.sha256 ]] && [[ $(bash "$REPO/scripts/srchash.sh" "$REPO") == "$(tr -d ' \r\n' < "$PRE/source.sha256")" ]]; then
+  install -m 0755 "$PRE/p8sd" /usr/local/bin/p8sd
+  install -m 0644 "$REPO/deploy/p8sd.service" /etc/systemd/system/p8sd.service
+  install -d -m 0750 /etc/p8s /var/lib/p8s/seeds
+  [[ -f /etc/p8s/p8sd.json ]] || install -m 0600 "$REPO/deploy/p8sd.example.json" /etc/p8s/p8sd.json
+  if [[ -x $PRE/p8s-licensed ]]; then install -m 0755 "$PRE/p8s-licensed" /usr/local/bin/p8s-licensed; fi
+  install -m 0644 "$REPO/deploy/p8s-licensed.service" /etc/systemd/system/p8s-licensed.service
+  install -d -m 0755 /usr/local/share/p8s/witness
+  for A in amd64 arm64; do
+    if [[ -x $PRE/p8s-witness-$A ]]; then install -m 0755 "$PRE/p8s-witness-$A" "/usr/local/share/p8s/witness/p8s-witness-$A"; fi
+  done
+  ok "p8sd $(cat "$PRE/version" 2>/dev/null) pre-built on the installer ISO (no build needed)"
+else
+  GO=""
+  for g in /usr/local/go/bin/go "$(command -v go || true)"; do
+    [[ -x $g ]] || continue
+    minor=$("$g" env GOVERSION | sed -E 's/^go1\.([0-9]+).*/\1/')
+    (( minor >= 24 )) && { GO=$g; break; }
+  done
+  if [[ -z $GO ]]; then
+    apt-get install -y golang-go >/dev/null 2>&1 || true
+    if command -v go >/dev/null && (( $(go env GOVERSION | sed -E 's/^go1\.([0-9]+).*/\1/') >= 24 )); then
+      GO=$(command -v go)
+    else
+      echo "      Debian's Go is too old; installing the latest from go.dev"
+      J=$(curl -fsSL 'https://go.dev/dl/?mode=json')
+      F=$(jq -r '[.[0].files[] | select(.os=="linux" and .arch=="amd64" and .kind=="archive")][0].filename' <<<"$J")
+      SUM=$(jq -r --arg f "$F" '.[0].files[] | select(.filename==$f) | .sha256' <<<"$J")
+      curl -fsSL -o "/tmp/$F" "https://go.dev/dl/$F"
+      echo "$SUM  /tmp/$F" | sha256sum -c --quiet
+      rm -rf /usr/local/go && tar -C /usr/local -xzf "/tmp/$F" && rm "/tmp/$F"
+      GO=/usr/local/go/bin/go
+    fi
   fi
+  ok "Go $("$GO" env GOVERSION)"
+  export PATH=$(dirname "$GO"):$PATH GOCACHE=/root/.cache/go-build GOFLAGS=-buildvcs=false
+  (cd "$REPO" && go test ./... >/dev/null) || die "unit tests failed: cd $REPO && go test ./..."
+  ok "unit tests pass"
+  V=$(tr -d ' \r\n' < "$REPO/VERSION" 2>/dev/null || true)  # release bundles carry their version
+  (cd "$REPO" && make -s install ${V:+VERSION=$V} >/dev/null)
+  # licence server (selling P8S OS subscriptions); installed but off until you enable it
+  (cd "$REPO" && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o bin/p8s-licensed ./cmd/p8s-licensed) || die "building p8s-licensed failed"
+  install -m 0755 "$REPO/bin/p8s-licensed" /usr/local/bin/p8s-licensed
+  install -m 0644 "$REPO/deploy/p8s-licensed.service" /etc/systemd/system/p8s-licensed.service
+  # cluster witness (tie-breaker for 2 servers): copy to a Pi/NAS/VPS and run sudo ./p8s-witness install
+  install -d -m 0755 /usr/local/share/p8s/witness
+  for A in amd64 arm64; do
+    (cd "$REPO" && CGO_ENABLED=0 GOOS=linux GOARCH=$A go build -trimpath -ldflags "-s -w" -o "bin/p8s-witness-$A" ./cmd/p8s-witness) || die "building p8s-witness ($A) failed"
+    install -m 0755 "$REPO/bin/p8s-witness-$A" "/usr/local/share/p8s/witness/p8s-witness-$A"
+  done
 fi
-ok "Go $("$GO" env GOVERSION)"
-export PATH=$(dirname "$GO"):$PATH GOCACHE=/root/.cache/go-build GOFLAGS=-buildvcs=false
-(cd "$REPO" && go test ./... >/dev/null) || die "unit tests failed: cd $REPO && go test ./..."
-ok "unit tests pass"
-V=$(tr -d ' \r\n' < "$REPO/VERSION" 2>/dev/null || true)  # release bundles carry their version
-(cd "$REPO" && make -s install ${V:+VERSION=$V} >/dev/null)
-# licence server (selling P8S OS subscriptions); installed but off until you enable it
-(cd "$REPO" && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o bin/p8s-licensed ./cmd/p8s-licensed) || die "building p8s-licensed failed"
-install -m 0755 "$REPO/bin/p8s-licensed" /usr/local/bin/p8s-licensed
-install -m 0644 "$REPO/deploy/p8s-licensed.service" /etc/systemd/system/p8s-licensed.service
-# cluster witness (tie-breaker for 2 servers): copy to a Pi/NAS/VPS and run sudo ./p8s-witness install
-install -d -m 0755 /usr/local/share/p8s/witness
-for A in amd64 arm64; do
-  (cd "$REPO" && CGO_ENABLED=0 GOOS=linux GOARCH=$A go build -trimpath -ldflags "-s -w" -o "bin/p8s-witness-$A" ./cmd/p8s-witness) || die "building p8s-witness ($A) failed"
-  install -m 0755 "$REPO/bin/p8s-witness-$A" "/usr/local/share/p8s/witness/p8s-witness-$A"
-done
 systemctl daemon-reload
 chown -R "$USER_NAME": "$REPO/bin" 2>/dev/null || true
 install -m 0755 "$REPO/scripts/p8" /usr/local/bin/p8

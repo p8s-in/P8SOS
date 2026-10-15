@@ -328,7 +328,11 @@ func (p *Plan) Steps() []Step {
 		enc = []string{"P8S_ENCRYPT=1"}
 	}
 	in("Arming the first-boot setup", append(append([]string{"env"}, enc...), "bash", "/opt/p8sos/iso/late.sh")...)
-	inSoft("Removing the installer", "bash", "-c", "systemctl disable p8s-installer.service; rm -f /etc/systemd/system/p8s-installer.service /usr/local/sbin/p8s-install")
+	inSoft("Removing the installer", "bash", "-c", "systemctl disable p8s-installer.service p8s-installer-web.service p8s-installer-kiosk.service; "+
+		"rm -f /etc/systemd/system/p8s-installer*.service /usr/local/sbin/p8s-install /etc/firefox/policies/policies.json")
+	// the graphical installer's screen (a server needs no browser)
+	inSoft("Removing the installer's screen", "bash", "-c",
+		`dpkg-query -W -f='${db:Status-Abbrev} ${Package}\n' cage firefox-esr 2>/dev/null | awk '$1=="ii" {print $2}' | xargs -r apt-get purge -y && apt-get autoremove -y --purge`)
 	if len(p.Disks) > 1 {
 		in("Keeping the boot partitions in sync", "install", "-m", "0755", "/opt/p8sos/scripts/esp-sync.sh", "/usr/local/sbin/p8s-esp-sync")
 		file("/etc/apt/apt.conf.d/99p8s-esp-sync", "DPkg::Post-Invoke { \"[ -x /usr/local/sbin/p8s-esp-sync ] && /usr/local/sbin/p8s-esp-sync || true\"; };\n", 0o644)

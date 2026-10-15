@@ -3,7 +3,7 @@ Summary: The first start, signing in to the dashboard, roles and the first secur
 
 ## First start (10–20 minutes, needs internet)
 
-The screen shows `[P8S OS] ...` lines while it finishes KVM, libvirt and ZFS setup, downloads the Debian VM template and builds p8sd. When it's done the login screen shows:
+The screen shows `[P8S OS] ...` lines while it finishes KVM, libvirt and ZFS setup, downloads the Debian VM template and installs p8sd (pre-built on the ISO; only a changed source is compiled). When it's done the login screen shows:
 
 ```
 P8S OS (alpha) is ready.   Host IP: 192.168.x.x

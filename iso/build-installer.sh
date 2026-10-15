@@ -39,10 +39,20 @@ mkdir -p "$WORK"
 free=$(df -BG --output=avail "$WORK" | tail -1 | tr -dc 0-9)
 ((free >= 15)) || die "only ${free} GB free in $WORK; the build needs about 15 GB (set P8S_LIVE_WORK=/a/bigger/disk)"
 
-say "2/6 Installer program"
-(cd "$REPO" && go test ./internal/installer >/dev/null) || die "installer unit tests failed: cd $REPO && go test ./internal/installer"
+say "2/6 Installer program and P8S OS programs (pre-built: the first start needs no Go build)"
+(cd "$REPO" && go test ./... >/dev/null) || die "unit tests failed: cd $REPO && go test ./..."
 (cd "$REPO" && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o "$WORK/p8s-install" ./cmd/p8s-install)
-echo "built p8s-install"
+PB=$WORK/prebuilt
+rm -rf "$PB"; mkdir -p "$PB"
+PV=$(tr -d ' \r\n' < "$REPO/VERSION" 2>/dev/null || true)
+[[ -n $PV ]] || PV=$( (cd "$REPO" && git describe --tags --always --dirty 2>/dev/null) || echo "iso-$VERSION")
+(cd "$REPO" && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=$PV" -o "$PB/p8sd" ./cmd/p8sd)
+(cd "$REPO" && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o "$PB/p8s-licensed" ./cmd/p8s-licensed)
+for A in amd64 arm64; do
+  (cd "$REPO" && CGO_ENABLED=0 GOOS=linux GOARCH=$A go build -trimpath -ldflags "-s -w" -o "$PB/p8s-witness-$A" ./cmd/p8s-witness)
+done
+echo "$PV" > "$PB/version"
+echo "built p8s-install, p8sd $PV, p8s-licensed, p8s-witness"
 
 say "3/6 Live system recipe"
 B=$WORK/build
@@ -86,6 +96,9 @@ gdisk
 parted
 squashfs-tools
 whiptail
+cage
+firefox-esr
+fonts-dejavu-core
 ifupdown
 wpasupplicant
 openssh-server
@@ -136,10 +149,18 @@ mkdir -p config/includes.chroot_after_packages/usr/local/sbin \
          config/includes.chroot_after_packages/etc/systemd/system \
          config/includes.chroot_after_packages/opt/p8sos
 install -m 0755 "$WORK/p8s-install" config/includes.chroot_after_packages/usr/local/sbin/p8s-install
-install -m 0644 "$REPO/iso/p8s-installer.service" config/includes.chroot_after_packages/etc/systemd/system/
+for u in p8s-installer p8s-installer-web p8s-installer-kiosk p8s-installer-text; do
+  install -m 0644 "$REPO/iso/$u.service" config/includes.chroot_after_packages/etc/systemd/system/
+done
+install -D -m 0644 "$REPO/iso/firefox/policies.json" config/includes.chroot_after_packages/etc/firefox/policies/policies.json
 tar -C "$REPO" --exclude=.git --exclude=bin --exclude=dist --exclude='*.iso' --exclude='*.tar.gz' -cf - . \
   | tar -C config/includes.chroot_after_packages/opt/p8sos -xf -
 find config/includes.chroot_after_packages/opt/p8sos -type f \( -name '*.sh' -o -name p8 -o -name '*.service' -o -name '*.cfg' \) -exec sed -i 's/\r$//' {} +
+# the pre-built programs, with the fingerprint of the source they were built from
+# (install.sh uses them while the source is unchanged; after an update it builds)
+mkdir -p config/includes.chroot_after_packages/opt/p8sos/prebuilt
+cp -a "$PB"/. config/includes.chroot_after_packages/opt/p8sos/prebuilt/
+bash "$REPO/scripts/srchash.sh" config/includes.chroot_after_packages/opt/p8sos > config/includes.chroot_after_packages/opt/p8sos/prebuilt/source.sha256
 
 cat > config/hooks/normal/9000-p8s.hook.chroot <<'EOF'
 #!/bin/sh
@@ -160,7 +181,7 @@ ls /opt/p8s-debs/efi/grub-efi-amd64_*.deb /opt/p8s-debs/bios/grub-pc_*.deb >/dev
 # 3. The installer on the first screen; no SSH into the live system (the new
 #    system turns SSH back on)
 chmod +x /opt/p8sos/install.sh /opt/p8sos/update.sh /opt/p8sos/iso/*.sh /opt/p8sos/scripts/*.sh /opt/p8sos/scripts/p8
-systemctl enable p8s-installer.service
+systemctl enable p8s-installer.service p8s-installer-web.service p8s-installer-kiosk.service
 systemctl disable ssh.service ssh.socket 2>/dev/null || true
 echo "P8S OS installer" > /etc/p8s-installer-release
 EOF
@@ -186,10 +207,13 @@ for f in $CFGS; do
   xorriso -osirrox on -indev "$ISO" -extract "$f" "$dst" >/dev/null 2>&1 || continue
   chmod u+w "$dst"
   cp "$dst" "$dst.orig"
+  # main entry: the graphical installer (mouse; p8s.gui); the safe-graphics
+  # entry (nomodeset) is the text installer
   sed -i -E \
-    -e 's/Live system \(([^)]*) fail-safe mode\)/Install P8S OS (safe graphics)/g' \
+    -e 's/Live system \(([^)]*) fail-safe mode\)/Install P8S OS (text mode, safe graphics)/g' \
     -e 's/Live system \(([^)]*)\)/Install P8S OS/g' \
     -e 's/Live system/P8S OS installer/g' \
+    -e '/nomodeset/!s/ p8s\.installer/ p8s.installer p8s.gui/g' \
     "$dst"
   [[ -n ${ANSWERS:-} ]] && sed -i 's/ p8s\.installer/ p8s.installer p8s.answers=\/answers.json/g' "$dst"
   cmp -s "$dst" "$dst.orig" || MAP+=(-map "$dst" "$f")

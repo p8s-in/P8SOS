@@ -7,6 +7,7 @@
 //	p8s-install --answers FILE        no questions: everything from a JSON file
 //	p8s-install --answers FILE --dry-run   print what would be done, change nothing
 //	p8s-install --list                the disks and network ports it sees
+//	p8s-install --web-only            only the graphical installer (web page; the ISO's graphical entry)
 //
 // The ISO's boot option p8s.answers=PATH (a file on the USB stick, like
 // p8s.answers=/answers.json) also installs without questions.
@@ -40,6 +41,8 @@ func main() {
 	target := flag.String("target", "/mnt", "where the new system is mounted while installing")
 	squash := flag.String("squashfs", "", "system image to copy (default: the live medium's)")
 	logPath := flag.String("log", "/var/log/p8s-install.log", "install log")
+	webOnly := flag.Bool("web-only", false, "serve only the graphical installer (127.0.0.1:8099 and https://…:8006 with a PIN)")
+	noWeb := flag.Bool("no-web", false, "text menus only (no install from another computer's browser)")
 	flag.Parse()
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM)
@@ -90,7 +93,19 @@ func main() {
 	if *dry {
 		fail(errors.New("--dry-run needs --answers"))
 	}
+	web := newWeb(m, *target, *squash, *logPath)
+	if *webOnly {
+		web.serveWeb(true)
+		fmt.Println("Graphical installer: http://127.0.0.1:8099")
+		fmt.Println(web.remoteHint())
+		<-ctx.Done()
+		return
+	}
 	ui := &menus{m: m, target: *target, squash: *squash, log: *logPath}
+	if !*noWeb {
+		web.serveWeb(true)
+		ui.web = web
+	}
 	if err := zfsReady(ctx); err != nil {
 		msg(err.Error())
 	}
@@ -213,6 +228,7 @@ func install(ctx context.Context, p *installer.Plan, progress func(int, string))
 var errBack = errors.New("back")
 
 type menus struct {
+	web    *webInst // install from another computer's browser (nil = off)
 	m      *machine
 	a      installer.Answers
 	target string
@@ -239,8 +255,14 @@ func msg(text string) { _, _ = wt("--msgbox", text, "20", "76") }
 
 func (u *menus) run(ctx context.Context) {
 	for {
-		choice, err := wt("--nocancel", "--menu", "Welcome. P8S OS turns this computer into a server for virtual machines.\n\n"+
-			"The installer erases the disks you choose. It asks first.", "16", "70", "4",
+		text := "Welcome. P8S OS turns this computer into a server for virtual machines.\n\n" +
+			"The installer erases the disks you choose. It asks first."
+		if u.web != nil {
+			if h := u.web.remoteHint(); h != "" {
+				text += "\n\n" + h
+			}
+		}
+		choice, err := wt("--nocancel", "--menu", text, "20", "78", "4",
 			"install", "Install P8S OS",
 			"disks", "Show the disks and network ports",
 			"shell", "Command line (for experts; type exit to come back)",
@@ -536,6 +558,11 @@ func (u *menus) confirm(p *installer.Plan) bool {
 
 // progress runs the install behind a progress bar.
 func (u *menus) progress(ctx context.Context, p *installer.Plan) {
+	if !acquire() {
+		msg("An install was started from a browser. Watch it there (or restart the computer to stop it).")
+		return
+	}
+	defer release()
 	g := exec.Command("whiptail", "--title", title, "--gauge", "Installing P8S OS ...", "8", "76", "0")
 	g.Stdout, g.Stderr = os.Stdout, os.Stderr
 	in, err := g.StdinPipe()
@@ -558,7 +585,7 @@ func (u *menus) progress(ctx context.Context, p *installer.Plan) {
 	}
 	if ierr == nil {
 		msg("P8S OS is installed.\n\nRemove the USB stick, then press Enter to restart.\n\n" +
-			"On the first start it finishes setting up by itself (10-20 minutes, needs internet). Then log in as " + p.A.User + ".")
+			"On the first start it finishes setting up by itself (a few minutes, needs internet). Then log in as " + p.A.User + ".")
 		_ = exec.Command("systemctl", "reboot").Run()
 		return
 	}

@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Install P8S OS</title>
+<style>
+:root{--brand:#014578;--ink:#101828;--sub:#667085;--line:#e4e7ec;--bg:#f2f4f7;--card:#fff;--ok:#12b76a;--warn:#f79009;--bad:#f04438}
+*{box-sizing:border-box}
+body{margin:0;font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,"DejaVu Sans",sans-serif;color:var(--ink);background:var(--bg)}
+header{background:var(--brand);color:#fff;padding:14px 28px;display:flex;align-items:center;gap:14px}
+header .logo{font-weight:800;font-size:20px;letter-spacing:.5px;border:2px solid #fff;border-radius:8px;padding:2px 8px}
+header .tag{opacity:.8;font-size:14px}
+main{max-width:920px;margin:28px auto;padding:0 16px}
+.steps{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px}
+.steps span{font-size:13px;padding:4px 10px;border-radius:999px;background:#e4e7ec;color:var(--sub)}
+.steps span.on{background:var(--brand);color:#fff}
+.steps span.done{background:#d1e9ff;color:var(--brand)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:26px 28px;box-shadow:0 1px 3px rgba(16,24,40,.06)}
+h1{font-size:24px;margin:0 0 6px}
+h2{font-size:18px;margin:22px 0 8px}
+p.sub,.sub{color:var(--sub);font-size:14px;margin:4px 0}
+label{display:block;font-weight:600;font-size:14px;margin:14px 0 4px}
+input[type=text],input[type=password],select{width:100%;font:inherit;padding:10px 12px;border:1px solid #d0d5dd;border-radius:8px;background:#fff}
+input:focus,select:focus{outline:2px solid #84caff;border-color:var(--brand)}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.choice{display:flex;gap:12px;align-items:flex-start;border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin:8px 0;cursor:pointer;font-weight:400}
+.choice:hover{border-color:#84caff}
+.choice input{margin-top:4px;transform:scale(1.25)}
+.choice.off{opacity:.55;cursor:not-allowed}
+.choice b{display:block}
+.data{color:var(--bad);font-weight:600}
+.empty{color:var(--ok)}
+.nav{display:flex;justify-content:space-between;align-items:center;margin-top:24px;gap:10px}
+button{font:inherit;font-weight:600;border-radius:8px;padding:10px 20px;border:1px solid #d0d5dd;background:#fff;cursor:pointer}
+button.primary{background:var(--brand);color:#fff;border-color:var(--brand)}
+button.danger{background:var(--bad);color:#fff;border-color:var(--bad)}
+button:disabled{opacity:.5;cursor:default}
+.err{background:#fef3f2;border:1px solid #fecdca;color:#b42318;border-radius:8px;padding:10px 14px;margin-top:14px;white-space:pre-wrap}
+.warn{background:#fffaeb;border:1px solid #fedf89;color:#93370d;border-radius:8px;padding:12px 14px;margin-top:14px}
+pre{background:#101828;color:#e4e7ec;border-radius:8px;padding:14px;overflow:auto;font-size:13px;max-height:340px;white-space:pre-wrap}
+pre.summary{background:#f9fafb;color:var(--ink);border:1px solid var(--line)}
+.bar{height:16px;background:#e4e7ec;border-radius:999px;overflow:hidden;margin:18px 0 8px}
+.bar i{display:block;height:100%;background:var(--brand);transition:width .5s}
+.big{font-size:44px;font-weight:800;color:var(--brand)}
+.hide{display:none}
+@media (max-width:640px){.row{grid-template-columns:1fr}.card{padding:18px}}
+</style>
+</head>
+<body>
+<header><span class="logo">P8S</span><div><div style="font-weight:700">P8S OS installer</div><div class="tag">Problems. Infinite Solutions.</div></div></header>
+<main>
+  <div class="steps" id="steps"></div>
+  <div class="card" id="card"></div>
+</main>
+<script>
+"use strict";
+const STEPS = ["Welcome", "Disks", "Layout", "Server", "Network", "Admin", "Check", "Install"];
+let step = 0, M = null, pin = "", plan = null;
+const A = {disks: [], layout: "", hostname: "", timezone: "Etc/UTC", keyboard: "us", user: "admin", password: "",
+  network: {interface: "auto", mode: "dhcp", address: "", gateway: "", dns: [], wifi_ssid: "", wifi_password: ""},
+  encrypt_vm_storage: false, root_gb: 32};
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+
+async function api(method, path, body){
+  const r = await fetch("/api" + path, {method, headers: {"Content-Type": "application/json", "X-PIN": pin}, body: body ? JSON.stringify(body) : undefined});
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) { const e = new Error(j.error || "HTTP " + r.status); e.status = r.status; throw e; }
+  return j;
+}
+
+function steps(){
+  $("#steps").innerHTML = STEPS.map((s, i) => `<span class="${i === step ? "on" : i < step ? "done" : ""}">${i + 1}. ${s}</span>`).join("");
+}
+function show(html){ steps(); $("#card").innerHTML = html; const f = $("#card input:not([type=checkbox]):not([type=radio]), #card select"); if (f) f.focus(); }
+function nav(back, next, nextLabel){
+  return `<div id="err" class="err hide"></div><div class="nav">${back ? `<button id="back">Back</button>` : "<span></span>"}
+    ${next ? `<button class="primary" id="next">${nextLabel || "Next"}</button>` : ""}</div>`;
+}
+function err(m){ const e = $("#err"); if (e) { e.textContent = m; e.classList.remove("hide"); } }
+function wire(back, next){
+  if ($("#back")) $("#back").onclick = back;
+  if ($("#next")) $("#next").onclick = async () => { $("#next").disabled = true; try { await next(); } catch (e) { err(e.message); } finally { if ($("#next")) $("#next").disabled = false; } };
+}
+function go(n){ step = n; [welcome, disks, layout, server, network, admin, check, progress][n](); }
+
+async function start(){
+  const h = await (await fetch("/api/hello")).json();
+  if (h.pin) return askPin();
+  M = await api("GET", "/machine");
+  A.hostname = M.hostname;
+  resume();
+}
+async function resume(){
+  const p = await api("GET", "/progress").catch(() => null);
+  if (p && (p.running || p.done || p.error)) return go(7);
+  go(0);
+}
+function askPin(){
+  steps();
+  $("#card").innerHTML = `<h1>Install P8S OS from this browser</h1>
+    <p class="sub">Type the 6-digit PIN that the server's screen shows (welcome menu of the installer).</p>
+    <label for="pin">PIN</label><input type="text" id="pin" inputmode="numeric" maxlength="6" autocomplete="off">
+    ${nav(false, true, "Continue")}`;
+  $("#pin").focus();
+  $("#pin").onkeydown = e => { if (e.key === "Enter") $("#next").click(); };
+  wire(null, async () => { pin = $("#pin").value.trim(); M = await api("GET", "/machine"); A.hostname = M.hostname; resume(); });
+}
+
+function welcome(){
+  show(`<h1>Welcome</h1>
+    <p>P8S OS turns this computer into a server for virtual machines and containers, managed from a web dashboard.</p>
+    <p class="sub">The installer asks a few questions, then erases the disk(s) you choose and installs P8S OS on them.
+      Nothing is written until the last step, where you type ERASE.</p>
+    <p class="sub">Started in ${M.uefi ? "UEFI" : "BIOS (legacy)"} mode · ${M.disks.length} disk(s) · ${M.nics.length} network port(s)</p>
+    ${nav(false, true, "Start")}`);
+  wire(null, () => go(1));
+}
+
+function disks(){
+  const rows = M.disks.map(d => `<label class="choice ${d.usable ? "" : "off"}"><input type="checkbox" value="${esc(d.name)}"
+      ${A.disks.includes(d.name) ? "checked" : ""} ${d.usable ? "" : "disabled"}>
+    <span><b>${esc(d.name)} · ${esc(d.size)} ${esc(d.model)}</b>
+      <span class="${d.empty ? "empty" : "data"}">${d.usable ? (d.empty ? "empty" : esc(d.state)) : "not offered: " + esc(d.state)}</span></span></label>`).join("");
+  show(`<h1>Where should P8S OS go?</h1>
+    <p class="sub">Tick one disk, or two or more for a mirror or RAID. <b>Everything on the ticked disks is erased.</b> Disks with data say so in red.</p>
+    ${rows || `<div class="err">No disks found.</div>`}
+    <p><button id="rescan">Look again (plugged in a disk?)</button></p>
+    ${nav(true, true)}`);
+  $("#rescan").onclick = async () => { M = await api("POST", "/rescan"); disks(); };
+  wire(() => go(0), () => {
+    A.disks = [...document.querySelectorAll("#card input[type=checkbox]:checked")].map(c => c.value);
+    if (!A.disks.length) throw new Error("Tick at least one disk.");
+    go(2);
+  });
+}
+
+function layout(){
+  const n = A.disks.length, opts = M.layouts[n] || [];
+  let def = A.layout && opts.some(o => o.id === A.layout) ? A.layout : (n === 2 ? "mirror" : n === 3 ? "raidz1" : n >= 4 ? "raidz2" : opts[0]?.id);
+  show(`<h1>How should the ${n} disk(s) be used?</h1>
+    ${opts.map(o => `<label class="choice"><input type="radio" name="lay" value="${esc(o.id)}" ${o.id === def ? "checked" : ""}><span><b>${esc(o.title)}</b></span></label>`).join("")}
+    <div id="ext4box" class="hide"><label for="rootgb">System partition (GB) — the rest holds VMs</label><input type="text" id="rootgb" value="${A.root_gb}"></div>
+    ${nav(true, true)}`);
+  const sync = () => $("#ext4box").classList.toggle("hide", document.querySelector("input[name=lay]:checked")?.value !== "ext4");
+  for (const r of document.querySelectorAll("input[name=lay]")) r.onchange = sync;
+  sync();
+  wire(() => go(1), () => {
+    A.layout = document.querySelector("input[name=lay]:checked")?.value;
+    if (A.layout === "ext4") A.root_gb = parseInt($("#rootgb").value, 10) || 32;
+    go(3);
+  });
+}
+
+function server(){
+  show(`<h1>This server</h1>
+    <label for="host">Server name — give every server its own (like p8s-1, p8s-office)</label><input type="text" id="host" value="${esc(A.hostname)}">
+    <div class="row">
+      <div><label for="tz">Time zone</label><input type="text" id="tz" list="zones" value="${esc(A.timezone)}"><datalist id="zones">${M.zones.map(z => `<option value="${esc(z)}">`).join("")}</datalist></div>
+      <div><label for="kb">Keyboard</label><select id="kb">${M.keyboards.map(k => `<option ${k === A.keyboard ? "selected" : ""}>${esc(k)}</option>`).join("")}</select></div>
+    </div>
+    ${nav(true, true)}`);
+  wire(() => go(2), () => { A.hostname = $("#host").value.trim(); A.timezone = $("#tz").value.trim(); A.keyboard = $("#kb").value; go(4); });
+}
+
+function network(){
+  const n = A.network, nics = M.nics;
+  if (n.interface === "auto" && nics.length) n.interface = (nics.find(x => x.link && !x.wireless) || nics[0]).name;
+  show(`<h1>Network</h1>
+    ${nics.length ? `<label for="nic">Network port (VMs on the home network use it too)</label>
+      <select id="nic">${nics.map(x => `<option value="${esc(x.name)}" ${x.name === n.interface ? "selected" : ""}>${esc(x.label)}</option>`).join("")}</select>`
+      : `<div class="warn">No network port found. Install anyway and set the network up later.</div>`}
+    <div id="wifi" class="row hide"><div><label for="ssid">Wi-Fi name</label><input type="text" id="ssid" value="${esc(n.wifi_ssid)}"></div>
+      <div><label for="wpw">Wi-Fi password</label><input type="password" id="wpw" value="${esc(n.wifi_password)}"></div></div>
+    <label>Server address</label>
+    <label class="choice"><input type="radio" name="mode" value="dhcp" ${n.mode !== "static" ? "checked" : ""}><span><b>Automatic (DHCP)</b><span class="sub">fine to start; reserve the address in your router later</span></span></label>
+    <label class="choice"><input type="radio" name="mode" value="static" ${n.mode === "static" ? "checked" : ""}><span><b>Fixed address</b></span></label>
+    <div id="static" class="hide"><div class="row">
+      <div><label for="addr">Address with network size</label><input type="text" id="addr" placeholder="192.168.1.10/24" value="${esc(n.address)}"></div>
+      <div><label for="gw">Gateway (router)</label><input type="text" id="gw" placeholder="192.168.1.1" value="${esc(n.gateway)}"></div></div>
+      <label for="dns">DNS servers</label><input type="text" id="dns" value="${esc((n.dns || []).join(" ") || "1.1.1.1 8.8.8.8")}"></div>
+    ${nav(true, true)}`);
+  const sync = () => {
+    const nic = nics.find(x => x.name === ($("#nic")?.value || ""));
+    $("#wifi").classList.toggle("hide", !nic?.wireless);
+    $("#static").classList.toggle("hide", document.querySelector("input[name=mode]:checked").value !== "static");
+  };
+  if ($("#nic")) $("#nic").onchange = sync;
+  for (const r of document.querySelectorAll("input[name=mode]")) r.onchange = sync;
+  sync();
+  wire(() => go(3), () => {
+    n.interface = $("#nic")?.value || "auto";
+    const nic = nics.find(x => x.name === n.interface);
+    n.wifi_ssid = nic?.wireless ? $("#ssid").value.trim() : ""; n.wifi_password = nic?.wireless ? $("#wpw").value : "";
+    n.mode = document.querySelector("input[name=mode]:checked").value;
+    if (n.mode === "static") { n.address = $("#addr").value.trim(); n.gateway = $("#gw").value.trim(); n.dns = $("#dns").value.trim().split(/[\s,]+/).filter(Boolean); }
+    else { n.address = n.gateway = ""; n.dns = []; }
+    go(5);
+  });
+}
+
+function admin(){
+  show(`<h1>Admin account</h1>
+    <p class="sub">You log in with it (SSH, console and the dashboard). It gets sudo; logging in as root stays off.</p>
+    <label for="user">User name</label><input type="text" id="user" value="${esc(A.user)}" autocomplete="off">
+    <div class="row"><div><label for="pw1">Password (8 or more characters)</label><input type="password" id="pw1" autocomplete="new-password"></div>
+      <div><label for="pw2">The same password again</label><input type="password" id="pw2" autocomplete="new-password"></div></div>
+    <label class="choice"><input type="checkbox" id="enc" ${A.encrypt_vm_storage ? "checked" : ""}><span><b>Encrypt the VM disks at rest</b>
+      <span class="sub">The key stays on the system disk, so the VM disks alone (stolen, sent back, sold) can't be read. Back the key up afterwards: Server page → Storage.</span></span></label>
+    ${nav(true, true, "Check everything")}`);
+  wire(() => go(4), async () => {
+    const p1 = $("#pw1").value, p2 = $("#pw2").value;
+    if (p1.length < 8) throw new Error("The password needs at least 8 characters.");
+    if (p1 !== p2) throw new Error("The two passwords are different.");
+    A.user = $("#user").value.trim(); A.password = p1; A.encrypt_vm_storage = $("#enc").checked;
+    plan = await api("POST", "/plan", A);
+    go(6);
+  });
+}
+
+function check(){
+  show(`<h1>Check, then install</h1>
+    <pre class="summary">${esc(plan.summary)}</pre>
+    ${plan.has_data.length ? `<div class="warn"><b>These disks are not empty — everything on them will be lost for good:</b><br>${plan.has_data.map(esc).join("<br>")}</div>` : ""}
+    <label for="erase">Type <b>ERASE</b> (capital letters) to wipe ${esc(plan.disks.join(", "))} and install</label>
+    <input type="text" id="erase" autocomplete="off">
+    ${nav(true, true, "Install P8S OS")}`);
+  $("#next").classList.replace("primary", "danger");
+  $("#erase").onkeydown = e => { if (e.key === "Enter") $("#next").click(); };
+  wire(() => go(5), async () => {
+    if ($("#erase").value !== "ERASE") throw new Error("Type ERASE in capital letters to go on. Nothing has been changed.");
+    await api("POST", "/install", {...A, confirm: "ERASE"});
+    A.password = "";
+    go(7);
+  });
+}
+
+let timer = null;
+async function progress(){
+  steps();
+  clearTimeout(timer);
+  let p;
+  try { p = await api("GET", "/progress"); } catch (e) { timer = setTimeout(progress, 2000); return; }
+  if (p.done) {
+    $("#card").innerHTML = `<h1>P8S OS is installed</h1>
+      <p>Remove the USB stick, then restart. On the first start it finishes setting itself up (a few minutes) and shows the dashboard address on the screen.</p>
+      <div class="nav"><span></span><button class="primary" id="reboot">Restart now</button></div>`;
+    $("#reboot").onclick = async () => { await api("POST", "/reboot").catch(() => {}); $("#card").innerHTML = "<h1>Restarting…</h1><p class='sub'>Remove the USB stick.</p>"; };
+    return;
+  }
+  if (p.error && !p.running) {
+    $("#card").innerHTML = `<h1>The install stopped</h1><div class="err">${esc(p.error)}</div>
+      <h2>What the failed step printed</h2><pre>${esc(p.failed_step || "(nothing)")}</pre>
+      <p class="sub">Take a photo of this page if you ask for help. The whole log is /var/log/p8s-install.log.</p>
+      <div class="nav"><button id="log">Show the whole log</button><button class="primary" id="again">Back to the start</button></div><pre id="logbox" class="hide"></pre>`;
+    $("#log").onclick = async () => { const l = await api("GET", "/progress?log=1"); $("#logbox").textContent = l.log || ""; $("#logbox").classList.remove("hide"); $("#logbox").scrollTop = 1e9; };
+    $("#again").onclick = async () => { await api("POST", "/reset"); M = await api("GET", "/machine"); go(0); };
+    return;
+  }
+  $("#card").innerHTML = `<h1>Installing P8S OS…</h1>
+    <div class="big">${p.pct}%</div><div class="bar"><i style="width:${p.pct}%"></i></div>
+    <p class="sub">${esc(p.title || "")}</p><p class="sub">This takes about 5-15 minutes. Don't switch the computer off.</p>`;
+  timer = setTimeout(progress, 1500);
+}
+
+start().catch(e => { $("#card").innerHTML = `<div class="err">${esc(e.message)}</div>`; });
+</script>
+</body>
+</html>

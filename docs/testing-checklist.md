@@ -447,6 +447,23 @@ Needs a third always-on Linux box (a Raspberry Pi, another PC, a small VM on you
 - [ ] On the master, the Server picker → p8s-vm1 shows p8s-vm1's disks; actions there work
 - [ ] Operator account: sees the Disks list, no buttons; API changes → 403
 
+## 40. Graphical installer and pre-built p8sd (new ISO)
+
+Build a new ISO on the laptop: `sudo bash iso/build-installer.sh ~/P8SOS/dist` (now runs every unit test and builds p8sd first). Test in VirtualBox (EFI on, two disks, bridged), not on the laptop.
+
+- [ ] Boot menu shows **Install P8S OS** and **Install P8S OS (text mode, safe graphics)**
+- [ ] Install P8S OS → after ~30 s a full-screen page with the P8S header; the mouse works; steps Welcome → Disks → … → Check
+- [ ] Disks: the ISO disk is greyed out ("not offered"); a disk with data shows red HAS DATA; Look again finds a disk added while running
+- [ ] Wrong password twice / too short → message, stays on the page; Check shows the summary and the red warning for disks with data; typing `erase` (small letters) is refused
+- [ ] Type ERASE → progress bar with step names → "P8S OS is installed" → Restart now reboots
+- [ ] First start: `journalctl -u p8s-firstboot` says "pre-built on the installer ISO (no build needed)"; it is done within a few minutes; `p8sd version` and the dashboard header show the version
+- [ ] From another PC during install: `https://<VM address>:8006` → PIN page; wrong PIN refused (5 wrong → wait a minute); right PIN → same wizard. Start an install there while the screen shows the wizard: the screen's Install says one is already running
+- [ ] Text mode entry: the welcome menu shows the `https://…:8006 (PIN ……)` line; text install still works end to end
+- [ ] Make the graphical screen fail (VirtualBox: Graphics Controller = VBoxVGA, or boot with `nomodeset` added to the main entry): the text installer appears on its own
+- [ ] Failed install (e.g. remove a disk in VirtualBox mid-install): the page shows "The install stopped", the failed step, Show the whole log, Back to the start works
+- [ ] Installed system has no Firefox or cage (`dpkg -l firefox-esr` → not installed)
+- [ ] After `git pull && sudo bash update.sh` with a changed source, update.sh builds p8sd with Go as before
+
 ## Add new features here as they are built
 
 (Every new feature adds its own lines above before it counts as done.)

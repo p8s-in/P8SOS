@@ -1,0 +1,17 @@
+# The graphical installer's web page (boot entry "Install P8S OS", kernel
+# option p8s.gui): http://127.0.0.1:8099 for this screen, https://…:8006 with
+# a PIN for other computers. p8s-installer-kiosk.service shows it full screen.
+[Unit]
+Description=P8S OS graphical installer (web page)
+After=live-config.service systemd-udev-settle.service network-online.target
+Wants=systemd-udev-settle.service
+ConditionKernelCommandLine=p8s.installer
+ConditionKernelCommandLine=p8s.gui
+
+[Service]
+ExecStart=/usr/local/sbin/p8s-install --web-only
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

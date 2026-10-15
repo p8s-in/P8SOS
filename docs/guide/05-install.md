@@ -1,7 +1,9 @@
 # 5. Installing
 Summary: Every installer screen, what it creates on the disks, and installs without questions.
 
-Boot the stick (the boot menu key is usually F12, F11, F8 or Esc; pick the UEFI entry). **Install P8S OS** starts by itself after a few seconds. Use the arrow keys, Space to tick, Tab to move to OK, Enter to confirm.
+Boot the stick (the boot menu key is usually F12, F11, F8 or Esc; pick the UEFI entry). **Install P8S OS** starts the **graphical installer** by itself: a page you click through with the mouse (Next / Back), the same screens as below, a progress bar, and **Restart now** at the end. **Install P8S OS (text mode, safe graphics)** gives the text menus: arrow keys, Space to tick, Tab to OK, Enter to confirm. If the graphical screen can't start, the text menus appear by themselves.
+
+**Install from another computer:** while the installer runs, open `https://<the server's address>:8006` in a browser on the same network (accept the certificate warning) and type the 6-digit PIN shown on the server's screen (text installer: the welcome menu). Good for servers without a screen. Only one install runs at a time.
 
 | Screen | What to choose |
 | --- | --- |
@@ -15,7 +17,7 @@ Boot the stick (the boot menu key is usually F12, F11, F8 or Esc; pick the UEFI 
 | Encrypt the VM disks? | **No** for first installs. Yes encrypts VM storage; the key sits on the system disk and must be backed up. |
 | Summary | Lists what will be ERASED. Type **ERASE** to start. Nothing is written before this. |
 
-The install takes 3–10 minutes (66 steps). When it says done, remove the stick (or the ISO from the VM) and press Enter to restart.
+The install takes 3–10 minutes. When it says done, remove the stick (or the ISO from the VM) and restart. The first start then takes a few minutes: P8S OS's programs come pre-built on the ISO (no compiling); it needs internet for the VM template.
 
 **What it creates** (ZFS layouts)
 

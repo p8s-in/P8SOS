@@ -55,8 +55,16 @@ Rufus → the installer ISO → **DD Image** mode (everything on the stick is er
 
 1. Firmware setup (F2 on the ASUS laptop): **Secure Boot off** (the ZFS module isn't signed),
    **Virtualization on**. The installer says so if Secure Boot is still on.
-2. Boot the stick (Esc on the ASUS → the UEFI entry). **Install P8S OS** starts after a few seconds.
-3. The installer asks:
+2. Boot the stick (Esc on the ASUS → the UEFI entry). The boot menu has:
+   - **Install P8S OS** — the graphical installer: a page with the mouse, full screen (it starts
+     after about 30 seconds). If the screen can't start (no graphics driver), the text installer
+     takes over by itself.
+   - **Install P8S OS (text mode, safe graphics)** — the text menus (keyboard), as before.
+   - Either way, another computer on the same network can do the install in its browser:
+     `https://<address>:8006` with the 6-digit PIN the server's screen shows (text installer: on
+     the welcome menu; graphical: on the console with Ctrl+Alt+F2, `journalctl -u
+     p8s-installer-web`). Handy for a server without a screen.
+3. The installer asks (the same questions in both):
    - **Disks** — tick them with Space. Each line shows the size, model, serial number and what's on
      it now: `empty`, or `HAS DATA: 2 partition(s), ntfs DATA`. The USB stick itself and disks in
      use are not offered.
@@ -67,8 +75,10 @@ Rufus → the installer ISO → **DD Image** mode (everything on the stick is er
    - Encrypt the VM disks? (same as before: the key is on the system disk; back it up.)
 4. A summary shows everything that will be **ERASED**. If a disk isn't empty you're asked again,
    then you **type ERASE**. Nothing is written before that.
-5. 3–10 minutes. Remove the stick, Enter → restart. The first start finishes the setup like before
-   (`[P8S OS] ...` lines, internet needed) and the login screen shows the address.
+5. 3–10 minutes. Remove the stick, Enter (or **Restart now**) → restart. The first start finishes the
+   setup (`[P8S OS] ...` lines, internet needed for the Debian packages check and the VM template)
+   and the login screen shows the address. p8sd comes **pre-built on the ISO**, so this takes a few
+   minutes instead of 10–20; it is built from source only after the source changed (updates).
 
 > **The laptop (FX505GT):** the 1 TB hard disk holds your files (`p8s/`, `project/`). It shows up
 > as `HAS DATA` with its partitions — **don't tick it**. Install on the SSD only.
@@ -159,7 +169,5 @@ until the new disk has the `p8s-esp0` label: label the new partition `p8s-esp0`,
 
 ## Not yet
 
-- Text menus only (keyboard). A graphical installer with the mouse comes later.
-- p8sd is still built on the first start (needs internet, ~10 minutes); pre-built on the ISO later.
 - No ZFS encryption of the system itself (only of the VM disks), no swap on ZFS layouts.
 - Secure Boot must be off.

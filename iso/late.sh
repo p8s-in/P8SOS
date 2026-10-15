@@ -12,7 +12,7 @@ if [[ ${P8S_ENCRYPT:-0} == 1 ]] || grep -qw 'p8s.encrypt=1' /proc/cmdline 2>/dev
 cat > /etc/issue <<'EOF'
 
   P8S OS (alpha) — finishing setup on first boot.
-  This takes 10-20 minutes and needs internet. Progress is shown on screen.
+  This takes a few minutes and needs internet. Progress is shown on screen.
 
 EOF
 echo "P8S OS alpha" > /etc/p8s-release

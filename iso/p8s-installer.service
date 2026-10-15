@@ -1,10 +1,12 @@
 # The P8S OS installer on the first screen of the installer ISO (live system).
-# Only runs when the kernel was started with p8s.installer (the ISO's boot menu).
+# Only runs when the kernel was started with p8s.installer (the ISO's boot menu)
+# and not with p8s.gui (the graphical installer: p8s-installer-kiosk.service).
 [Unit]
 Description=P8S OS installer
 After=systemd-user-sessions.service live-config.service systemd-udev-settle.service
 Wants=systemd-udev-settle.service
 ConditionKernelCommandLine=p8s.installer
+ConditionKernelCommandLine=!p8s.gui
 Conflicts=getty@tty1.service
 Before=getty@tty1.service
 

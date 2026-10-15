@@ -42,7 +42,7 @@ The **classic** ISO (Debian's own installer, ext4, P8S set up on the first start
 ## 4. First boot (automatic, 10–20 min)
 
 The screen shows `[P8S OS] ...` progress lines: it finishes KVM, libvirt and ZFS setup, downloads
-the Debian template and builds p8sd. When done, the login screen says:
+the Debian template and installs p8sd (pre-built on the ISO). When done, the login screen says:
 
 ```
 P8S OS (alpha) is ready.   Host IP: 192.168.x.x
