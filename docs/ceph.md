@@ -70,6 +70,24 @@ being moved); an error means VMs on Ceph may stop. Ceph stops writing at 95 % fu
 Taking a disk out: **Remove** on its line (or `p8 ceph osd-rm ID`). Ceph first moves its data to the
 other disks; press Remove again when Ceph is healthy, and it is removed and wiped.
 
+## When Ceph doesn't answer
+
+Ceph's monitors need **more than half** of them working. With 2 monitors, one
+server off is enough to stop Ceph ("Ceph doesn't answer"); that is why 3 servers
+are recommended. If the server comes back, Ceph works again by itself. If it is
+gone for good, Server → Ceph offers (on a server that is still there):
+
+- **Keep Ceph with this server's monitor only** (`p8 ceph alone`): the other
+  monitors are taken out of Ceph's monitor list (the standard Ceph rescue) and
+  `ceph.conf` is rewritten. VMs on Ceph work again; blocks whose only copies
+  were on the gone server's disks are lost (a pool with 1 copy).
+- **Remove Ceph from this server** (`p8 ceph remove [--wipe]`): only when no VM
+  has disks on Ceph. Services stop, the configuration, keys and monitor/manager
+  data are moved to `/var/lib/ceph/p8s-removed-<time>` (not deleted), the
+  "Ceph doesn't answer" alert goes away, and Ceph can be set up again. With
+  "also wipe" (`--wipe`) the disks this server gave to Ceph are wiped too
+  (only Ceph's own volumes on them); otherwise they stay as they are.
+
 ## Limits (v1)
 
 - Snapshots of a VM with several disks are taken one disk after the other (not at the same instant).

@@ -608,6 +608,16 @@ Build a new ISO on the laptop: `sudo bash iso/build-installer.sh ~/P8SOS/dist` (
 - [ ] `sudo p8 cluster …` (and any `sudo p8 …`) works: it uses the token of the user who ran sudo
 - [ ] `p8 cluster remove n2` on an offline server with VMs → refused naming a VM; `p8 cluster remove n2 --force` → removed at once
 
+## 56. Ceph doesn't answer: rescue or remove
+
+- [ ] Ceph on 2 servers with a monitor each, one server off for good → alert "Ceph doesn't answer"; Server → Ceph opens quickly (no long wait) and shows the yellow box with both buttons
+- [ ] **Keep Ceph with this server's monitor only** → task done "monitors taken out: …"; `sudo ceph -s` answers, 1 monitor; the alert clears within a few minutes; a VM on Ceph with copies here starts
+- [ ] **Remove Ceph from this server** with a VM on Ceph → refused naming the VM
+- [ ] Remove (no VMs on Ceph) → `systemctl list-units 'ceph*'` shows nothing running; `/etc/ceph/ceph.conf` gone, files in `/var/lib/ceph/p8s-removed-…`; Server → Ceph offers "Set up Ceph" again; the alert clears
+- [ ] Remove with "also wipe" → the disk Ceph had shows as empty again (offered under "Give to Ceph" after setting Ceph up again); **never touches /dev/sda** or any disk Ceph didn't have
+- [ ] Reboot after Remove → no Ceph service starts, no errors about ceph-volume
+- [ ] `p8 ceph alone`, `p8 ceph remove [--wipe]` ask first and work the same
+
 ## Add new features here as they are built
 
 (Every new feature adds its own lines above before it counts as done.)

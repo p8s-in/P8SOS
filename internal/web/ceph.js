@@ -27,10 +27,12 @@ function cephNet(cidr){
 function cephTask(t){
   if (!t?.kind) return "";
   const what = {install: "installing Ceph", init: "setting Ceph up", mon: "adding a monitor", mgr: "adding a manager",
-    osd: "adding disk " + (t.detail || ""), "osd-remove": "taking out " + (t.detail || "")}[t.kind] || t.kind;
+    osd: "adding disk " + (t.detail || ""), "osd-remove": "taking out " + (t.detail || ""),
+    "mon-alone": "making this monitor the only one", remove: "removing Ceph from this server"}[t.kind] || t.kind;
   if (t.running) return `<div class="sub">⏳ ${esc(what)} …</div>`;
   if (t.error) return `<div class="sub" style="color:var(--bad)">✘ ${esc(what)}: ${esc(t.error)}</div>`;
   if (t.kind === "osd-remove" && t.detail && t.detail.includes("taken out")) return `<div class="sub">${esc(t.detail)}</div>`;
+  if ((t.kind === "mon-alone" || t.kind === "remove") && t.detail) return `<div class="sub" style="color:var(--ok)">✔ ${esc(what)} done — ${esc(t.detail)}</div>`;
   return `<div class="sub" style="color:var(--ok)">✔ ${esc(what)} done</div>`;
 }
 
@@ -99,12 +101,40 @@ function renderCeph(){
     pool = `<div class="sub">VM pool <span class="mono">${esc(c.pool)}</span> is ready: choose storage <b>ceph</b> when making a VM.
       VMs on Ceph move between servers without copying disks and restart on another server when theirs dies.</div>`;
   }
+  // Ceph doesn't answer (a monitor's server is gone), or the person wants it off this server
+  let repair = "";
+  const busySelf = self?.info?.task?.running ? "disabled" : "";
+  if (c.configured && c.status_error) {
+    repair = `<div class="hint" style="margin-top:8px"><b>Ceph doesn't answer.</b> Usually a server with a Ceph monitor is off or can't be reached
+      (Ceph needs more than half of its monitors). When that server comes back, Ceph works again by itself. If it is gone for good:
+      <div class="inline" style="margin-top:6px;flex-wrap:wrap">
+        ${self?.info?.mon ? `<button class="btn primary" id="cephAlone" ${busySelf} title="The other monitors are taken out of Ceph's monitor list">Keep Ceph with this server's monitor only</button>` : ""}
+        <span class="spacer"></span>
+        <label style="display:flex;gap:6px;align-items:center;font-weight:400;margin:0"><input type="checkbox" id="cephWipe" style="width:auto"> also wipe the disks this server gave to Ceph</label>
+        <button class="btn danger" id="cephRemove" ${busySelf}>Remove Ceph from this server</button></div>
+      <div class="sub">Keep: VMs on Ceph work again; blocks whose only copies were on the gone server are lost.
+        Remove: when you don't use Ceph (no VM may have disks on it); its files are put aside, not deleted, and you can set Ceph up again here.</div></div>`;
+  } else if (c.configured) {
+    repair = `<details style="margin-top:6px"><summary class="sub">Remove Ceph from this server</summary>
+      <div class="inline" style="flex-wrap:wrap"><label style="display:flex;gap:6px;align-items:center;font-weight:400;margin:0"><input type="checkbox" id="cephWipe" style="width:auto"> also wipe the disks this server gave to Ceph</label>
+      <span class="spacer"></span><button class="btn danger" id="cephRemove" ${busySelf}>Remove Ceph from this server</button></div>
+      <div class="sub">Only when no VM has disks on Ceph. With other servers in Ceph, take their disks out first (Remove on each disk).</div></details>`;
+  }
   $("#ndCeph").innerHTML = `
     <div class="sub">Storage made of the servers' own disks, shared by all of them — like Proxmox's Ceph. Needs at least 3 servers with
       an empty disk each for real safety; works with 1 for trying it out.</div>
     ${head}${adv.length ? `<ul class="sub" style="margin:6px 0">${adv.map(a => `<li>${esc(a)}</li>`).join("")}</ul>` : ""}
     <table class="snaps"><tbody>${(c.nodes || []).map(n => cephNode(c, n)).join("")}</tbody></table>
-    ${init}${pool}`;
+    ${init}${pool}${repair}`;
+  if ($("#cephAlone")) $("#cephAlone").onclick = e => {
+    if (!armed(e.target, "Sure the other server is gone for good?")) return;
+    cephDo("POST", "/ceph/mon-alone", {}, "Making this server's monitor the only one");
+  };
+  if ($("#cephRemove")) $("#cephRemove").onclick = e => {
+    const wipe = $("#cephWipe")?.checked;
+    if (!armed(e.target, wipe ? "Remove Ceph AND wipe its disks?" : "Remove Ceph from this server?")) return;
+    cephDo("POST", "/ceph/remove", {wipe}, "Removing Ceph from this server");
+  };
 
   if ($("#cephInit")) $("#cephInit").onclick = () => cephDo("POST", "/ceph/init", {network: $("#cephNet").value.trim()}, "Setting Ceph up");
   if ($("#cephPool")) $("#cephPool").onclick = async () => {

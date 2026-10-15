@@ -417,6 +417,8 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("POST /api/v1/ceph/osds", s.cephStep(ceph.ActOSD))
 	auth.HandleFunc("DELETE /api/v1/ceph/osds/{id}", s.removeCephOSD)
 	auth.HandleFunc("POST /api/v1/ceph/pool", s.createCephPool)
+	auth.HandleFunc("POST /api/v1/ceph/mon-alone", s.cephStep(ceph.ActMonAlone)) // Ceph doesn't answer: this monitor alone
+	auth.HandleFunc("POST /api/v1/ceph/remove", s.cephStep(ceph.ActRemove))      // take Ceph off a server
 	auth.HandleFunc("GET /api/v1/ceph/node", s.getCephNode)
 	auth.HandleFunc("POST /api/v1/ceph/node/config", s.setCephConfig)
 	auth.HandleFunc("POST /api/v1/ceph/node/{action}", s.cephNodeStep)

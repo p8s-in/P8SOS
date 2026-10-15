@@ -169,6 +169,17 @@ func serve(args []string) error {
 			return firewall.ApplyWith(ctx, run, vms, dcFirewall.Load()) // with the datacenter's sets, blocks and rules
 		},
 	}
+	cephMgr.InUse = func(ctx context.Context) []string { // Server → Ceph → Remove refuses while VMs use it
+		var l []string
+		if vms, err := svc.List(ctx); err == nil {
+			for _, v := range vms {
+				if v.Storage == vm.SharedStorage {
+					l = append(l, v.Name)
+				}
+			}
+		}
+		return l
+	}
 	if cfg.LANBridge != "" { // tagged VLANs on the home / datacenter network
 		svc.VLANs = &vlan.Manager{Run: run, LANBridge: cfg.LANBridge, ListFile: filepath.Join(cfg.DataDir, "vlans.list")}
 	}

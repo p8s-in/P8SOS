@@ -26,6 +26,7 @@ type NodeRequest struct {
 	Network string `json:"network,omitempty"` // init
 	Disk    string `json:"disk,omitempty"`    // osd
 	OSD     int    `json:"osd,omitempty"`     // osd-remove
+	Wipe    bool   `json:"wipe,omitempty"`    // remove: also wipe this server's Ceph disks
 }
 
 // Actions a server runs for itself (POST /ceph/node/{action}).
@@ -73,6 +74,17 @@ func (m *Manager) Do(action string, r NodeRequest) error {
 			return err
 		}
 		return m.Start(action, r.Disk, func(ctx context.Context) error { return m.CreateOSD(ctx, r.Disk) })
+	case ActMonAlone:
+		if err := m.CheckMonAlone(); err != nil {
+			return err
+		}
+		return m.Start(action, "", m.MonAlone)
+	case ActRemove:
+		if err := m.CheckRemove(context.Background()); err != nil {
+			return err
+		}
+		wipe := r.Wipe
+		return m.Start(action, "", func(ctx context.Context) error { return m.Remove(ctx, wipe) })
 	case ActOSDRemove:
 		if err := m.needConfigured(); err != nil {
 			return err
@@ -150,7 +162,13 @@ func (c *Cluster) Overview(ctx context.Context) Overview {
 	o := Overview{Installed: c.Local.Installed(), Configured: c.Local.Configured(), Pool: Pool, Nodes: []NodeView{}}
 	var bundle Bundle
 	if o.Configured {
-		_, _ = c.Local.RefreshConf(ctx)
+		// ask Ceph first: when it doesn't answer, don't wait for it twice more
+		if st, err := c.Local.Status(ctx); err != nil {
+			o.StatusError = err.Error()
+		} else {
+			o.Status = &st
+			_, _ = c.Local.RefreshConf(ctx)
+		}
 		if b, err := c.Local.Bundle(); err == nil {
 			bundle = b
 		}
@@ -182,15 +200,10 @@ func (c *Cluster) Overview(ctx context.Context) Overview {
 		}
 		o.Nodes = append(o.Nodes, v)
 	}
-	if o.Configured {
-		if st, err := c.Local.Status(ctx); err != nil {
-			o.StatusError = err.Error()
-		} else {
-			o.Status = &st
-			for _, p := range st.Pools {
-				if p.Name == Pool {
-					o.PoolReady = true
-				}
+	if o.Status != nil {
+		for _, p := range o.Status.Pools {
+			if p.Name == Pool {
+				o.PoolReady = true
 			}
 		}
 	}
@@ -206,7 +219,7 @@ func (c *Cluster) Run(ctx context.Context, node, action string, r NodeRequest) e
 	if action == ActInit && !p.Self {
 		return fmt.Errorf("%w: start Ceph on the master (this server); add the others after", ErrInvalid)
 	}
-	if action != ActInstall && action != ActInit && !c.Local.Configured() {
+	if action != ActInstall && action != ActInit && action != ActRemove && !c.Local.Configured() {
 		return fmt.Errorf("%w: set Ceph up first", ErrConflict)
 	}
 	if p.Self {

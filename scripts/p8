@@ -153,6 +153,8 @@ p8 — manage P8S OS virtual machines
   p8 ceph osd SERVER DISK          give an empty disk to Ceph (it is erased)
   p8 ceph osd-rm ID                take a disk out (run again to remove it once Ceph moved its data)
   p8 ceph pool [COPIES]            make the VM pool (then: p8 create NAME --storage ceph)
+  p8 ceph alone                    Ceph doesn't answer, a monitor's server is gone for good: keep this server's monitor only
+  p8 ceph remove [--wipe]          take Ceph off this server (no VM may use it); --wipe also wipes its Ceph disks
   p8 lan-setup                     let VMs join your home network (Ethernet only, once)
   p8 bond-setup PORT [--mode M]    add a second cable to the home network (failover; M: active-backup, 802.3ad)
   p8 ipv6 on|off|status            IPv6 for VMs on the private network
@@ -1294,7 +1296,16 @@ TXT
       pool)
         body=$(call POST /ceph/pool "$(jq -nc --argjson s "${2:-0}" '{size:$s}')") || exit 1
         green "✔ VM pool $(jq -r .pool <<<"$body"): $(jq -r .size <<<"$body") copies of every block. Use it: p8 create NAME --storage ceph" ;;
-      *) red "usage: p8 ceph [status|install|init|mon|mgr|osd|osd-rm|pool]"; exit 1 ;;
+      alone)
+        read -r -p "Make this server's monitor the only one (the other servers with monitors are gone for good)? [y/N] " a
+        [[ $a == [yY]* ]] || exit 1
+        call POST /ceph/mon-alone '{}' >/dev/null && green "✔ started (a minute; watch: p8 ceph)" ;;
+      remove)
+        w=false; [[ ${2:-} == --wipe ]] && w=true
+        read -r -p "Remove Ceph from this server$([[ $w == true ]] && echo " AND wipe its Ceph disks")? [y/N] " a
+        [[ $a == [yY]* ]] || exit 1
+        call POST /ceph/remove "$(jq -nc --argjson w "$w" '{wipe:$w}')" >/dev/null && green "✔ removing Ceph here (its files are put aside in /var/lib/ceph/p8s-removed-…; watch: p8 ceph)" ;;
+      *) red "usage: p8 ceph [status|install|init|mon|mgr|osd|osd-rm|pool|alone|remove [--wipe]]"; exit 1 ;;
     esac ;;
 
   lan-setup|lan)

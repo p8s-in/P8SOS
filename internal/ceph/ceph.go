@@ -64,6 +64,8 @@ type Manager struct {
 	Settle time.Duration
 	// Tick is the pause between checks while waiting (0 = 2 s; tests shorten it).
 	Tick time.Duration
+	// InUse lists this server's VMs with disks on Ceph (nil = none); Remove refuses while there are.
+	InUse func(ctx context.Context) []string
 
 	mu   sync.Mutex
 	task Task

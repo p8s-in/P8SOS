@@ -79,11 +79,12 @@ func (s *Server) cephStep(action string) http.HandlerFunc {
 			Node    string `json:"node"`
 			Network string `json:"network"`
 			Disk    string `json:"disk"`
+			Wipe    bool   `json:"wipe"`
 		}
 		if !decode(w, r, &req) {
 			return
 		}
-		if err := s.Ceph.Run(r.Context(), req.Node, action, ceph.NodeRequest{Network: req.Network, Disk: req.Disk}); err != nil {
+		if err := s.Ceph.Run(r.Context(), req.Node, action, ceph.NodeRequest{Network: req.Network, Disk: req.Disk, Wipe: req.Wipe}); err != nil {
 			s.cephErr(w, r, err)
 			return
 		}
