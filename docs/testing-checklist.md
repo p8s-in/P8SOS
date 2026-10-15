@@ -512,6 +512,16 @@ Build a new ISO on the laptop: `sudo bash iso/build-installer.sh ~/P8SOS/dist` (
 - [ ] Roll back to a snapshot, back up → a full one again
 - [ ] Copy off-site and fetch back (delete local, fetch, restore) → works, the chain comes along
 
+## 47. Proxmox imports: VMs with several disks, containers
+
+- [ ] A Proxmox VM with 2 disks (scsi0 + scsi1 with files) → vzdump → Import: Check shows "1 data disk(s) come along: scsi1"; the imported VM has the data disk with the files (`p8 show`)
+- [ ] A Proxmox VM with a CD-ROM (ide2) → not listed as a disk
+- [ ] A Proxmox container (Debian, unprivileged, fixed IP) → `vzdump 105 --compress zstd --mode stop` → copy to /var/lib/p8s/import → Check: "Proxmox container backup", CPUs/RAM/disk from it, the fixed-address warning
+- [ ] Import container → it appears on the Containers page, starts, gets a DHCP address, files are there; `ls -ln /var/lib/p8s/ct/NAME/root` shows ids 100000+
+- [ ] A privileged Proxmox container → warning; it still starts (unprivileged)
+- [ ] A container with a mount point (backup=1) → its files are in the container; the disk is made bigger
+- [ ] Import with a name a VM or container already has → refused
+
 ## Add new features here as they are built
 
 (Every new feature adds its own lines above before it counts as done.)

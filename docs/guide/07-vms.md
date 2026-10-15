@@ -87,7 +87,7 @@ The image must have cloud-init (all official cloud images do), so P8S can set th
 
 ## Importing VMs from other platforms
 
-**Storage → Import VMs** (admins): Proxmox backups (`.vma`, `.vma.zst`), **OVA appliances** (VMware / VirtualBox export: CPUs, RAM, firmware, network card and every disk come from it), VMware `.vmdk`, Hyper-V `.vhdx`, VirtualBox `.vdi`, or `.qcow2` / `.raw`. Upload the file (or `scp` big files to `/var/lib/p8s/import/`), click **Check** to see the VM it would make, then **Import**. Keep the original disk type and BIOS/UEFI; keep the MAC only if the old VM is gone for good.
+**Import VMs** (admins): Proxmox backups (`.vma`, `.vma.zst`; every disk comes along; container backups `vzdump-lxc-….tar.zst` become containers), **OVA appliances** (VMware / VirtualBox export: CPUs, RAM, firmware, network card and every disk come from it), VMware `.vmdk`, Hyper-V `.vhdx`, VirtualBox `.vdi`, or `.qcow2` / `.raw`. Upload the file (or `scp` big files to `/var/lib/p8s/import/`), click **Check** to see the VM it would make, then **Import**. Keep the original disk type and BIOS/UEFI; keep the MAC only if the old VM is gone for good.
 
 ## PCI and USB passthrough
 

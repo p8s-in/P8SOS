@@ -3,6 +3,7 @@ package vm
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -30,6 +31,58 @@ func (d *fileDisks) CreateDisk(ctx context.Context, vm string, gb int) (string, 
 	}
 	defer f.Close()
 	return p, f.Truncate(int64(gb) << 20) // MiB instead of GiB keeps the test small
+}
+
+func (d *fileDisks) CreateExtra(ctx context.Context, vm string, i, gb int) (string, error) {
+	if _, err := d.fakeDisks.CreateExtra(ctx, vm, i, gb); err != nil {
+		return "", err
+	}
+	p := filepath.Join(d.dir, fmt.Sprintf("%s-disk%d", vm, i))
+	f, err := os.Create(p)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	return p, f.Truncate(int64(gb) << 20)
+}
+
+func TestImportProxmoxDataDisks(t *testing.T) {
+	ctx := context.Background()
+	svc, hv, d, _ := newSvc()
+	dir := t.TempDir()
+	svc.Disks, svc.Jobs = &fileDisks{fakeDisks: d, dir: dir}, &jobs.Manager{}
+	svc.ImportDir = filepath.Join(dir, "import")
+	root := bytes.Repeat([]byte("root"), 32<<10)
+	d1 := bytes.Repeat([]byte("one!"), 16<<10)
+	d2 := bytes.Repeat([]byte("two!"), 8<<10)
+	conf := "name: db\nmemory: 2048\nscsi0: local:vm-1-disk-0,size=1G\nscsi1: local:vm-1-disk-1,size=1G\nvirtio0: local:vm-1-disk-2,size=1G\nide2: none,media=cdrom\nboot: order=scsi0;ide2\n"
+	raw := imports.BuildVMA(map[string]string{"qemu-server.conf": conf}, []string{"drive-virtio0", "drive-scsi1", "drive-scsi0"},
+		map[string][]byte{"drive-scsi0": root, "drive-scsi1": d1, "drive-virtio0": d2})
+	f := "vzdump-qemu-102-2026_10_15-12_00_00.vma"
+	if _, err := svc.SaveImport(f, bytes.NewReader(raw)); err != nil {
+		t.Fatal(err)
+	}
+	pl, err := svc.ImportPlan(f)
+	if err != nil || pl.BootDevice != "drive-scsi0" || len(pl.DataDisks) != 2 || pl.DataDisks[0].Key != "scsi1" || pl.DataDisks[1].Key != "virtio0" {
+		t.Fatalf("plan %+v %v", pl, err)
+	}
+	j, err := svc.StartImport(ctx, ImportRequest{File: f})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if j = waitJob(t, svc, j); j.State != "done" {
+		t.Fatalf("job %+v", j)
+	}
+	for file, want := range map[string][]byte{"p8s-db-disk0": root, "p8s-db-disk1": d1, "p8s-db-disk2": d2} {
+		got, _ := os.ReadFile(filepath.Join(dir, file))
+		if len(got) < len(want) || !bytes.Equal(got[:len(want)], want) {
+			t.Fatalf("%s differs", file)
+		}
+	}
+	sp, _ := virt.ParseDomainXML(hv.doms["p8s-db"])
+	if len(sp.Extra) != 2 || sp.Extra[0].Index != 1 || sp.Extra[1].Index != 2 {
+		t.Fatalf("data disks %+v", sp.Extra)
+	}
 }
 
 func TestImportProxmox(t *testing.T) {

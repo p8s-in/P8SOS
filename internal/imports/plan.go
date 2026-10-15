@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -43,10 +44,22 @@ type Plan struct {
 	Devices    []Device `json:"devices,omitempty"`
 	Format     string   `json:"format,omitempty"` // disk images: qcow2, vmdk, ...
 	// Disks of an .ova (the first is the system disk).
-	Disks      []OVADisk `json:"ova_disks,omitempty"`
-	SourceInfo string    `json:"source_info,omitempty"`
-	Config     string    `json:"config,omitempty"` // Proxmox qemu-server.conf as in the backup
-	Warnings   []string  `json:"warnings"`
+	Disks []OVADisk `json:"ova_disks,omitempty"`
+	// DataDisks: the other disks of a Proxmox VM backup, imported as data disks.
+	DataDisks  []DataDisk `json:"data_disks,omitempty"`
+	SourceInfo string     `json:"source_info,omitempty"`
+	Config     string     `json:"config,omitempty"` // Proxmox qemu-server.conf / pct.conf as in the backup
+	// Containers: the distribution Proxmox noted, and the fixed address it had.
+	CTOS     string   `json:"ct_os,omitempty"`
+	StaticIP string   `json:"static_ip,omitempty"`
+	Warnings []string `json:"warnings"`
+}
+
+// DataDisk is a data disk of a Proxmox VM backup.
+type DataDisk struct {
+	Device string `json:"device"` // stream name, e.g. drive-scsi1
+	Key    string `json:"key"`    // the Proxmox config key, e.g. scsi1
+	SizeGB int    `json:"size_gb"`
 }
 
 // OVMF_VARS_4M.fd: the size of a 4m Proxmox efidisk and of Debian's UEFI
@@ -65,6 +78,8 @@ func KindOf(name string) string {
 	switch {
 	case reVMA.MatchString(name):
 		return KindVMA
+	case isLXC(name):
+		return KindLXC
 	case reDisk.MatchString(name):
 		return KindDisk
 	case reOVA.MatchString(name):
@@ -81,7 +96,7 @@ func OpenStream(ctx context.Context, path string) (io.ReadCloser, error) {
 	}
 	var tool []string
 	switch {
-	case strings.HasSuffix(path, ".gz"):
+	case strings.HasSuffix(path, ".gz"), strings.HasSuffix(path, ".tgz"):
 		zr, err := gzip.NewReader(bufio.NewReaderSize(f, 1<<20))
 		if err != nil {
 			f.Close()
@@ -150,8 +165,10 @@ func Inspect(path string) (Plan, error) {
 		return inspectDisk(path)
 	case KindOVA:
 		return inspectOVA(path)
+	case KindLXC:
+		return inspectLXC(path)
 	}
-	return Plan{}, fmt.Errorf("%s: not a file P8S can import (.vma[.zst|.lzo|.gz], .ova, .qcow2, .vmdk, .vhd, .vhdx, .vdi, .img, .raw)", base)
+	return Plan{}, fmt.Errorf("%s: not a file P8S can import (.vma[.zst|.lzo|.gz], vzdump-lxc-….tar[.zst|.gz|.lzo], .ova, .qcow2, .vmdk, .vhd, .vhdx, .vdi, .img, .raw)", base)
 }
 
 // PlanFromVMA maps a Proxmox VM's config to P8S settings.
@@ -226,7 +243,7 @@ func PlanFromVMA(v *VMA) Plan {
 	if p.BootDevice == "" {
 		p.Warnings = append(p.Warnings, "no disk found in the backup")
 	}
-	var extra []string
+	var data []DataDisk
 	for _, d := range v.Devices {
 		switch {
 		case d.Name == p.BootDevice || d.Name == "vmstate":
@@ -239,12 +256,35 @@ func PlanFromVMA(v *VMA) Plan {
 		case d.Name == "drive-tpmstate0":
 			p.Warnings = append(p.Warnings, "the TPM state isn't carried over: BitLocker or Windows Hello may ask for the recovery key")
 		default:
-			extra = append(extra, strings.TrimPrefix(d.Name, "drive-"))
+			k := strings.TrimPrefix(d.Name, "drive-")
+			if strings.Contains(c[k], "media=cdrom") {
+				continue
+			}
+			data = append(data, DataDisk{Device: d.Name, Key: k, SizeGB: int(max((d.Size+(1<<30)-1)>>30, 1))})
 		}
 	}
-	if len(extra) > 0 {
-		p.Warnings = append(p.Warnings, "only the boot disk is imported for now; not imported: "+strings.Join(extra, ", "))
+	// in the order Proxmox lists them (scsi0, scsi1, …, virtio0, …)
+	rank := map[string]int{}
+	for i, k := range diskKeys() {
+		rank[k] = i
 	}
+	sort.SliceStable(data, func(i, j int) bool { return rank[data[i].Key] < rank[data[j].Key] })
+	if len(data) > maxDataDisks {
+		var left []string
+		for _, d := range data[maxDataDisks:] {
+			left = append(left, d.Key)
+		}
+		p.Warnings = append(p.Warnings, fmt.Sprintf("a VM can have %d data disks; not imported: %s", maxDataDisks, strings.Join(left, ", ")))
+		data = data[:maxDataDisks]
+	}
+	if len(data) > 0 {
+		var l []string
+		for _, d := range data {
+			l = append(l, fmt.Sprintf("%s (%d GB)", d.Key, d.SizeGB))
+		}
+		p.Warnings = append(p.Warnings, fmt.Sprintf("%d data disk(s) come along: %s; inside the VM they may get other device names (e.g. /dev/vdb), so mount them by UUID or label", len(data), strings.Join(l, ", ")))
+	}
+	p.DataDisks = data
 	// network card: model and MAC of net0
 	p.NICModel = "virtio"
 	if n := c["net0"]; n != "" {
@@ -266,6 +306,9 @@ func PlanFromVMA(v *VMA) Plan {
 	}
 	return p
 }
+
+// maxDataDisks matches virt.MaxExtraDisks.
+const maxDataDisks = 8
 
 // NICModels P8S can give a VM.
 var NICModels = map[string]bool{"virtio": true, "e1000e": true, "e1000": true, "rtl8139": true, "vmxnet3": true}

@@ -25,7 +25,7 @@ import (
 type ImportFile struct {
 	Name     string `json:"name"`
 	Bytes    int64  `json:"bytes"`
-	Kind     string `json:"kind"` // proxmox-vma | disk-image
+	Kind     string `json:"kind"` // proxmox-vma | proxmox-lxc | ova | disk-image
 	Modified string `json:"modified"`
 }
 
@@ -54,9 +54,22 @@ func (s *Service) importPath(name string) (string, error) {
 		return "", fmt.Errorf("%w: imports are not set up on this host", ErrConflict)
 	}
 	if !reImportFile.MatchString(name) || strings.Contains(name, "..") || imports.KindOf(name) == "" {
-		return "", fmt.Errorf("%w: %q isn't an importable file name (.vma[.zst|.lzo|.gz], .ova, .qcow2, .vmdk, .vhd, .vhdx, .vdi, .img, .raw)", ErrInvalid, name)
+		return "", fmt.Errorf("%w: %q isn't an importable file name (.vma[.zst|.lzo|.gz], vzdump-lxc-….tar[.zst|.gz|.lzo], .ova, .qcow2, .vmdk, .vhd, .vhdx, .vdi, .img, .raw)", ErrInvalid, name)
 	}
 	return filepath.Join(s.ImportDir, name), nil
+}
+
+// ImportFilePath is where a file of the import folder is (for importing
+// container backups, which the container service does).
+func (s *Service) ImportFilePath(name string) (string, error) {
+	p, err := s.importPath(name)
+	if err != nil {
+		return "", err
+	}
+	if _, err := os.Stat(p); err != nil {
+		return "", fmt.Errorf("%w: no file %q in the import folder", ErrNotFound, name)
+	}
+	return p, nil
 }
 
 // ListImports lists the import folder.
@@ -175,6 +188,9 @@ func (s *Service) StartImport(ctx context.Context, r ImportRequest) (Job, error)
 	if err != nil {
 		return Job{}, err
 	}
+	if pl.Kind == imports.KindLXC {
+		return Job{}, fmt.Errorf("%w: %s is a container backup; it is imported as a container", ErrInvalid, r.File)
+	}
 	if pl.Kind == imports.KindVMA && pl.BootDevice == "" {
 		return Job{}, fmt.Errorf("%w: the backup has no disk to import", ErrInvalid)
 	}
@@ -208,6 +224,16 @@ func (s *Service) StartImport(ctx context.Context, r ImportRequest) (Job, error)
 	}
 	if diskGB > s.Limits.MaxDiskGB {
 		errs = append(errs, fmt.Sprintf("the disk (%d GB) is larger than this host allows (%d GB)", diskGB, s.Limits.MaxDiskGB))
+	}
+	for _, d := range pl.DataDisks {
+		if d.SizeGB > s.Limits.MaxDiskGB {
+			errs = append(errs, fmt.Sprintf("data disk %s (%d GB) is larger than this host allows (%d GB)", d.Key, d.SizeGB, s.Limits.MaxDiskGB))
+		}
+	}
+	if len(pl.DataDisks) > 0 {
+		if _, ok := s.Disks.(extraDisks); !ok {
+			errs = append(errs, "this server can't make data disks")
+		}
 	}
 	switch pl.OSType {
 	case "linux", "windows":
@@ -311,11 +337,19 @@ func (s *Service) runImport(ctx context.Context, path string, pl imports.Plan, d
 			})
 		}
 	case imports.KindVMA:
-		nv, err := s.fillFromVMA(ctx, path, pl, disk, p)
+		nv, ex, err := s.fillFromVMA(ctx, path, pl, dom, disk, p)
+		for _, e := range ex {
+			i := e.Index
+			undo = append(undo, func() {
+				if ed, ok := s.Disks.(extraDisks); ok {
+					s.logErr("rollback imported disk", ed.DestroyExtra(bg, dom, i))
+				}
+			})
+		}
 		if err != nil {
 			return fail(err)
 		}
-		nvram = nv
+		nvram, extra = nv, ex
 	default:
 		p("copying the disk image")
 		last := -10.0
@@ -416,21 +450,45 @@ func (s *Service) fillFromOVA(ctx context.Context, path string, pl imports.Plan,
 	return extra, nil
 }
 
-func (s *Service) fillFromVMA(ctx context.Context, path string, pl imports.Plan, disk string, p jobs.Progress) ([]byte, error) {
+// fillFromVMA writes a Proxmox backup's boot disk onto disk and its other
+// disks onto new data disks (made here). Returns the UEFI variables (if
+// carried over) and the data disks made (also on failure, for the rollback).
+func (s *Service) fillFromVMA(ctx context.Context, path string, pl imports.Plan, dom, disk string, p jobs.Progress) ([]byte, []virt.ExtraDisk, error) {
 	rc, err := imports.OpenStream(ctx, path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer rc.Close()
 	v, err := imports.OpenVMA(rc)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	f, err := os.OpenFile(disk, os.O_WRONLY, 0)
 	if err != nil {
-		return nil, fmt.Errorf("open the new disk: %w", err)
+		return nil, nil, fmt.Errorf("open the new disk: %w", err)
 	}
 	defer f.Close()
+	files := []*os.File{f}
+	defer func() {
+		for _, x := range files[1:] {
+			x.Close()
+		}
+	}()
+	var extra []virt.ExtraDisk
+	dataIdx := map[string]int{}
+	for k, d := range pl.DataDisks {
+		ed, ok := s.Disks.(extraDisks)
+		if !ok {
+			return nil, extra, errors.New("this server can't make data disks")
+		}
+		p(fmt.Sprintf("creating data disk %d (%s, %d GB)", k+1, d.Key, d.SizeGB))
+		dev, err := ed.CreateExtra(ctx, dom, k+1, d.SizeGB)
+		if err != nil {
+			return nil, extra, err
+		}
+		extra = append(extra, virt.ExtraDisk{Index: k + 1, Path: dev, SizeGB: d.SizeGB})
+		dataIdx[d.Device] = k + 1
+	}
 	targets := map[int]io.WriterAt{}
 	var efi *memWriter
 	var total int64
@@ -442,6 +500,14 @@ func (s *Service) fillFromVMA(ctx context.Context, path string, pl imports.Plan,
 		case d.Name == "drive-efidisk0" && pl.EFIVars:
 			efi = &memWriter{b: make([]byte, d.Size)}
 			targets[d.ID] = efi
+		case dataIdx[d.Name] > 0:
+			x, err := os.OpenFile(extra[dataIdx[d.Name]-1].Path, os.O_WRONLY, 0)
+			if err != nil {
+				return nil, extra, fmt.Errorf("open data disk %s: %w", d.Name, err)
+			}
+			files = append(files, x)
+			targets[d.ID] = x
+			total += d.Size
 		}
 	}
 	last := -10.0
@@ -451,20 +517,22 @@ func (s *Service) fillFromVMA(ctx context.Context, path string, pl imports.Plan,
 			pct := float64(done) * 100 / float64(total)
 			if pct-last >= 2 {
 				last = pct
-				p(fmt.Sprintf("writing the disk: %.0f%%", min(pct, 100)))
+				p(fmt.Sprintf("writing the disks: %.0f%%", min(pct, 100)))
 			}
 		}
 	})
 	if err != nil {
-		return nil, err
+		return nil, extra, err
 	}
-	if err := f.Sync(); err != nil {
-		return nil, err
+	for _, x := range files {
+		if err := x.Sync(); err != nil {
+			return nil, extra, err
+		}
 	}
 	if efi != nil {
-		return efi.b, nil
+		return efi.b, extra, nil
 	}
-	return nil, nil
+	return nil, extra, nil
 }
 
 type memWriter struct{ b []byte }
