@@ -493,6 +493,15 @@ func (z *ZFS) cephSnapshots(ctx context.Context, vm string) ([]Snapshot, error) 
 func (z *ZFS) cephRollback(ctx context.Context, vm, name string, destroyNewer bool) error {
 	r := z.Ceph
 	imgs := z.cephImages(ctx, vm)
+	// the kept backup snapshot is newer: the next backup is then a full one
+	for _, img := range imgs {
+		l, _ := r.snaps(ctx, img)
+		for _, s := range l {
+			if strings.HasPrefix(s.Name, "p8s-backup-") {
+				_, _ = r.rbd(ctx, "snap", "rm", "--no-progress", r.spec(img)+"@"+s.Name)
+			}
+		}
+	}
 	if destroyNewer { // same rule as on ZFS: later snapshots go
 		all, err := z.cephSnapshots(ctx, vm)
 		if err != nil {

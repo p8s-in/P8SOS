@@ -588,7 +588,7 @@ func (m *Manager) remote(ctx context.Context, b Backend, prefix string) ([]Remot
 			continue
 		}
 		r := Remote{Kind: parts[0], Guest: guest, ID: id, meta: o.Key}
-		for _, ext := range []string{".zfs.zst", ".zfs.gz"} {
+		for _, ext := range []string{".zfs.zst", ".zfs.gz", ".raw.zst", ".raw.gz", ".rdiff.zst", ".rdiff.gz"} {
 			for _, enc := range []string{"", encExt} {
 				k := join(prefix, parts[0], guest, guest+"-"+id+ext+enc)
 				if d, ok := files[k]; ok {

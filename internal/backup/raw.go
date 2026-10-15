@@ -15,12 +15,16 @@ import (
 // stored compressed; restoring writes the image onto a new or existing disk.
 
 // SaveRaw stores m's disks: src(i) is the command that writes disk i
-// (0 = root) to stdout. sizes are the disks' exact sizes.
+// (0 = root) to stdout. sizes are the disks' exact sizes. With m.Base set,
+// src writes rbd diffs since that backup (rbd export-diff) instead of images.
 func (s *Store) SaveRaw(ctx context.Context, m Meta, sizes map[int]int64, src func(ctx context.Context, i int) *exec.Cmd) (Meta, error) {
 	if !reVM.MatchString(m.VM) || !reID.MatchString(m.ID) {
 		return Meta{}, fmt.Errorf("bad backup name %q/%q", m.VM, m.ID)
 	}
-	m.Format, m.Base, m.BaseSnap = FormatRaw, "", ""
+	m.Format, m.BaseSnap = FormatRaw, ""
+	if m.Base != "" && !reID.MatchString(m.Base) {
+		return Meta{}, fmt.Errorf("bad base backup %q", m.Base)
+	}
 	m.Compression = s.compressor()
 	_, metaPath := s.paths(m.VM, m.ID, m.Compression)
 	if err := os.MkdirAll(filepath.Dir(metaPath), 0o700); err != nil {
@@ -91,18 +95,56 @@ func compArgs(comp string) []string {
 }
 
 // RestoreRaw writes a raw backup's disks onto devices (disk index → block
-// device of at least the disk's size; it should read as zeros or be
-// overwritten completely: zero blocks are skipped).
+// device of at least the disk's size; it is overwritten completely). An
+// incremental one is restored with the backups it builds on: the full image
+// first, then each one's changes.
 func (s *Store) RestoreRaw(ctx context.Context, m Meta, devs map[int]string) error {
 	if m.Format != FormatRaw {
 		return fmt.Errorf("backup %s isn't a disk-image backup", m.ID)
 	}
+	chain, err := s.Chain(m)
+	if err != nil {
+		return err
+	}
 	for i, dev := range devs {
-		file := s.rawPath(m, i)
-		// conv=sparse would leave old data in zero blocks of a reused disk; write everything
-		dd := s.cmd(ctx, "dd", "of="+dev, "bs=4M", "iflag=fullblock", "conv=fsync,notrunc", "status=none")
-		if err := pipe(s.cmd(ctx, m.Compression, "-dc", file), dd, nil, io.Discard); err != nil {
+		if err := s.writeRawChain(ctx, chain, i, dev, false); err != nil {
 			return fmt.Errorf("disk %d: %w", i, err)
+		}
+	}
+	return nil
+}
+
+// writeRawChain writes disk i of a chain of raw backups onto path. sparse:
+// path is a new file (zero blocks are skipped, the file gets the disk's size).
+func (s *Store) writeRawChain(ctx context.Context, chain []Meta, i int, path string, sparse bool) error {
+	full := chain[0]
+	if full.Base != "" {
+		return fmt.Errorf("backup %s isn't a full backup", full.ID)
+	}
+	conv := "conv=fsync,notrunc" // a reused disk: write everything (zero blocks too)
+	if sparse {
+		conv = "conv=sparse"
+	}
+	dd := s.cmd(ctx, "dd", "of="+path, "bs=4M", "iflag=fullblock", conv, "status=none")
+	if err := pipe(s.cmd(ctx, full.Compression, "-dc", s.rawPath(full, i)), dd, nil, io.Discard); err != nil {
+		return err
+	}
+	if sparse {
+		if n := full.Sizes()[i]; n > 0 {
+			if err := os.Truncate(path, n); err != nil {
+				return err
+			}
+		}
+	} else if last := chain[len(chain)-1].Sizes()[i]; len(chain) > 1 && last > full.Sizes()[i] {
+		// the disk grew since the full backup: the new part starts as zeros
+		// (the diffs only hold what was written there)
+		if err := zeroRange(path, full.Sizes()[i], last-full.Sizes()[i]); err != nil {
+			return err
+		}
+	}
+	for _, b := range chain[1:] {
+		if _, err := s.applyDiffFile(ctx, b, s.rawPath(b, i), path, sparse); err != nil {
+			return fmt.Errorf("changes of backup %s: %w", b.ID, err)
 		}
 	}
 	return nil
@@ -121,19 +163,39 @@ type counter struct{ n int64 }
 
 func (c *counter) Write(p []byte) (int, error) { c.n += int64(len(p)); return len(p), nil }
 
-// verifyRaw decompresses every disk and checks it is the full size.
+// verifyRaw decompresses every disk and checks it is the full size; for an
+// incremental one, every diff of its chain is read through to its end and
+// must lead to the disk's size.
 func (s *Store) verifyRaw(ctx context.Context, m Meta) error {
+	chain, err := s.Chain(m)
+	if err != nil {
+		return err
+	}
 	for i, want := range m.Sizes() {
+		full := chain[0]
 		c := &counter{}
-		cmd := s.cmd(ctx, m.Compression, "-dc", s.rawPath(m, i))
+		cmd := s.cmd(ctx, full.Compression, "-dc", s.rawPath(full, i))
 		cmd.Stdout = c
 		var eb stringsBuilder
 		cmd.Stderr = &eb
 		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("disk %d: damaged backup file: %v %s", i, err, eb.String())
+			return fmt.Errorf("disk %d: damaged backup file %s: %v %s", i, full.ID, err, eb.String())
 		}
-		if want > 0 && c.n != want {
-			return fmt.Errorf("disk %d: %d bytes in the backup, the disk had %d", i, c.n, want)
+		size := c.n
+		if fw := full.Sizes()[i]; fw > 0 && c.n != fw {
+			return fmt.Errorf("disk %d: %d bytes in backup %s, the disk had %d", i, c.n, full.ID, fw)
+		}
+		for _, b := range chain[1:] {
+			info, err := s.applyDiffFile(ctx, b, s.rawPath(b, i), "", false)
+			if err != nil {
+				return fmt.Errorf("disk %d, backup %s: %w", i, b.ID, err)
+			}
+			if info.Size >= 0 {
+				size = info.Size
+			}
+		}
+		if want > 0 && size != want {
+			return fmt.Errorf("disk %d: the backup leads to %d bytes, the disk had %d", i, size, want)
 		}
 	}
 	return nil
@@ -159,11 +221,33 @@ func (s *Store) ReceiveDisk(ctx context.Context, m Meta, i int, ds string) error
 	return s.receiveChain(ctx, chain, i, ds, []string{"volmode=dev", "readonly=on"})
 }
 
-// RawToFile writes disk i of a raw backup into a sparse file (for browsing).
+// RawToFile writes disk i of a raw backup (with the backups it builds on)
+// into a new sparse file (for browsing).
 func (s *Store) RawToFile(ctx context.Context, m Meta, i int, path string) error {
-	dd := s.cmd(ctx, "dd", "of="+path, "bs=4M", "iflag=fullblock", "conv=sparse", "status=none")
-	if err := pipe(s.cmd(ctx, m.Compression, "-dc", s.rawPath(m, i)), dd, nil, io.Discard); err != nil {
+	chain, err := s.Chain(m)
+	if err != nil {
+		return err
+	}
+	if err := s.writeRawChain(ctx, chain, i, path, true); err != nil {
 		return fmt.Errorf("disk %d: %w", i, err)
 	}
 	return nil
+}
+
+// zeroRange writes zeros over n bytes of path from off.
+func zeroRange(path string, off, n int64) error {
+	f, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		return err
+	}
+	zeros := make([]byte, 1<<20)
+	for n > 0 {
+		k := min(n, int64(len(zeros)))
+		if _, err := f.WriteAt(zeros[:k], off); err != nil {
+			f.Close()
+			return err
+		}
+		off, n = off+k, n-k
+	}
+	return f.Close()
 }

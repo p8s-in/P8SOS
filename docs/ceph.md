@@ -52,7 +52,7 @@ p8 create web1 --storage ceph
 | Move to another server (shut down) | instant: no disk is copied |
 | Move while running | only the memory moves |
 | High availability | starts from the same disk on another server; extra disks included |
-| Backups | yes: whole disk images (`rbd export` of a snapshot), always full; restore over the VM, or as a new VM (on Ceph, or local when this server has no Ceph) |
+| Backups | yes: a whole disk image (`rbd export`) first, then only the changes since the previous backup (`rbd export-diff`; its snapshot stays on the images; a full one every 8th time or after a rollback); restore over the VM, or as a new VM (on Ceph, or local when this server has no Ceph) |
 | Move its disks to local ZFS (or back) | Hardware → Disk storage (VM shut down) |
 
 How it works: each VM disk is an RBD image `<vm>-diskN` in the pool, opened as a block device

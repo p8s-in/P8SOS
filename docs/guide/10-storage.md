@@ -58,7 +58,7 @@ p8 ceph pool
 p8 create web1 --storage ceph
 ```
 
-Ceph VMs support snapshots, resize, extra disks, clones, instant moves and HA from the same disk. Backups work too (whole disk images, always full). Not yet: making templates from them. A disk is never deleted while another server has it open. Use a separate 10 GbE network if you can.
+Ceph VMs support snapshots, resize, extra disks, clones, instant moves and HA from the same disk. Backups work too (a full disk image, then only the changes). Templates can be made from them. A disk is never deleted while another server has it open. Use a separate 10 GbE network if you can.
 
 ## Moving a VM's disks to another storage
 

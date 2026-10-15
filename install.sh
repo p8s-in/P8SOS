@@ -171,7 +171,10 @@ else
   fi
   ok "Go $("$GO" env GOVERSION)"
   export PATH=$(dirname "$GO"):$PATH GOCACHE=/root/.cache/go-build GOFLAGS=-buildvcs=false
-  (cd "$REPO" && go test ./... >/dev/null) || die "unit tests failed: cd $REPO && go test ./..."
+  if ! (cd "$REPO" && go test ./... >/tmp/p8s-tests.out 2>&1); then
+    { echo "--- unit test failures ---"; grep -v -E '^ok|no test files' /tmp/p8s-tests.out; } | tee -a "$LOG" | tail -60
+    die "unit tests failed (above; also in the log): cd $REPO && go test ./..."
+  fi
   ok "unit tests pass"
   V=$(tr -d ' \r\n' < "$REPO/VERSION" 2>/dev/null || true)  # release bundles carry their version
   (cd "$REPO" && make -s install ${V:+VERSION=$V} >/dev/null)

@@ -43,7 +43,8 @@ type Meta struct {
 	Compression string `json:"compression"` // zstd or gzip
 	Consistent  bool   `json:"consistent"`  // guest filesystems were frozen (or the VM was off)
 	// Format "" = ZFS send streams (VMs on ZFS, can build on each other);
-	// "raw" = whole disk images (VMs on Ceph: rbd export), always full.
+	// "raw" = disk images of VMs on Ceph: whole (rbd export) or, with Base,
+	// the changes since Base (rbd export-diff).
 	Format string `json:"format,omitempty"`
 	// ImageBytes is the root disk's exact size (raw backups: the restored disk is made this big).
 	ImageBytes int64  `json:"image_bytes,omitempty"`
@@ -182,9 +183,13 @@ func (s *Store) ExtraFile(m Meta, i int) string {
 const FormatRaw = "raw"
 
 func (s *Store) rawPath(m Meta, i int) string {
-	e := ".raw.zst"
+	kind := ".raw" // whole image
+	if m.Base != "" {
+		kind = ".rdiff" // rbd export-diff since Base
+	}
+	e := kind + ".zst"
 	if m.Compression == "gzip" {
-		e = ".raw.gz"
+		e = kind + ".gz"
 	}
 	if i == 0 {
 		return filepath.Join(s.Dir, m.VM, m.VM+"-"+m.ID+e)

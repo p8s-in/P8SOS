@@ -502,6 +502,16 @@ Build a new ISO on the laptop: `sudo bash iso/build-installer.sh ~/P8SOS/dist` (
 - [ ] Network `vnet:NAME`: two containers (or a container and a VM) on different servers ping each other; `ip link` in the container shows mtu 1230
 - [ ] Auditor accounts can't use the move or cluster ct endpoints
 
+## 46. Incremental backups of Ceph VMs
+
+- [ ] A VM on Ceph: Back up → "N disk image(s) from Ceph"; `rbd snap ls p8s-vms/p8s-NAME-disk0` shows one `p8s-backup-…` snapshot
+- [ ] Write a file in the VM, back up again → "changes since …", much smaller; the backup list says "changes since"; still only the newest snapshot on the image
+- [ ] Restore the newest one as a new VM (on Ceph, and on local) → boots, the file is there; restore over the VM (stopped) → same
+- [ ] Restore test (Verify) on the incremental one passes; Browse files of it works
+- [ ] Deleting the full backup while newer ones build on it → refused
+- [ ] Roll back to a snapshot, back up → a full one again
+- [ ] Copy off-site and fetch back (delete local, fetch, restore) → works, the chain comes along
+
 ## Add new features here as they are built
 
 (Every new feature adds its own lines above before it counts as done.)

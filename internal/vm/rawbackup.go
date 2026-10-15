@@ -10,8 +10,10 @@ import (
 )
 
 // Backups of VMs on Ceph: Ceph snapshots of every image, exported whole
-// (rbd export) into compressed disk-image backups. They restore onto any
-// storage — Ceph again, or this server's ZFS pool.
+// (rbd export) into compressed disk-image backups — or, when the previous
+// backup's snapshot is still on the images, only the changes since it
+// (rbd export-diff), like ZFS backups. They restore onto any storage — Ceph
+// again, or this server's ZFS pool.
 
 // imageDisks is what raw backups need from the disk backend (storage.ZFS).
 type imageDisks interface {
@@ -49,6 +51,7 @@ func (s *Service) runCephBackup(ctx context.Context, name string, keep int, p jo
 		unlock()
 		return "", err
 	}
+	base, baseSnap, prevSnap := s.backupBase(ctx, dom, name, sp, true)
 	consistent := v.State == virt.Stopped
 	if v.State == virt.Running {
 		consistent = s.HV.FSFreeze(ctx, dom) == nil
@@ -61,7 +64,13 @@ func (s *Service) runCephBackup(ctx context.Context, name string, keep int, p jo
 	if err != nil {
 		return "", err
 	}
-	defer func() { s.logErr("remove backup snapshot", sd.DestroySnapshot(context.WithoutCancel(ctx), dom, snap)) }()
+	// the newest backup's snapshot stays: the next backup copies only the changes
+	keepSnap := false
+	defer func() {
+		if !keepSnap {
+			s.logErr("remove backup snapshot", sd.DestroySnapshot(context.WithoutCancel(ctx), dom, snap))
+		}
+	}()
 	idx := []int{0}
 	for _, e := range sp.Extra {
 		idx = append(idx, e.Index)
@@ -74,19 +83,37 @@ func (s *Service) runCephBackup(ctx context.Context, name string, keep int, p jo
 		}
 		sizes[i] = n
 	}
-	p(fmt.Sprintf("copying %d disk image(s) from Ceph", len(idx)))
+	if base != "" {
+		p(fmt.Sprintf("copying what changed since backup %s (%d disk(s) on Ceph)", base, len(idx)))
+	} else {
+		p(fmt.Sprintf("copying %d disk image(s) from Ceph", len(idx)))
+	}
 	m, err := s.Backups.SaveRaw(ctx, Backup{
 		ID: bid, VM: name, Template: v.Template, User: v.User, Network: v.Network, VLAN: v.VLAN, OSType: v.OSType,
 		VCPUs: v.VCPUs, MemoryMiB: v.MemoryMiB, DiskGB: v.DiskGB, Consistent: consistent, Owner: v.Owner,
 		Pool: poolOf(v), PublicIP: publicIPOf(v),
 		DiskBus: sp.DiskBus, NICModel: sp.NICModel, Firmware: sp.Firmware, Extra: backupExtras(sp),
+		Base: base,
 	}, sizes, func(ctx context.Context, i int) *exec.Cmd {
+		if base != "" {
+			return imageCmd(ctx, "rbd", "export-diff", "--no-progress", "--from-snap", baseSnap, id.DiskDataset(dom, i)+"@"+snap, "-")
+		}
 		return imageCmd(ctx, "rbd", "export", "--no-progress", id.DiskDataset(dom, i)+"@"+snap, "-")
 	})
 	if err != nil {
 		return "", err
 	}
-	msg := fmt.Sprintf("backup %s of %s saved (%d disk image(s) from Ceph, %s)", m.ID, name, len(idx), humanBytes(m.TotalBytes()))
+	keepSnap = true
+	if prevSnap != "" { // only the newest backup's snapshot is kept
+		if sc, ok := s.Disks.(snapChecker); ok && sc.HasSnapshot(ctx, dom, prevSnap) {
+			s.logErr("remove previous backup snapshot", sd.DestroySnapshot(context.WithoutCancel(ctx), dom, prevSnap))
+		}
+	}
+	kind := fmt.Sprintf("%d disk image(s) from Ceph", len(idx))
+	if base != "" {
+		kind = fmt.Sprintf("changes since %s, %d disk(s) on Ceph", base, len(idx))
+	}
+	msg := fmt.Sprintf("backup %s of %s saved (%s, %s)", m.ID, name, kind, humanBytes(m.TotalBytes()))
 	if keep > 0 {
 		if n, err := s.Backups.Prune(name, keep); err != nil {
 			s.logErr("prune backups", err)

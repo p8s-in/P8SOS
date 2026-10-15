@@ -104,7 +104,7 @@ func (s *Service) runBackup(ctx context.Context, name string, keep int, p jobs.P
 		unlock()
 		return "", err
 	}
-	base, baseSnap, prevSnap := s.backupBase(ctx, dom, name, sp)
+	base, baseSnap, prevSnap := s.backupBase(ctx, dom, name, sp, false)
 	consistent := v.State == virt.Stopped
 	if v.State == virt.Running {
 		consistent = s.HV.FSFreeze(ctx, dom) == nil // thawed right after the snapshot below
@@ -191,7 +191,8 @@ type snapChecker interface {
 // backupBase picks the backup the next one can build on ("" = make a full
 // one): the newest backup, if its snapshot is still on every disk, it has the
 // same disks and its chain isn't too long yet.
-func (s *Service) backupBase(ctx context.Context, dom, name string, sp virt.Spec) (base, baseSnap, prevSnap string) {
+// raw: for a VM on Ceph (the base must be a disk-image backup too).
+func (s *Service) backupBase(ctx context.Context, dom, name string, sp virt.Spec, raw bool) (base, baseSnap, prevSnap string) {
 	sc, ok := s.Disks.(snapChecker)
 	if !ok {
 		return "", "", ""
@@ -203,7 +204,8 @@ func (s *Service) backupBase(ctx context.Context, dom, name string, sp virt.Spec
 	prev := l[0]
 	prevSnap = backupSnapPrefix + prev.ID
 	chain, err := s.Backups.Chain(prev)
-	if err != nil || len(chain) >= FullEvery || !sameDisks(prev.Extra, sp.Extra) || !sc.HasSnapshot(ctx, dom, prevSnap) {
+	if err != nil || len(chain) >= FullEvery || (prev.Format == backup.FormatRaw) != raw ||
+		!sameDisks(prev.Extra, sp.Extra) || !sc.HasSnapshot(ctx, dom, prevSnap) {
 		return "", "", prevSnap
 	}
 	return prev.ID, prevSnap, prevSnap
