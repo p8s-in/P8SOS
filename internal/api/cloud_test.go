@@ -130,6 +130,7 @@ func TestCloud(t *testing.T) {
 		_ = os.MkdirAll(filepath.Join(dir, "ct", "ct1"), 0o755)
 		s.CTs = &ct.Service{Run: run, Pool: "tank", MountDir: filepath.Join(dir, "ct"), LXCDir: filepath.Join(dir, "lxc"),
 			MetaFile: filepath.Join(dir, "containers.json"), Bridge: "virbr0", Chown: func(string, int, int) error { return nil }}
+		t.Cleanup(s.CTs.(*ct.Service).Wait)
 	})
 
 	// sign-up is closed until an admin exists and opens it

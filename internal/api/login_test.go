@@ -19,6 +19,7 @@ func TestLogins(t *testing.T) {
 	}}
 	cts := &ct.Service{Run: run, Pool: "tank", MountDir: filepath.Join(dir, "ct"), LXCDir: filepath.Join(dir, "lxc"),
 		MetaFile: filepath.Join(dir, "containers.json"), Bridge: "virbr0", Chown: func(string, int, int) error { return nil }}
+	t.Cleanup(cts.Wait) // background first-boot setup, before the temp dir goes
 	_ = os.MkdirAll(filepath.Join(dir, "ct", "c1", "etc"), 0o755)
 	_ = os.WriteFile(filepath.Join(dir, "ct", "c1", "etc/shadow"), []byte("root:*:19000:0:99999:7:::\n"), 0o640)
 	store := &creds.Store{File: filepath.Join(dir, "credentials.json")}

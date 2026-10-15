@@ -128,6 +128,7 @@ type Stdin func(ctx context.Context, input string, name string, args ...string) 
 
 // Service manages containers.
 type Service struct {
+	bg        sync.WaitGroup // first-boot setups running in the background
 	Run       execx.Runner
 	Stdin     Stdin
 	Pool      string // e.g. "tank"

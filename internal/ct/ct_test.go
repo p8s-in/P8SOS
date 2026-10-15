@@ -31,6 +31,7 @@ func newSvc(t *testing.T) (*Service, *testfake.Runner) {
 	_ = os.WriteFile(filepath.Join(root, "etc/shadow"), []byte("root:*:19000:0:99999:7:::\nbin:*:19000:0:99999:7:::\n"), 0o640)
 	_ = os.WriteFile(filepath.Join(root, "etc/hosts"), []byte("127.0.0.1 localhost\n127.0.1.1 LXC_NAME\n"), 0o644)
 	_ = os.WriteFile(filepath.Join(root, "etc/hostname"), []byte("LXC_NAME\n"), 0o644)
+	t.Cleanup(s.Wait) // before the temp dir is removed (cleanups run last-in first-out)
 	return s, run
 }
 

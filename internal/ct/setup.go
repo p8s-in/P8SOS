@@ -171,9 +171,14 @@ func (s *Service) SetupSSH(ctx context.Context, name string) (string, error) {
 	return string(out), nil
 }
 
+// Wait waits for background work (first-boot setup) to finish.
+func (s *Service) Wait() { s.bg.Wait() }
+
 // firstBoot installs SSH in the background after the first start.
 func (s *Service) firstBoot(name string) {
+	s.bg.Add(1)
 	go func() {
+		defer s.bg.Done()
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 		defer cancel()
 		_, _ = s.SetupSSH(ctx, name)

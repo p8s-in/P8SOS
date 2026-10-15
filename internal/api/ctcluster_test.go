@@ -25,6 +25,7 @@ func clusterCTs(t *testing.T, templates string) (*ct.Service, *testfake.Runner, 
 	}}
 	s := &ct.Service{Run: run, Pool: "tank", MountDir: filepath.Join(dir, "ct"), LXCDir: filepath.Join(dir, "lxc"),
 		MetaFile: filepath.Join(dir, "containers.json"), Bridge: "virbr0", Chown: func(string, int, int) error { return nil }}
+	t.Cleanup(s.Wait) // background first-boot setup, before the temp dir goes
 	for _, n := range []string{"c1", "c2"} {
 		_ = os.MkdirAll(filepath.Join(dir, "ct", n), 0o755)
 	}
