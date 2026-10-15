@@ -153,3 +153,22 @@ func (c *VMs) DeleteTemplate(ctx context.Context, name string) error {
 	}
 	return t.DeleteTemplate(ctx, name)
 }
+
+type unlinker interface {
+	StartUnlink(ctx context.Context, name string) (vm.Job, error)
+}
+
+// StartUnlink makes a linked clone independent, on the server that has it.
+func (c *VMs) StartUnlink(ctx context.Context, name string) (vm.Job, error) {
+	u, ok := c.Local.(unlinker)
+	if !ok {
+		return vm.Job{}, errNoTemplates
+	}
+	n, remote := c.locate(ctx, name)
+	if !remote {
+		return u.StartUnlink(ctx, name)
+	}
+	var j vm.Job
+	err := c.call(ctx, n, "POST", vpath(name, "/unlink"), nil, &j)
+	return j, err
+}

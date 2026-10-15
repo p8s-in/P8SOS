@@ -112,10 +112,14 @@ type Service struct {
 type Limits struct{ MaxVCPUs, MaxMemoryMiB, MaxDiskGB int }
 
 type VM struct {
-	Name   string     `json:"name"`
-	Node   string     `json:"node,omitempty"`    // server it runs on (clusters)
-	NodeID string     `json:"node_id,omitempty"` // n1 = master
-	State  virt.State `json:"state"`
+	Name string `json:"name"`
+	// LinkedTo: this VM is a linked clone of that VM (shares its disk blocks);
+	// LinkedClones: VMs that are linked clones of this one. Only in Get.
+	LinkedTo     string     `json:"linked_to,omitempty"`
+	LinkedClones []string   `json:"linked_clones,omitempty"`
+	Node         string     `json:"node,omitempty"`    // server it runs on (clusters)
+	NodeID       string     `json:"node_id,omitempty"` // n1 = master
+	State        virt.State `json:"state"`
 	// MemUsedMiB is the RAM in use inside the guest (filled by the API from
 	// the balloon statistics; 0 = not known yet).
 	MemUsedMiB int    `json:"mem_used_mib,omitempty"`
@@ -538,7 +542,16 @@ func (s *Service) Create(ctx context.Context, r CreateRequest) (VM, error) {
 }
 
 func (s *Service) Get(ctx context.Context, name string) (VM, error) {
-	return s.get(ctx, Prefix+name)
+	v, err := s.get(ctx, Prefix+name)
+	if err == nil {
+		if l, ok := s.Disks.(linker); ok {
+			v.LinkedTo = strings.TrimPrefix(l.LinkedTo(ctx, Prefix+name), Prefix)
+			for _, c := range l.LinkedClones(ctx, Prefix+name) {
+				v.LinkedClones = append(v.LinkedClones, strings.TrimPrefix(c, Prefix))
+			}
+		}
+	}
+	return v, err
 }
 
 func (s *Service) get(ctx context.Context, dom string) (VM, error) {
@@ -731,6 +744,12 @@ func (s *Service) remove(ctx context.Context, name string, keepDisk bool) error 
 	st, err := s.state(ctx, dom)
 	if err != nil {
 		return err
+	}
+	if !keepDisk {
+		if l := s.linkedClones(ctx, dom); len(l) > 0 {
+			return fmt.Errorf("%w: %s's disks are used by its linked clones (%s); delete them or make them independent first",
+				ErrConflict, name, strings.Join(l, ", "))
+		}
 	}
 	if st != virt.Stopped {
 		if err := s.HV.Destroy(ctx, dom); err != nil {

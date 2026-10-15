@@ -85,7 +85,15 @@ func (z *ZFS) DestroyExtra(ctx context.Context, vm string, i int) error {
 	if z.Shared(vm) {
 		return z.Ceph.Remove(ctx, z.Ceph.image(vm, i))
 	}
-	return z.destroy(ctx, z.extraDataset(vm, i))
+	ds := z.extraDataset(vm, i)
+	out, _ := z.Run.Run(ctx, "zfs", "get", "-H", "-o", "value", "origin", ds)
+	if err := z.destroy(ctx, ds); err != nil {
+		return err
+	}
+	if o := strings.TrimSpace(string(out)); strings.Contains(o, "@"+LinkSnapPrefix) {
+		z.dropOrigins(ctx, []string{o}) // a linked clone's disk: its source snapshot goes too
+	}
+	return nil
 }
 
 // ResizeExtra grows data disk i.

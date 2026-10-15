@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"p8sos/internal/cloudinit"
@@ -30,6 +31,67 @@ type CloneRequest struct {
 	Name    string `json:"name"`
 	Start   bool   `json:"start"`
 	Storage string `json:"storage,omitempty"` // "" = the same storage as the VM
+	// Linked: an instant clone sharing the VM's disk blocks (ZFS clones of a
+	// snapshot); the VM can't be deleted while it has linked clones.
+	Linked bool `json:"linked,omitempty"`
+}
+
+// linker makes and tracks linked clones (storage.ZFS).
+type linker interface {
+	LinkDisks(ctx context.Context, vm, snap, newVM string, idx []int) error
+	LinkedClones(ctx context.Context, vm string) []string
+	LinkedTo(ctx context.Context, vm string) string
+	Unlink(ctx context.Context, vm string, progress func(string)) error
+}
+
+// linkedClones are the VMs (domains) linked to dom's disks.
+func (s *Service) linkedClones(ctx context.Context, dom string) []string {
+	l, ok := s.Disks.(linker)
+	if !ok {
+		return nil
+	}
+	var out []string
+	for _, c := range l.LinkedClones(ctx, dom) {
+		out = append(out, strings.TrimPrefix(c, Prefix))
+	}
+	return out
+}
+
+// StartUnlink makes a linked clone independent (a full copy of its disks) in
+// the background; the VM must be shut down.
+func (s *Service) StartUnlink(ctx context.Context, name string) (Job, error) {
+	l, ok := s.Disks.(linker)
+	if !ok || s.Jobs == nil {
+		return Job{}, fmt.Errorf("%w: this server's storage has no linked clones", ErrConflict)
+	}
+	dom := Prefix + name
+	st, err := s.state(ctx, dom)
+	if err != nil {
+		return Job{}, err
+	}
+	src := l.LinkedTo(ctx, dom)
+	if src == "" {
+		return Job{}, fmt.Errorf("%w: %s isn't a linked clone", ErrConflict, name)
+	}
+	if st != virt.Stopped {
+		return Job{}, fmt.Errorf("%w: shut %s down first (its disks are copied while it is off)", ErrConflict, name)
+	}
+	j, err := s.Jobs.Start("unlink", name, func(ctx context.Context, p jobs.Progress) (string, error) {
+		defer s.lock(dom)()
+		if st, err := s.state(ctx, dom); err != nil {
+			return "", err
+		} else if st != virt.Stopped {
+			return "", fmt.Errorf("%s was started meanwhile; shut it down and try again", name)
+		}
+		if err := l.Unlink(ctx, dom, func(m string) { p(m) }); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("%s is independent of %s now (its disks are full copies)", name, strings.TrimPrefix(src, Prefix)), nil
+	})
+	if errors.Is(err, jobs.ErrBusy) {
+		return Job{}, fmt.Errorf("%w: %v", ErrConflict, err)
+	}
+	return j, err
 }
 
 // CloneCheck says whether a VM can be cloned ("" = yes).
@@ -58,6 +120,22 @@ func (s *Service) StartClone(ctx context.Context, name string, r CloneRequest) (
 		return Job{}, err
 	} else if why != "" {
 		return Job{}, fmt.Errorf("%w: %s", ErrConflict, why)
+	}
+	if r.Linked {
+		if _, ok := s.Disks.(linker); !ok {
+			return Job{}, fmt.Errorf("%w: this server's storage can't make linked clones", ErrConflict)
+		}
+		cur := s.storageOf(Prefix + name)
+		if cur == "" {
+			cur = "local"
+		}
+		if r.Storage != "" && r.Storage != cur {
+			return Job{}, fmt.Errorf("%w: a linked clone stays on its VM's storage; make a full copy to put it elsewhere", ErrInvalid)
+		}
+		if s.shared(Prefix + name) {
+			return Job{}, fmt.Errorf("%w: linked clones need ZFS storage (local, SAN or NAS); on Ceph make a full copy", ErrInvalid)
+		}
+		r.Storage = ""
 	}
 	if r.Storage != "" {
 		if msg := s.checkStorage(r.Storage); msg != "" {
@@ -103,6 +181,9 @@ func (s *Service) clone(ctx context.Context, name string, r CloneRequest, p jobs
 	cd := s.Disks.(cloneDisks)
 	src, dst := Prefix+name, Prefix+r.Name
 	snap := fmt.Sprintf("p8s-clone-%d", time.Now().UnixNano())
+	if r.Linked { // stays as long as the clone exists
+		snap = fmt.Sprintf("p8s-link-%s-%d", r.Name, time.Now().Unix())
+	}
 	bg := context.WithoutCancel(ctx)
 
 	p("taking a snapshot")
@@ -116,7 +197,12 @@ func (s *Service) clone(ctx context.Context, name string, r CloneRequest, p jobs
 	if err != nil {
 		return "", err
 	}
-	defer func() { s.logErr("drop clone snapshot", sd.DestroySnapshot(bg, src, snap)) }()
+	linked := false
+	defer func() {
+		if !linked {
+			s.logErr("drop clone snapshot", sd.DestroySnapshot(bg, src, snap))
+		}
+	}()
 
 	defer s.lock(dst)()
 	if _, err := s.HV.State(ctx, dst); err == nil {
@@ -129,9 +215,17 @@ func (s *Service) clone(ctx context.Context, name string, r CloneRequest, p jobs
 	for _, d := range sp.Extra {
 		idx = append(idx, d.Index)
 	}
-	p(fmt.Sprintf("copying %d disk(s)", len(idx)))
-	if err := cd.CloneDisks(ctx, src, snap, dst, idx); err != nil {
-		return "", err
+	if r.Linked {
+		p(fmt.Sprintf("linking %d disk(s)", len(idx)))
+		if err := s.Disks.(linker).LinkDisks(ctx, src, snap, dst, idx); err != nil {
+			return "", err
+		}
+		linked = true // from here the snapshot goes with the clone's disks (DestroyDisk)
+	} else {
+		p(fmt.Sprintf("copying %d disk(s)", len(idx)))
+		if err := cd.CloneDisks(ctx, src, snap, dst, idx); err != nil {
+			return "", err
+		}
 	}
 	var undo []func()
 	fail := func(err error) (string, error) {
@@ -217,6 +311,9 @@ func (s *Service) clone(ctx context.Context, name string, r CloneRequest, p jobs
 		}
 	}
 	msg := fmt.Sprintf("%s copied to %s%s", name, r.Name, note)
+	if r.Linked {
+		msg = fmt.Sprintf("%s made as a linked clone of %s%s", r.Name, name, note)
+	}
 	if r.Start {
 		if err := s.HV.Start(ctx, dst); err != nil {
 			return msg + "; starting it failed: " + err.Error(), nil

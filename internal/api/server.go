@@ -235,6 +235,7 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("GET /api/v1/templates", s.listTemplates)
 	auth.HandleFunc("DELETE /api/v1/templates/{name}", s.deleteTemplate)
 	auth.HandleFunc("POST /api/v1/vms/{name}/clone", s.cloneVM)
+	auth.HandleFunc("POST /api/v1/vms/{name}/unlink", s.unlinkVM)
 	auth.HandleFunc("POST /api/v1/vms/{name}/template", s.templateFromVM)
 	auth.HandleFunc("GET /api/v1/vms", s.listVMs)
 	auth.HandleFunc("POST /api/v1/vms", s.createVM)

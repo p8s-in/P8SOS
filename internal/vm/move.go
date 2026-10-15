@@ -10,6 +10,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"p8sos/internal/cloudinit"
@@ -193,6 +194,9 @@ func (s *Service) MoveCheck(ctx context.Context, name string) (string, error) {
 		return "it has extra disks; this server's storage can't move those", nil
 	case len(v.PCI)+len(v.USB) > 0:
 		return "it has PCI/USB devices of this server; take them away first (Hardware → PCI and USB devices)", nil
+	}
+	if l := s.linkedClones(ctx, Prefix+name); len(l) > 0 {
+		return "its linked clones (" + strings.Join(l, ", ") + ") use its disks; delete them or make them independent first", nil
 	}
 	return "", nil
 }

@@ -553,6 +553,17 @@ Build a new ISO on the laptop: `sudo bash iso/build-installer.sh ~/P8SOS/dist` (
 - [ ] Add it again with the same name + VM disks → taken over (its VM disks are there: `zfs list -r p8s-nas`)
 - [ ] `p8 storages add-nfs nas2 NAS /export --vm-disks 50`
 
+## 51. Linked clones
+
+- [ ] Manage → Options → Clone with "Linked clone" → done in seconds; `zfs list -o name,origin,used -r tank/p8s/vms` shows the clone with origin `…@p8s-link-…` and almost no space used
+- [ ] The clone boots, has its own name/MAC/IP; writing files in it doesn't change the original
+- [ ] Manage of the original lists "Linked clones of this VM"; Delete it → refused naming the clone; Move to another server / storage → refused
+- [ ] Back up the linked clone and restore it as a new VM → works
+- [ ] Make independent (clone shut down) → job copies the disks; `origin` is `-` now; the original can be deleted
+- [ ] Delete a linked clone → its `p8s-link-…` snapshot on the original is gone (`zfs list -t snapshot`)
+- [ ] On Ceph: Linked clone → refused with a clear message
+- [ ] `p8 clone web1 web3 --linked`, `p8 unlink web3`
+
 ## Add new features here as they are built
 
 (Every new feature adds its own lines above before it counts as done.)

@@ -3,6 +3,7 @@ package vm
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"p8sos/internal/jobs"
 	"p8sos/internal/virt"
@@ -34,6 +35,12 @@ func (s *Service) MoveStorage(ctx context.Context, name, target string, dropSnap
 	}
 	if st != virt.Stopped {
 		return jobs.Job{}, fmt.Errorf("%w: shut vm %q down first (its disks are copied while it is off)", ErrConflict, name)
+	}
+	if l := s.linkedClones(ctx, dom); len(l) > 0 {
+		return jobs.Job{}, fmt.Errorf("%w: its linked clones (%s) use its disks; delete them or make them independent first", ErrConflict, strings.Join(l, ", "))
+	}
+	if lk, ok := s.Disks.(linker); ok && lk.LinkedTo(ctx, dom) != "" {
+		return jobs.Job{}, fmt.Errorf("%w: %s is a linked clone; make it independent first (Manage → Options)", ErrConflict, name)
 	}
 	cur := s.storageOf(dom)
 	if cur == "" {

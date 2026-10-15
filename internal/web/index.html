@@ -346,8 +346,10 @@ dialog.as-page #ndClose{display:none}
       <select id="mCloneStore" aria-label="Storage of the copy" style="max-width:180px" title="Where the copy's disks go"></select>
       <button class="btn" id="mCloneGo">Clone</button></div>
     <label style="display:flex;gap:8px;align-items:center;font-weight:400"><input id="mCloneStart" type="checkbox" style="width:auto"> Start the copy</label>
+    <label style="display:flex;gap:8px;align-items:center;font-weight:400"><input id="mCloneLinked" type="checkbox" style="width:auto"> Linked clone — instant, shares this VM's disk blocks (takes space only for what changes); this VM can't be deleted while it has linked clones</label>
     <div class="hint">A new VM with a full copy of every disk (taken at one instant, also while it runs), the same size, network and firewall.
-      It gets its own name, MAC and IP; VMs made from a template also get new SSH host keys. Installed from an ISO: an exact copy (Windows: sysprep first).</div></div>
+      It gets its own name, MAC and IP; VMs made from a template also get new SSH host keys. Installed from an ISO: an exact copy (Windows: sysprep first).</div>
+    <div id="mLinkInfo" class="hint" hidden></div></div>
   <div id="mTplBox" hidden><h3>Make a template</h3>
     <div class="inline"><input id="mTplName" placeholder="template name, e.g. web-base" maxlength="49" autocomplete="off" style="max-width:220px">
       <input id="mTplLabel" placeholder="shown as (optional)" maxlength="60" autocomplete="off" style="max-width:220px">
@@ -1301,7 +1303,19 @@ async function openManage(name){
   $("#mSites").innerHTML = ""; $("#mSiteName").value = ""; $("#mSitePort").value = 80; $("#mSiteTLS").checked = false;
   $("#mMoveBox").hidden = true; loadMove();
   $("#mCloneBox").hidden = $("#mTplBox").hidden = !isAdmin();
-  $("#mCloneName").value = ""; $("#mTplName").value = ""; $("#mTplLabel").value = "";
+  $("#mCloneName").value = ""; $("#mTplName").value = ""; $("#mTplLabel").value = ""; $("#mCloneLinked").checked = false;
+  $("#mLinkInfo").hidden = true;
+  if (isAdmin()) call("GET", `/vms/${encodeURIComponent(v.name)}`).then(full => {
+    if (mName !== full.name) return;
+    const parts = [];
+    if (full.linked_to) parts.push(`This VM is a <b>linked clone of ${esc(full.linked_to)}</b> (shares its disk blocks). <button class="btn" id="mUnlink">Make independent</button> copies its disks in full (shut it down first).`);
+    if ((full.linked_clones || []).length) parts.push(`Linked clones of this VM: <b>${full.linked_clones.map(esc).join(", ")}</b> — it can't be deleted or moved while they exist.`);
+    $("#mLinkInfo").innerHTML = parts.join("<br>"); $("#mLinkInfo").hidden = !parts.length;
+    if ($("#mUnlink")) $("#mUnlink").onclick = async () => {
+      try { trackJob(await call("POST", `/vms/${encodeURIComponent(full.name)}/unlink`), refresh); toast(`Making ${full.name} independent …`); }
+      catch (err) { toast(err.message, true); }
+    };
+  }).catch(() => {});
   $("#mCPUBox").hidden = !isAdmin();
   $("#mCPU").value = v.cpu && v.cpu !== "host" ? "compatible" : "host";
   $("#mCPUHint").textContent = (v.cpu && v.cpu !== "host" ? `Now: ${v.cpu} (a model every server has). ` : "Now: this server's own CPU. ") +
@@ -1349,8 +1363,9 @@ $("#mCloneGo").onclick = async () => {
   if (!n) return toast("Give the copy a name", true);
   const storage = $("#mCloneStore").value;
   try {
-    trackJob(await call("POST", `/vms/${encodeURIComponent(mName)}/clone`, {name: n, start: $("#mCloneStart").checked, ...(storage ? {storage} : {})}), refresh);
-    toast(`Copying ${mName} to ${n} …`);
+    const linked = $("#mCloneLinked").checked;
+    trackJob(await call("POST", `/vms/${encodeURIComponent(mName)}/clone`, {name: n, start: $("#mCloneStart").checked, ...(linked ? {linked} : {}), ...(storage ? {storage} : {})}), refresh);
+    toast(linked ? `Linking ${n} to ${mName} …` : `Copying ${mName} to ${n} …`);
   } catch (err) { toast(err.message, true); }
 };
 $("#mTplGo").onclick = async () => {

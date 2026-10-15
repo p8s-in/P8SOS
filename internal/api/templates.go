@@ -109,3 +109,27 @@ func (s *Server) deleteTemplate(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// unlinkVM: POST /vms/{name}/unlink makes a linked clone independent (job; admins).
+func (s *Server) unlinkVM(w http.ResponseWriter, r *http.Request) {
+	if !s.adminOnly(w, r) {
+		return
+	}
+	cur, ok := s.vmFor(w, r)
+	if !ok {
+		return
+	}
+	u, ok := s.VMs.(interface {
+		StartUnlink(ctx context.Context, name string) (vm.Job, error)
+	})
+	if !ok {
+		writeErr(w, http.StatusNotFound, "not_found", "linked clones aren't available here")
+		return
+	}
+	j, err := u.StartUnlink(r.Context(), cur.Name)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, j)
+}

@@ -139,6 +139,7 @@ func (z *ZFS) DestroyDisk(ctx context.Context, vm string) error {
 	if z.Shared(vm) {
 		return z.cephDestroy(ctx, vm)
 	}
+	origins := z.linkOrigins(ctx, vm)     // a linked clone: its source's snapshots go too
 	for _, i := range z.Extras(ctx, vm) { // data disks go with the VM
 		if err := z.DestroyExtra(ctx, vm, i); err != nil {
 			return err
@@ -147,6 +148,7 @@ func (z *ZFS) DestroyDisk(ctx context.Context, vm string) error {
 	if err := z.destroy(ctx, z.diskDataset(vm)); err != nil {
 		return err
 	}
+	z.dropOrigins(ctx, origins)
 	z.forget(vm)
 	return nil
 }

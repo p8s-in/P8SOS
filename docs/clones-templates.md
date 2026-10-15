@@ -16,6 +16,23 @@ Dashboard: **Manage → Options → Clone** (admins and operators). Command line
 - Not copied: snapshots, backups, the public IP, high availability, autostart (off on the copy).
 - The copy is independent: deleting either one doesn't touch the other.
 
+### Linked clones
+
+Tick **Linked clone** (or `p8 clone web1 web2 --linked`): the copy is made in a second and takes no
+disk space at first — its disks are ZFS clones of a snapshot of the original's disks, and only what
+changes afterwards uses space. Good for many test VMs from one prepared VM.
+
+- The original keeps that snapshot (hidden, `p8s-link-…`) while the clone exists, so the original
+  **can't be deleted or moved** (to another server or storage) while it has linked clones; Manage
+  lists them. Rolling the original back past that snapshot is refused too.
+- **Make independent** (Manage → Options, VM shut down; `p8 unlink web2`) copies the clone's disks
+  in full; after that the two are separate VMs. Deleting a linked clone removes its snapshot on the
+  original.
+- Same storage as the original (local ZFS, SAN pool or NAS pool); not on Ceph (make a full copy there).
+- Backups, snapshots, resize, moving the clone to another server: all work (a backup or move copies
+  the clone's full data). Moving a linked clone to another storage on the same server: make it
+  independent first.
+
 ## Make a template from a VM
 
 Set up one VM the way you want (packages, settings), then **Manage → Options → Make a template**
@@ -37,11 +54,12 @@ Set up one VM the way you want (packages, settings), then **Manage → Options �
 
 ## API
 
-`POST /vms/{name}/clone {"name","start"}` and `POST /vms/{name}/template {"name","label"}` start jobs
+`POST /vms/{name}/clone {"name","start","linked","storage"}`, `POST /vms/{name}/unlink` (make a linked clone
+independent) and `POST /vms/{name}/template {"name","label"}` start jobs
 (`GET /jobs/{id}`); `GET /templates` lists all (`custom`, `from`, `node` for those made from VMs);
 `DELETE /templates/{name}`.
 
 ## Not yet
 
-- Linked clones of VMs (a clone is always a full copy; VMs made from templates already are instant ZFS clones).
+- Linked clones on Ceph (rbd clone).
 - Cloning to another server in one step (clone, then move it).

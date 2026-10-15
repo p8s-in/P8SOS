@@ -134,7 +134,8 @@ p8 — manage P8S OS virtual machines
   p8 dashboard                     web dashboard address + how to sign in
   p8 storage                       pool size and what each VM disk uses
   p8 storage grow                  use the system disk's free space for VMs (file pool)
-  p8 clone VM NEW [--start]        copy a VM (all disks, also while it runs)
+  p8 clone VM NEW [--start] [--linked]  copy a VM (all disks, also while it runs; --linked: instant, shares its disk blocks)
+  p8 unlink VM                     make a linked clone independent (full copy of its disks; shut it down first)
   p8 template-from VM NAME ["label"]   make a template from a VM (new VMs: p8 create X --os NAME)
   p8 templates rm NAME             delete a template made from a VM
   p8 storages                      network storage: NAS shares (NFS) and SAN disks (iSCSI)
@@ -681,11 +682,17 @@ case $cmd in
     echo "Backing up $1 (job $(jq -r .id <<<"$j")). You can press Ctrl+C; it continues in the background."
     follow_job "$(jq -r .id <<<"$j")" ;;
 
+  unlink)
+    need "${1:-}"
+    j=$(call POST "/vms/$1/unlink") || exit 1
+    echo "Making $1 independent: copying its disks (job $(jq -r .id <<<"$j"))."
+    follow_job "$(jq -r .id <<<"$j")" ;;
+
   clone)
-    [[ -n ${1:-} && -n ${2:-} ]] || { red "usage: p8 clone VM NEW-NAME [--start] [--storage NAME]"; exit 1; }
-    st=false; store=""; a=("${@:3}")
-    for ((i = 0; i < ${#a[@]}; i++)); do case ${a[$i]} in --start) st=true ;; --storage) store=${a[$((i+1))]:-}; i=$((i+1)) ;; --storage=*) store=${a[$i]#*=} ;; esac; done
-    req=$(jq -nc --arg n "$2" --argjson s "$st" --arg st "$store" '{name:$n, start:$s} + (if $st != "" then {storage:$st} else {} end)')
+    [[ -n ${1:-} && -n ${2:-} ]] || { red "usage: p8 clone VM NEW-NAME [--start] [--linked] [--storage NAME]"; exit 1; }
+    st=false; store=""; lk=false; a=("${@:3}")
+    for ((i = 0; i < ${#a[@]}; i++)); do case ${a[$i]} in --start) st=true ;; --linked) lk=true ;; --storage) store=${a[$((i+1))]:-}; i=$((i+1)) ;; --storage=*) store=${a[$i]#*=} ;; esac; done
+    req=$(jq -nc --arg n "$2" --argjson s "$st" --arg st "$store" --argjson l "$lk" '{name:$n, start:$s} + (if $l then {linked:true} else {} end) + (if $st != "" then {storage:$st} else {} end)')
     j=$(call POST "/vms/$1/clone" "$req") || exit 1
     echo "Copying $1 to $2 (job $(jq -r .id <<<"$j")). Ctrl+C is fine; it continues in the background."
     follow_job "$(jq -r .id <<<"$j")" ;;
