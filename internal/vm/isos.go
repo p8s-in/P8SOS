@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -236,6 +237,35 @@ func (s *Service) ListISOs() ([]ISO, error) {
 		return nil, err
 	}
 	return lib.List()
+}
+
+// ISOFile is where an ISO of the library is and its size (for copying it to
+// another server of the cluster).
+func (s *Service) ISOFile(name string) (string, int64, error) {
+	lib, err := s.isoLib()
+	if err != nil {
+		return "", 0, err
+	}
+	p, err := lib.Path(name)
+	if err != nil {
+		return "", 0, isoErr(err)
+	}
+	st, err := os.Stat(p)
+	if err != nil {
+		return "", 0, err
+	}
+	return p, st.Size(), nil
+}
+
+// ReplaceISO stores an ISO, replacing an older copy (a cluster copy that
+// changed on the master). A copy a VM uses is kept.
+func (s *Service) ReplaceISO(ctx context.Context, name string, r io.Reader) (ISO, error) {
+	if _, _, err := s.ISOFile(name); err == nil {
+		if err := s.DeleteISO(ctx, name); err != nil {
+			return ISO{}, err
+		}
+	}
+	return s.SaveISO(name, r)
 }
 
 // SaveISO stores an uploaded ISO.

@@ -602,6 +602,7 @@ func serve(args []string) error {
 		apiSrv.CTs, apiSrv.CTLocal = &cluster.CTs{Local: cts, M: clu, V: cvms}, cts
 	}
 	apiSrv.Migrate, apiSrv.LocalMoves = cvms, svc // moving VMs between servers
+	apiSrv.LocalISOs = svc                        // the master copies its ISOs here
 	apiSrv.LocalLive, apiSrv.LocalCPU = svc, svc  // live moves, CPU types
 	apiSrv.Dial, apiSrv.RemoteMetrics = cvms.Dial, cvms.RemoteMetrics
 	go clu.Loop(ctx, 15*time.Second)

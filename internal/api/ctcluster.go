@@ -166,3 +166,49 @@ func (s *Server) ctClusterShell(w http.ResponseWriter, r *http.Request) {
 	}
 	stop()
 }
+
+// LocalISOs is this server's own ISO library (for the master's copies).
+type LocalISOs interface {
+	ISOFile(name string) (string, int64, error)
+	ReplaceISO(ctx context.Context, name string, r io.Reader) (vm.ISO, error)
+	DeleteISO(ctx context.Context, name string) error
+}
+
+// clusterISO: GET / PUT / DELETE /cluster/iso/{name} — the master keeps
+// copies of its ISOs here for VMs installed on this server.
+func (s *Server) clusterISO(w http.ResponseWriter, r *http.Request) {
+	if !who(r).Cluster {
+		writeErr(w, http.StatusForbidden, "forbidden", "only the cluster master can do that")
+		return
+	}
+	if s.LocalISOs == nil {
+		writeErr(w, http.StatusNotFound, "not_found", "no ISO library on this server")
+		return
+	}
+	name := r.PathValue("name")
+	switch r.Method {
+	case http.MethodGet:
+		_, n, err := s.LocalISOs.ISOFile(name)
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, cluster.ISOInfo{Name: name, Bytes: n})
+	case http.MethodPut:
+		rc := http.NewResponseController(w)
+		_ = rc.SetReadDeadline(time.Now().Add(6 * time.Hour))
+		_ = rc.SetWriteDeadline(time.Now().Add(6 * time.Hour))
+		iso, err := s.LocalISOs.ReplaceISO(r.Context(), name, r.Body)
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, iso)
+	case http.MethodDelete:
+		if err := s.LocalISOs.DeleteISO(r.Context(), name); err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}

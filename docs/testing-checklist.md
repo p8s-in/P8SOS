@@ -522,6 +522,14 @@ Build a new ISO on the laptop: `sudo bash iso/build-installer.sh ~/P8SOS/dist` (
 - [ ] A container with a mount point (backup=1) → its files are in the container; the disk is made bigger
 - [ ] Import with a name a VM or container already has → refused
 
+## 48. One ISO library for the cluster
+
+- [ ] Master: New VM → from ISO (debian netinst), Server → p8s-vm1 → it is created there and boots the installer (console works)
+- [ ] On p8s-vm1 `ls /var/lib/p8s/isos` shows the copy; a second ISO VM on p8s-vm1 starts at once (no copy)
+- [ ] Windows ISO + virtio-win drivers ISO on the worker → both copied, installer sees the drivers CD
+- [ ] Automatic placement with an ISO → may pick the worker (no longer refused)
+- [ ] Delete the ISO on the master (no VM using it) → gone on the worker too; with a worker VM still having it inserted → the worker keeps its copy
+
 ## Add new features here as they are built
 
 (Every new feature adds its own lines above before it counts as done.)

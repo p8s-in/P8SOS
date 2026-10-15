@@ -162,6 +162,8 @@ type Server struct {
 	// this server's side of a move (vm.Service). nil = off.
 	Migrate    Migrator
 	LocalMoves cluster.LocalMover
+	// LocalISOs is this server's ISO library (the master copies ISOs here); nil = none.
+	LocalISOs LocalISOs
 	// LocalLive / LocalCPU: this server's side of live moves and CPU types (vm.Service).
 	LocalLive cluster.LocalLive
 	LocalCPU  cluster.LocalCPU
@@ -291,6 +293,9 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("POST /api/v1/cluster/live-cleanup/{name}", s.liveCleanup)
 	auth.HandleFunc("GET /api/v1/cluster/vm-export/{name}", s.vmExport)
 	auth.HandleFunc("POST /api/v1/cluster/vm-import", s.vmImport)
+	auth.HandleFunc("GET /api/v1/cluster/iso/{name}", s.clusterISO)
+	auth.HandleFunc("PUT /api/v1/cluster/iso/{name}", s.clusterISO)
+	auth.HandleFunc("DELETE /api/v1/cluster/iso/{name}", s.clusterISO)
 	auth.HandleFunc("PUT /api/v1/vms/{name}/autostart", s.setAutostart)
 	auth.HandleFunc("GET /api/v1/ha", s.haStatus)
 	auth.HandleFunc("PUT /api/v1/ha/settings", s.haSettings)
@@ -552,6 +557,9 @@ func (s *Server) createVM(w http.ResponseWriter, r *http.Request) {
 	var req vm.CreateRequest
 	if !decode(w, r, &req) {
 		return
+	}
+	if req.ISO != "" { // on another server of the cluster the ISO is copied there first (once)
+		_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(2 * time.Hour))
 	}
 	p := who(r)
 	if s.CTs != nil && s.CTs.Exists(req.Name) {

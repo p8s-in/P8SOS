@@ -585,7 +585,14 @@ func (c *VMs) Create(ctx context.Context, r vm.CreateRequest) (vm.VM, error) {
 		v, err := c.Local.Create(ctx, r)
 		return c.selfTag(v), err
 	}
-	r.Plan, r.Node = "", "" // sized and billed by the master already
+	r.Plan, r.Node = "", ""                             // sized and billed by the master already
+	for _, iso := range []string{r.ISO, r.DriversISO} { // the master's library: copy to the server first
+		if iso != "" {
+			if err := c.pushISO(ctx, target, iso); err != nil {
+				return vm.VM{}, err
+			}
+		}
+	}
 	var v vm.VM
 	if err := c.call(ctx, target, "POST", "/vms", r, &v); err != nil {
 		return vm.VM{}, err
@@ -628,8 +635,8 @@ func (c *VMs) Candidates(ctx context.Context, r vm.CreateRequest) []Candidate {
 		switch {
 		case !cd.Online:
 			cd.Reason = "offline"
-		case !cd.Local && (r.ISO != "" || r.IPPool != ""):
-			cd.Reason = "ISO installs and public IPs use this server's library and pools"
+		case !cd.Local && r.IPPool != "":
+			cd.Reason = "public IPs use this server's pools"
 		case r.Network == vm.NetLAN && !contains(cd.Cap.Networks, "lan"):
 			cd.Reason = "no home network set up"
 		case cd.Cap.MemTotalMiB > 0 && free(cd.Cap) < need:

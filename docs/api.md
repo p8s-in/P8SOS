@@ -444,6 +444,7 @@ VMs show `"os_type"` and `"drivers_iso"`. See [windows.md](windows.md).
 | GET | `/api/v1/vms/{name}/move` | `{"from","why","targets":[{"id","name","online"}]}` — `why` is set when it can't move now |
 | POST | `/api/v1/vms/{name}/move` | `{"to":"n2","start":true}` → 202 job (`kind` "move"); the VM must be shut down |
 | GET | `/api/v1/vms/{name}/move-check` | (server to server) `{"why"}` for a VM on this server |
+| GET / PUT / DELETE | `/api/v1/cluster/iso/{name}` | (master to worker) the worker's copy of a library ISO: `{"name","bytes"}` / upload (raw body) / delete |
 | GET | `/api/v1/cluster/vm-export/{name}` · POST `/api/v1/cluster/vm-import` | (server to server) the VM as a stream: a JSON line with its settings, then `zfs send` of the disk |
 
 High availability: see [ha.md](ha.md#api). Roles, company login (SSO) and the activity log export: see [security.md](security.md).

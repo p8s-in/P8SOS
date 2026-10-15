@@ -59,8 +59,14 @@ make a machine with a public IP (e.g. a VPS) the master instead.
   "Home network" VMs) or too little RAM is skipped; if none fits, creating fails
   with the reason per server.
 - **Admins can pick a server** in Create VM → Server (shows free RAM per server).
-- VMs installed **from an ISO** and VMs with a **public IP** go on the master for
-  now (its ISO library and IP pools).
+- **One ISO library**: the master's. A VM installed from an ISO can go on any
+  server; the ISO (and a drivers ISO) is copied there first, once, and kept for
+  the next install (a 5 GB Windows ISO takes about a minute at 1 Gbit/s).
+  Deleting an ISO on the master deletes the copies too (not while a VM there
+  still has it inserted).
+- **One template list**: templates made from a VM are listed with the server
+  that has them; new VMs from such a template go on that server.
+- VMs with a **public IP** go on the master for now (its IP pools).
 
 Each worker has a **>_ Shell** button in Server → Cluster: a root shell of that
 server in the browser, through the tunnel (logged on both servers).
@@ -205,4 +211,4 @@ Files: `/var/lib/p8s/cluster/state.json` (roles, keys, tokens; root only),
 
 - Containers in high availability (VMs: see [ha.md](ha.md)); live moves of running containers
 - Public IPs for containers on workers (they stay on the master)
-- One shared ISO library and template list
+- Copying a template made from a VM to other servers (new VMs from it go on the server that has it)
