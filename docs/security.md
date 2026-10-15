@@ -105,6 +105,9 @@ secret) stays readable, because GRUB loads it.
   or DHCP). At a start: `ssh -p 2222 root@<server>` → `zfsunlock` → passphrase.
 - Change the passphrase: `sudo p8 disk-passphrase` (ZFS re-wraps its key, the
   data isn't rewritten).
+- All of this is also in the dashboard: Server → Storage → **Boot security**
+  (add / remove unlock keys, change the passphrase after confirming your own
+  password; full admins only).
 - Server → Storage shows "Everything is encrypted".
 
 ## Secure Boot
@@ -114,7 +117,9 @@ GRUB, signed by Microsoft/Debian) and a key of your own (MOK) that signs the
 ZFS kernel module:
 
 1. Install with Secure Boot **off** (the installer's ZFS module isn't signed).
-2. `sudo p8 secureboot setup` (internet needed): installs shim-signed and
+2. Server → Storage → Boot security → **Get ready for Secure Boot** (or
+   `sudo p8 secureboot setup`; internet needed; the one-time password is in
+   the task's log): installs shim-signed and
    grub-efi-amd64-signed, makes the key, rebuilds and signs the ZFS module for
    every kernel (DKMS signs it again after every kernel update), adds the boot
    entry **"P8S OS (Secure Boot)"** first in the boot order (the old entry

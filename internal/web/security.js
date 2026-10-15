@@ -111,9 +111,65 @@ async function loadEncryption(){
     } catch (err) { toast(err.message, true); }
   };
 }
+/* ---------- Server page → boot security (Secure Boot, unlock over SSH, disk passphrase) ---------- */
+$("#encBox").insertAdjacentHTML("afterend", `<div id="bsBox" style="margin-top:10px"></div>`);
+async function bsTask(path, body, method = "POST"){
+  try {
+    const t = await call(method, path, body);
+    toast(t.title + " started — its log is below");
+    if (typeof taskOpen !== "undefined") taskOpen = t.id;
+    if (typeof loadNode === "function") await loadNode();
+  } catch (err) { toast(err.message, true); }
+}
+async function loadBootSec(){
+  let b; try { b = await call("GET", "/node/boot-security"); } catch { $("#bsBox").innerHTML = ""; return; }
+  const admin = isFullAdmin(), ok = x => x ? `<span style="color:var(--ok)">✔</span>` : `<span style="color:var(--bad)">✘</span>`;
+  const sbOn = /enabled/i.test(b.secure_boot || "");
+  let sb;
+  if (!b.uefi) sb = `<div class="sub">Secure Boot: this server started in BIOS (legacy) mode; Secure Boot needs UEFI.</div>`;
+  else {
+    const ready = b.mok === "enrolled" && b.zfs_signer && b.sb_entry;
+    sb = `<div class="sub"><b>Secure Boot:</b> ${esc(b.secure_boot || "unknown")} ·
+        ${ok(b.sb_entry)} signed boot loader · ${ok(!!b.zfs_signer)} ZFS module signed${b.zfs_signer ? " (" + esc(b.zfs_signer) + ")" : ""} ·
+        ${ok(b.mok === "enrolled")} key ${b.mok === "pending" ? "waiting for the blue screen at the next start" : b.mok === "enrolled" ? "enrolled" : "not enrolled"}</div>
+      ${admin && !(ready && sbOn) ? `<div class="inline" style="margin-top:4px"><button class="btn" id="bsSB">${ready ? "Set up again" : "Get ready for Secure Boot"}</button>
+        <span class="hint" style="margin:0">Installs Debian's signed boot loader and signs the ZFS module with your own key (internet needed). The task log shows a
+        one-time password: at the next start a blue screen asks for it (Enroll MOK → Continue → Yes). Then switch Secure Boot on in the firmware.</span></div>` : ""}
+      ${ready && !sbOn ? `<div class="hint">Ready: switch Secure Boot on in the firmware setup at the next start.</div>` : ""}`;
+  }
+  let enc = "";
+  if (b.encrypted) {
+    const keys = b.unlock_keys || [];
+    enc = `<div class="sub" style="margin-top:8px"><b>Unlock over SSH at start:</b> ${b.unlock_ssh ? `on — <span class="mono">ssh -p 2222 root@${esc(location.hostname)}</span>, then <span class="mono">zfsunlock</span>` : "off (the passphrase is typed on the server's screen)"}</div>
+      ${keys.length ? `<table class="snaps"><tbody>${keys.map((k, i) => `<tr><td class="mono">${esc(k.type)} …${esc(k.fp)} <span class="sub">${esc(k.comment)}</span></td>
+        <td style="text-align:right">${admin ? `<button class="btn danger" data-bsrm="${i + 1}">Remove</button>` : ""}</td></tr>`).join("")}</tbody></table>` : ""}
+      ${admin ? `<div class="inline"><input id="bsKey" placeholder="ssh-ed25519 AAAA… you@pc (your PC's public key)" style="flex:1" autocomplete="off">
+        <button class="btn" id="bsKeyGo">Add key</button></div>
+      <details style="margin-top:6px"><summary class="sub">Change the disk passphrase</summary>
+        <div class="row"><div><label for="bsP1">New passphrase (8 or more)</label><input id="bsP1" type="password" autocomplete="new-password"></div>
+          <div><label for="bsP2">Again</label><input id="bsP2" type="password" autocomplete="new-password"></div>
+          <div><label for="bsPw">Your own password</label><input id="bsPw" type="password" autocomplete="current-password"></div></div>
+        <div class="inline"><input id="bsOtp" placeholder="or 2FA code (company login)" style="max-width:220px"><span class="spacer"></span><button class="btn" id="bsPGo">Change passphrase</button></div>
+        <div class="hint">The data isn't re-encrypted (ZFS re-wraps its key). From the next start on only the new passphrase works — write it down.</div></details>` : ""}`;
+  }
+  $("#bsBox").innerHTML = `<h3 style="margin:6px 0 2px">Boot security</h3>` + sb + enc;
+  if ($("#bsSB")) $("#bsSB").onclick = () => { if (confirm("Get this server ready for Secure Boot? The old boot entry stays, so switching Secure Boot off again always works.")) bsTask("/node/boot-security/secureboot"); };
+  if ($("#bsKeyGo")) $("#bsKeyGo").onclick = () => bsTask("/node/boot-security/unlock-keys", {key: $("#bsKey").value.trim()});
+  for (const x of $("#bsBox").querySelectorAll("[data-bsrm]")) x.onclick = () => { if (armed(x, "Remove?")) bsTask(`/node/boot-security/unlock-keys/${x.dataset.bsrm}`, undefined, "DELETE"); };
+  if ($("#bsPGo")) $("#bsPGo").onclick = async () => {
+    const p1 = $("#bsP1").value, p2 = $("#bsP2").value;
+    if (p1.length < 8) return toast("The passphrase needs at least 8 characters", true);
+    if (p1 !== p2) return toast("The two passphrases are different", true);
+    try {
+      const r = await call("POST", "/node/boot-security/passphrase", {passphrase: p1, password: $("#bsPw").value, otp: $("#bsOtp").value.trim()});
+      $("#bsP1").value = $("#bsP2").value = $("#bsPw").value = $("#bsOtp").value = "";
+      toast(r.note);
+    } catch (err) { toast(err.message, true); }
+  };
+}
 if (typeof openNode === "function") {
   const _openNodeEnc = openNode;
-  openNode = async function(){ loadEncryption(); return _openNodeEnc(); };
+  openNode = async function(){ loadEncryption(); loadBootSec(); return _openNodeEnc(); };
 }
 
 /* ---------- 2FA required for staff ---------- */

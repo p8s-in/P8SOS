@@ -575,6 +575,30 @@ Build a new ISO on the laptop: `sudo bash iso/build-installer.sh ~/P8SOS/dist` (
 - [ ] Secure Boot (VirtualBox 7, EFI, Secure Boot off): `sudo p8 secureboot setup` → one-time password; reboot → MokManager → enroll → boots; Secure Boot on → boots; `p8 secureboot status` all ✔, `mokutil --sb-state` = enabled; VMs start (ZFS module loads)
 - [ ] After a kernel update (apt upgrade) with Secure Boot on: still boots (DKMS signed the new module)
 - [ ] Secure Boot on but the old entry chosen in the boot menu → refused by the firmware; switching Secure Boot off → old entry boots
+- [ ] Dashboard: Server → Storage → Boot security shows the state; "Get ready for Secure Boot" runs as a task (log has the one-time password); on an encrypted system: Add key / Remove, Change passphrase (wrong own password → refused); an operator sees it but has no buttons
+
+## 53. Containers in high availability
+
+- [ ] Cluster of 2 (p8s-node master, p8s-vm1 worker): a container on the worker, running → Manage → High availability shows "Copy to" the master; Protect → first copy in seconds; the box shows "last copy … ✔ Automatic failover"
+- [ ] On the master: `zfs list -t all -r tank/p8s/ct-replica` shows the copy (not mounted, one `@p8s-rep-…` snapshot); on the worker `zfs list -t snapshot tank/p8s/ct/NAME` shows the copy points; the container's Snapshots list does NOT show them
+- [ ] Write a file in the container; after the next copy (set 1 minute) the copy's used size grows a little (only the change is sent)
+- [ ] Manage → Autostart is off while protected; turning it on → refused ("high availability starts this container")
+- [ ] Server → High availability lists it as "container", the master's "Copies kept on this server" shows it
+- [ ] Power the worker off (VirtualBox: Power off) → after ~3 min the container runs on the master (Containers list: on p8s-node), with its files up to the last copy; alert/log "container NAME started on …"
+- [ ] Power the worker on → its old container is switched off and disappears from its list; copies now go master → worker (Server → HA on the worker shows the copy)
+- [ ] Unplug the worker's network cable only (master still up) → after 60 s the worker switches the container off (log "cut off … switched off NAME"); plug back → it starts again (no failover happened)
+- [ ] Snapshot rollback of a protected container works (the next copy is a full one)
+- [ ] Turn off → the copy is deleted (`zfs list tank/p8s/ct-replica` empty), autostart is back as before
+- [ ] A container with a public IP: the box says "Not possible: it has a public IP …"
+
+## 54. Moving a running container
+
+- [ ] A running container on p8s-vm1 (write a file in it, e.g. `date > /root/before`) → Manage → Move to server → p8s-node: the job shows "copying the disk while it runs" (container still answers ping), then "shutting it down…", "copying the last changes", "started"
+- [ ] Ping it during the move: only a few seconds (plus its shutdown) without answers; it is on p8s-node now with the file, same MAC (same DHCP address on the same network)
+- [ ] `zfs list -t snapshot -r tank/p8s/ct` on both servers: no `p8s-move-pre` / `p8s-move` snapshots left
+- [ ] `p8 ct-move NAME p8s-vm1` (running) moves it back
+- [ ] Cut the move short (unplug the target's cable during the first copy) → job fails, container keeps running on the old server; no half disk left on the target after it is back (or the next move cleans it up)
+- [ ] A stopped container still moves as before (start only if ticked); a container with a public IP → refused
 
 ## Add new features here as they are built
 

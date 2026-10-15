@@ -72,7 +72,6 @@ other disks; press Remove again when Ceph is healthy, and it is removed and wipe
 
 ## Limits (v1)
 
-- Backups of VMs on Ceph are full every time (no "only the changes" backups yet).
 - Snapshots of a VM with several disks are taken one disk after the other (not at the same instant).
 - Ceph is managed from the master; after a master failover the new master manages it if Ceph is
   installed there (every Ceph server has the configuration). Ceph itself has no master and keeps running.

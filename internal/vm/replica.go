@@ -54,6 +54,7 @@ type ReplicaHeader struct {
 
 // Replica is a copy of a VM held on this server.
 type Replica struct {
+	Kind      string `json:"kind,omitempty"` // "ct" = a container's copy
 	Name      string `json:"name"`
 	From      string `json:"from,omitempty"`
 	At        string `json:"at,omitempty"` // when the copy was taken (RFC 3339)

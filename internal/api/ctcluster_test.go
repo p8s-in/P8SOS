@@ -93,3 +93,63 @@ func TestContainersInCluster(t *testing.T) {
 	}
 	_ = wdir
 }
+
+// A running container moves with a short pause: copied while it runs, shut
+// down, the last changes copied, started on the new server.
+func TestMoveRunningContainerInCluster(t *testing.T) {
+	ctx := context.Background()
+	mOwned := &ownedVMs{fakeVMs: &fakeVMs{}, vms: map[string]vm.VM{}}
+	wOwned := &ownedVMs{fakeVMs: &fakeVMs{}, vms: map[string]vm.VM{}}
+	master := newClusterNode(t, 4096, mOwned, mOwned)
+	worker := newClusterNode(t, 16384, wOwned, wOwned)
+	mct, mrun, _ := clusterCTs(t, "tank/p8s/ct-templates/debian-13@base\tDebian 13\n")
+	wct, wrun, _ := clusterCTs(t, "tank/p8s/ct-templates/debian-13@base\tDebian 13\n")
+	master.vms.Jobs = &jobs.Manager{}
+	master.s.CTs, master.s.CTLocal = &cluster.CTs{Local: mct, M: master.m, V: master.vms}, mct
+	worker.s.CTs, worker.s.CTLocal = &cluster.CTs{Local: wct, M: worker.m, V: worker.vms}, wct
+	b := master.req(t, "POST", "/api/v1/cluster/join-code", secret, fmt.Sprintf(`{"master_url":%q}`, master.srv.URL), 201)
+	code := strings.SplitN(b[strings.Index(b, `"code":"`)+8:], `"`, 2)[0]
+	worker.req(t, "POST", "/api/v1/cluster/join", secret, fmt.Sprintf(`{"url":%q,"code":%q}`, master.srv.URL, code), 200)
+	master.m.Poll(ctx)
+	b = master.req(t, "POST", "/api/v1/containers", secret, `{"name":"c1","template":"debian-13","memory_mib":1024,"start":false}`, 201)
+	if !strings.Contains(b, `"node_id":"n2"`) {
+		t.Fatalf("placed %s", b)
+	}
+	// it runs on the worker until it is shut down
+	wrun.Out["lxc-info -n"] = "RUNNING\n"
+	wrun.Hook = func(r *testfake.Runner, line string) {
+		if strings.HasPrefix(line, "lxc-stop -n c1") {
+			r.Out["lxc-info -n"] = "STOPPED\n"
+		}
+	}
+	var rounds []string
+	wct.Cmd = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		rounds = append(rounds, strings.Join(args, " "))
+		return exec.CommandContext(ctx, "printf", "R%d", fmt.Sprint(len(rounds)))
+	}
+	got := filepath.Join(t.TempDir(), "recv")
+	mct.Cmd = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "sh", "-c", "cat >> "+got)
+	}
+	mrun.Fail = map[string]string{"nsenter --mount=/proc/1/ns/mnt -- zfs destroy -r tank/p8s/ct/c1": "dataset does not exist"}
+	mrun.Hook = func(r *testfake.Runner, line string) {
+		if strings.HasPrefix(line, "systemd-run --unit=p8s-ct-c1") {
+			r.Out["lxc-info -n"] = "RUNNING\n"
+		}
+	}
+	master.req(t, "POST", "/api/v1/containers/c1/move", secret, `{"to":"n1"}`, 202)
+	master.vms.Jobs.Wait()
+	jl := master.vms.Jobs.List()
+	if j := jl[len(jl)-1]; j.State != jobs.Done || !strings.Contains(j.Message, "started") {
+		t.Fatalf("move job %+v", j)
+	}
+	if len(rounds) != 2 || !strings.Contains(rounds[0], "send -c tank/p8s/ct/c1@p8s-move-pre") || !strings.Contains(rounds[1], "-i tank/p8s/ct/c1@p8s-move-pre") {
+		t.Fatalf("rounds %v", rounds)
+	}
+	if b, _ := os.ReadFile(got); string(b) != "R1R2" || !mct.Exists("c1") || wct.Exists("c1") {
+		t.Fatalf("moved? %q here=%v there=%v", b, mct.Exists("c1"), wct.Exists("c1"))
+	}
+	if !strings.Contains(strings.Join(wrun.Calls, "\n"), "lxc-stop -n c1 -t 60") {
+		t.Fatal("not shut down cleanly")
+	}
+}

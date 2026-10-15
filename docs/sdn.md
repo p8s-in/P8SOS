@@ -50,7 +50,7 @@ every server.
 
 ## Limits (v1)
 
-- VMs only (containers: private or home network).
+- Containers join virtual networks too (network `vnet:NAME`, MTU 1230).
 - IPv4 gateway/DHCP; IPv6 inside a virtual network works between VMs only if
   they use MTU 1280 or less (1230 is below IPv6's minimum, so in practice IPv4).
 - A virtual network that VMs still use can't be removed or get another VNI.

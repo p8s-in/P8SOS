@@ -45,6 +45,9 @@ const (
 	ACMERemove   = "acme-remove" // back to the server's own certificate; arg: the domain
 	IOMMUOn      = "iommu-on"    // PCI passthrough: kernel option + VFIO (reboot after)
 	IOMMUOff     = "iommu-off"
+	SecureBoot   = "secureboot"      // signed boot loader + signed ZFS module + key enrolment
+	UnlockAdd    = "boot-unlock-add" // SSH unlock at boot: key in Dir/boot-unlock.key
+	UnlockRemove = "boot-unlock-rm"  // arg: the key's number (1, 2, …)
 )
 
 // Titles for the task log.
@@ -57,7 +60,11 @@ var Titles = map[string]string{
 	BondSetup: "Add a second network cable (bond)", IPv6On: "Turn on IPv6 for the private network", IPv6Off: "Turn off IPv6 for the private network",
 	IOMMUOn: "Turn on IOMMU (PCI passthrough)", IOMMUOff: "Turn off IOMMU",
 	ACMEIssue: "Get a Let's Encrypt certificate", ACMERemove: "Remove the Let's Encrypt certificate",
+	SecureBoot: "Get ready for Secure Boot", UnlockAdd: "Add a key for unlocking over SSH", UnlockRemove: "Remove a key for unlocking over SSH",
 }
+
+// UnlockKeyFile is where the API puts an SSH key for the unlock task.
+func (m *Manager) UnlockKeyFile() string { return filepath.Join(m.Dir, "boot-unlock.key") }
 
 // Task is one run.
 type Task struct {
@@ -220,6 +227,15 @@ func (m *Manager) command(kind, arg string) ([]string, error) {
 		return sh("iommu.sh", "on"), nil
 	case IOMMUOff:
 		return sh("iommu.sh", "off"), nil
+	case SecureBoot:
+		return sh("bootsec.sh", "secureboot", "setup"), nil
+	case UnlockAdd:
+		return sh("bootsec.sh", "unlock", "add-file", m.UnlockKeyFile()), nil
+	case UnlockRemove:
+		if n, err := strconv.Atoi(arg); err != nil || n < 1 || n > 100 {
+			return nil, fmt.Errorf("%w: key number", ErrInvalid)
+		}
+		return sh("bootsec.sh", "unlock", "remove", arg), nil
 	case ZFSCache:
 		if n, err := strconv.Atoi(arg); arg != "auto" && (err != nil || n < 256 || n > 1<<20) {
 			return nil, fmt.Errorf("%w: ZFS cache limit must be 256 MiB or more, or auto", ErrInvalid)

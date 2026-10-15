@@ -164,6 +164,8 @@ type Server struct {
 	LocalMoves cluster.LocalMover
 	// LocalISOs is this server's ISO library (the master copies ISOs here); nil = none.
 	LocalISOs LocalISOs
+	// BootSec runs the boot-security script (Secure Boot, SSH unlock, disk passphrase); nil = off.
+	BootSec BootSecCmd
 	// LocalPublicIPs changes VMs' public addresses (VMs with public IPs run here); nil = off.
 	LocalPublicIPs PublicIPChanger
 	// LocalLive / LocalCPU: this server's side of live moves and CPU types (vm.Service).
@@ -308,6 +310,10 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("PUT /api/v1/vms/{name}/ha", s.haSet)
 	auth.HandleFunc("POST /api/v1/vms/{name}/ha/failover", s.haFailover)
 	auth.HandleFunc("GET /api/v1/vms/{name}/ha-check", s.haCheck)
+	auth.HandleFunc("GET /api/v1/containers/{name}/ha", s.haInfo) // containers: the same, kind from the path
+	auth.HandleFunc("PUT /api/v1/containers/{name}/ha", s.haSet)
+	auth.HandleFunc("POST /api/v1/containers/{name}/ha/failover", s.haFailover)
+	auth.HandleFunc("GET /api/v1/containers/{name}/ha-check", s.haCheck)
 	auth.HandleFunc("GET /api/v1/cluster/ha-sync", s.haSync)
 	auth.HandleFunc("POST /api/v1/cluster/book", s.clusterBook)
 	auth.HandleFunc("GET /api/v1/cluster/peer", s.clusterPeer)
@@ -466,6 +472,7 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("GET /api/v1/cluster/ct-shell/{name}", s.ctClusterShell)
 	auth.HandleFunc("GET /api/v1/cluster/ct-export/{name}", s.ctExport)
 	auth.HandleFunc("POST /api/v1/cluster/ct-import", s.ctImport)
+	auth.HandleFunc("DELETE /api/v1/cluster/ct-import/{name}", s.ctImportDrop)
 	auth.HandleFunc("GET /api/v1/cluster/discover", s.clusterDiscover)
 	auth.HandleFunc("POST /api/v1/cluster/invite-send", s.clusterInviteSend)
 	auth.HandleFunc("GET /api/v1/cluster/invites", s.clusterInvites)
@@ -490,6 +497,11 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("GET /api/v1/node", s.getNode)
 	auth.HandleFunc("GET /api/v1/node/memory", s.getMemory)
 	auth.HandleFunc("GET /api/v1/node/acme", s.getACME)
+	auth.HandleFunc("GET /api/v1/node/boot-security", s.getBootSec)
+	auth.HandleFunc("POST /api/v1/node/boot-security/secureboot", s.secureBootSetup)
+	auth.HandleFunc("POST /api/v1/node/boot-security/unlock-keys", s.addUnlockKey)
+	auth.HandleFunc("DELETE /api/v1/node/boot-security/unlock-keys/{n}", s.removeUnlockKey)
+	auth.HandleFunc("POST /api/v1/node/boot-security/passphrase", s.changePassphrase)
 	auth.HandleFunc("POST /api/v1/node/acme", s.postACME)
 	auth.HandleFunc("DELETE /api/v1/node/acme", s.deleteACME)
 	auth.HandleFunc("GET /api/v1/node/tasks", s.listTasks)

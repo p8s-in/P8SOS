@@ -162,6 +162,7 @@ type Service struct {
 
 	mu    sync.Mutex
 	metas map[string]*meta
+	rmu   sync.Mutex // HA copies (replica.go)
 }
 
 var reName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,47}[a-z0-9]$`)
@@ -852,7 +853,7 @@ func (s *Service) Snapshots(ctx context.Context, name string) ([]Snapshot, error
 			continue
 		}
 		_, snap, ok := strings.Cut(f[0], "@")
-		if !ok {
+		if !ok || strings.HasPrefix(snap, RepSnapPrefix) { // HA copy points are internal
 			continue
 		}
 		sec, _ := strconv.ParseInt(f[1], 10, 64)
@@ -893,6 +894,9 @@ func (s *Service) Rollback(ctx context.Context, name, snap string, destroyNewer 
 	if s.state(ctx, name) != "stopped" {
 		return Container{}, fmt.Errorf("%w: stop the container first", vm.ErrConflict)
 	}
+	// HA copy points newer than the snapshot would block the rollback: drop
+	// them (the next copy is then a full one)
+	s.dropRepSnapsAfter(ctx, name, snap)
 	args := []string{"rollback"}
 	if destroyNewer {
 		args = append(args, "-r")

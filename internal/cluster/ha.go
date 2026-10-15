@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"p8sos/internal/ct"
 	"p8sos/internal/vm"
 )
 
@@ -36,6 +37,10 @@ import (
 // The master's own VMs can be protected too. With 3+ servers, if the master
 // dies the others elect a new master (quorum.go), which starts their copies;
 // with 2, start them by hand in the other server's dashboard.
+//
+// Containers are protected the same way (Kind "ct"): their disk (a ZFS
+// dataset) is copied with ct.Service's replica functions, and the server-to-
+// server calls carry ?kind=ct. VMs and containers share one name space.
 
 // LocalHA is the local VM service's side (vm.Service).
 type LocalHA interface {
@@ -49,6 +54,37 @@ type LocalHA interface {
 	RetireVM(ctx context.Context, name, from string) error
 	Fence(ctx context.Context, names []string) []string
 	SetAutostart(ctx context.Context, name string, on bool) (vm.VM, error)
+}
+
+// HACopier makes and keeps copies (vm.Service for VMs, ct.Service for containers).
+type HACopier interface {
+	HACheck(ctx context.Context, name string) (string, error)
+	ReplicaSnaps(ctx context.Context, name string) ([]string, error)
+	SendReplica(ctx context.Context, name string, have []string, from string, w io.Writer) error
+	RecvReplica(ctx context.Context, r io.Reader) (vm.Replica, error)
+	DropReplica(ctx context.Context, name string) error
+}
+
+// KindCT marks a protected container (HAVM.Kind; "" = a VM).
+const KindCT = "ct"
+
+// kq adds the guest kind to a server-to-server path.
+func kq(path, kind string) string {
+	if kind != KindCT {
+		return path
+	}
+	if strings.Contains(path, "?") {
+		return path + "&kind=ct"
+	}
+	return path + "?kind=ct"
+}
+
+// label is how events name a guest.
+func label(kind, name string) string {
+	if kind == KindCT {
+		return "container " + name
+	}
+	return name
 }
 
 // HASettings are the timings (seconds).
@@ -69,6 +105,7 @@ func (s HASettings) defaults() HASettings {
 
 // HAVM is one protected VM.
 type HAVM struct {
+	Kind      string   `json:"kind,omitempty"` // "ct" = a container
 	Name      string   `json:"name"`
 	Target    string   `json:"target"`    // server (node id) that keeps the copy
 	EveryMin  int      `json:"every_min"` // minutes between copies
@@ -124,9 +161,11 @@ type haState struct {
 type HA struct {
 	C     *VMs
 	Local LocalHA
-	Dir   string // data_dir/cluster
-	Log   *slog.Logger
-	Now   func() time.Time
+	// CT are the cluster's containers (CT.Local this server's); nil = VMs only.
+	CT  *CTs
+	Dir string // data_dir/cluster
+	Log *slog.Logger
+	Now func() time.Time
 	// Notify sends an alert (Health & alerts channels); nil = only the HA log.
 	Notify func(severity, title, detail string)
 	// GatewayOK says whether this server reaches its own network; nil = ping the default gateway.
@@ -231,22 +270,113 @@ func (h *HA) known(id string) bool {
 	return id == h.self() || ok
 }
 
+// --- VMs and containers ---
+
+func (h *HA) hasCT() bool { return h.CT != nil && h.CT.Local != nil }
+
+func (h *HA) loc(kind string) (HACopier, error) {
+	if kind == KindCT {
+		if !h.hasCT() {
+			return nil, fmt.Errorf("%w: containers aren't available on this server", vm.ErrConflict)
+		}
+		return h.CT.Local, nil
+	}
+	return h.Local, nil
+}
+
+// haGuest is a VM or container as HA sees it.
+type haGuest struct {
+	name, node, state string
+	autostart         bool
+}
+
+func (h *HA) idOf(nodeID string) string {
+	if nodeID == "" {
+		return h.self()
+	}
+	return nodeID
+}
+
+func (h *HA) guest(ctx context.Context, kind, name string) (haGuest, error) {
+	if kind == KindCT {
+		if h.CT == nil {
+			return haGuest{}, fmt.Errorf("%w: containers aren't available on this server", vm.ErrNotFound)
+		}
+		x, err := h.CT.Get(ctx, name)
+		return haGuest{name, h.idOf(x.NodeID), x.State, x.Autostart}, err
+	}
+	v, err := h.C.Get(ctx, name)
+	return haGuest{name, h.idOf(v.NodeID), string(v.State), v.Autostart}, err
+}
+
+func (h *HA) startGuest(ctx context.Context, kind, name string) error {
+	if kind == KindCT {
+		if h.CT == nil {
+			return fmt.Errorf("%w: containers aren't available on this server", vm.ErrNotFound)
+		}
+		_, err := h.CT.Start(ctx, name)
+		return err
+	}
+	_, err := h.C.Start(ctx, name)
+	return err
+}
+
+// ctList is every reachable server's containers; complete=false when an
+// online server didn't answer (so a missing container may still exist).
+func (h *HA) ctList(ctx context.Context) (out []haGuest, complete bool) {
+	complete = true
+	l, err := h.CT.Local.List(ctx)
+	if err != nil {
+		complete = false
+	}
+	for _, x := range l {
+		out = append(out, haGuest{x.Name, h.self(), x.State, x.Autostart})
+	}
+	for _, n := range h.C.workers() {
+		if !h.C.M.NodeStatus(n.ID).Online {
+			continue
+		}
+		var r struct {
+			Containers []ct.Container `json:"containers"`
+		}
+		if err := h.C.call(ctx, n, "GET", "/containers", nil, &r); err != nil {
+			complete = false
+			continue
+		}
+		for _, x := range r.Containers {
+			h.CT.remember(x.Name, n.ID)
+			out = append(out, haGuest{x.Name, n.ID, x.State, x.Autostart})
+		}
+	}
+	return out, complete
+}
+
+// fence switches off the named VMs and containers running here.
+func (h *HA) fence(ctx context.Context, names []string) []string {
+	out := h.Local.Fence(ctx, names)
+	if h.hasCT() {
+		out = append(out, h.CT.Local.Fence(ctx, names)...)
+	}
+	return out
+}
+
 // --- settings from the dashboard ---
 
-// Protect turns HA on for a VM (target "" = pick the best other server).
-func (h *HA) Protect(ctx context.Context, name, target string, everyMin int) (HAVMView, error) {
+// Protect turns HA on for a VM or (kind "ct") a container (target "" = pick
+// the best other server).
+func (h *HA) Protect(ctx context.Context, kind, name, target string, everyMin int) (HAVMView, error) {
 	if h.C.M.Role() != "master" {
 		return HAVMView{}, fmt.Errorf("%w: high availability needs a cluster (Server → Cluster → Add a server)", vm.ErrConflict)
 	}
-	v, err := h.C.Get(ctx, name)
+	if kind != "" && kind != KindCT {
+		return HAVMView{}, fmt.Errorf("%w: kind must be \"\" (VM) or \"ct\"", vm.ErrInvalid)
+	}
+	v, err := h.guest(ctx, kind, name)
 	if err != nil {
 		return HAVMView{}, err
 	}
-	node := v.NodeID
-	if node == "" {
-		node = h.self()
-	}
-	why, err := h.haCheck(ctx, node, name)
+	node := v.node
+	why, err := h.haCheck(ctx, kind, node, name)
 	if err != nil {
 		return HAVMView{}, err
 	}
@@ -266,29 +396,29 @@ func (h *HA) Protect(ctx context.Context, name, target string, everyMin int) (HA
 		}
 	}
 	if target == node {
-		return HAVMView{}, fmt.Errorf("%w: the copy must be on another server than the VM", vm.ErrInvalid)
+		return HAVMView{}, fmt.Errorf("%w: the copy must be on another server than the %s", vm.ErrInvalid, map[bool]string{true: "container", false: "VM"}[kind == KindCT])
 	}
 	if !h.known(target) {
 		return HAVMView{}, fmt.Errorf("%w: no server %q", vm.ErrInvalid, target)
 	}
 	// HA starts the VM after outages; the host's own autostart would start it
 	// even where it must not run (a server that was cut off).
-	if err := h.setAutostart(ctx, node, name, false); err != nil {
+	if err := h.setAutostart(ctx, kind, node, name, false); err != nil {
 		return HAVMView{}, err
 	}
 	h.mu.Lock()
 	h.loadLocked()
 	old := h.st.VMs[name]
-	c := &HAVM{Name: name, Target: target, EveryMin: everyMin, Node: node, LastState: string(v.State), Autostart: v.Autostart}
+	c := &HAVM{Kind: kind, Name: name, Target: target, EveryMin: everyMin, Node: node, LastState: v.state, Autostart: v.autostart}
 	if old != nil {
 		c.LastCopy, c.CopyBytes, c.Retire, c.Autostart = old.LastCopy, old.CopyBytes, old.Retire, old.Autostart
 		if old.Target != target {
 			c.LastCopy, c.CopyBytes = "", 0
-			go h.dropCopy(context.WithoutCancel(ctx), old.Target, name)
+			go h.dropCopy(context.WithoutCancel(ctx), kind, old.Target, name)
 		}
 	}
 	h.st.VMs[name] = c
-	h.eventLocked("info", fmt.Sprintf("%s protected: copies to %s every %d min", name, h.nodeName(target), everyMin))
+	h.eventLocked("info", fmt.Sprintf("%s protected: copies to %s every %d min", label(kind, name), h.nodeName(target), everyMin))
 	h.saveLocked()
 	h.mu.Unlock()
 	go h.replicate(context.WithoutCancel(ctx), name) // first copy now
@@ -305,14 +435,14 @@ func (h *HA) Unprotect(ctx context.Context, name string) error {
 		return fmt.Errorf("%w: %s isn't protected", vm.ErrNotFound, name)
 	}
 	delete(h.st.VMs, name)
-	h.eventLocked("info", name+" no longer protected")
+	h.eventLocked("info", label(c.Kind, name)+" no longer protected")
 	h.saveLocked()
 	h.mu.Unlock()
-	if err := h.dropCopy(ctx, c.Target, name); err != nil {
+	if err := h.dropCopy(ctx, c.Kind, c.Target, name); err != nil {
 		return fmt.Errorf("turned off, but the copy on %s couldn't be deleted: %w", h.nodeName(c.Target), err)
 	}
 	if c.Autostart {
-		_ = h.setAutostart(ctx, c.Node, name, true)
+		_ = h.setAutostart(ctx, c.Kind, c.Node, name, true)
 	}
 	return nil
 }
@@ -388,6 +518,9 @@ func (h *HA) Status(ctx context.Context) HAStatus {
 	if h.Local != nil {
 		st.Replicas = h.Local.Replicas(ctx)
 	}
+	if h.hasCT() {
+		st.Replicas = append(st.Replicas, h.CT.Local.Replicas(ctx)...)
+	}
 	for i, j := 0, len(st.Events)-1; i < j; i, j = i+1, j-1 {
 		st.Events[i], st.Events[j] = st.Events[j], st.Events[i]
 	}
@@ -448,6 +581,10 @@ func (h *HA) masterTick(ctx context.Context) {
 		}
 	}
 	n := len(h.st.VMs)
+	anyCT := false
+	for _, c := range h.st.VMs {
+		anyCT = anyCT || c.Kind == KindCT
+	}
 	h.mu.Unlock()
 	if n == 0 {
 		h.mu.Lock()
@@ -459,9 +596,17 @@ func (h *HA) masterTick(ctx context.Context) {
 	h.retireOld(ctx)
 	h.syncWorkers(ctx, set)
 	all, _ := h.C.List(ctx)
-	where := map[string][]vm.VM{}
+	where := map[string][]haGuest{} // kind + "/" + name
 	for _, v := range all {
-		where[v.Name] = append(where[v.Name], v)
+		where["/"+v.Name] = append(where["/"+v.Name], haGuest{v.Name, h.idOf(v.NodeID), string(v.State), v.Autostart})
+	}
+	ctComplete := h.hasCT() // without container support here, never assume one was deleted
+	if anyCT && h.hasCT() {
+		var cl []haGuest
+		cl, ctComplete = h.ctList(ctx)
+		for _, x := range cl {
+			where[KindCT+"/"+x.name] = append(where[KindCT+"/"+x.name], x)
+		}
 	}
 	allOnline := len(h.offline) == 0
 
@@ -470,51 +615,46 @@ func (h *HA) masterTick(ctx context.Context) {
 		name, node string
 		why        string
 	}
+	type drop struct{ kind, node, name string }
 	var starts []todo
-	var drops []struct{ node, name string }
+	var drops []drop
 	for name, c := range h.st.VMs {
-		vs := where[name]
+		vs := where[c.Kind+"/"+name]
 		if len(vs) == 0 {
-			if allOnline && len(c.Retire) == 0 {
+			if allOnline && len(c.Retire) == 0 && (c.Kind != KindCT || ctComplete) {
 				delete(h.st.VMs, name)
-				drops = append(drops, struct{ node, name string }{c.Target, name})
-				h.eventLocked("info", name+" was deleted; its copy is deleted too")
+				drops = append(drops, drop{c.Kind, c.Target, name})
+				h.eventLocked("info", label(c.Kind, name)+" was deleted; its copy is deleted too")
 			}
 			continue
 		}
-		idOf := func(x vm.VM) string {
-			if x.NodeID == "" {
-				return h.self()
-			}
-			return x.NodeID
-		}
 		v := vs[0]
 		for _, x := range vs {
-			if idOf(x) == c.Node {
+			if x.node == c.Node {
 				v = x
 			}
 		}
 		// started from its copy by hand on another server (e.g. while this
 		// master was down): that one is the VM now, the old one becomes the copy
 		for _, x := range vs {
-			if idOf(x) != c.Node && x.State == "running" && v.State != "running" {
+			if x.node != c.Node && x.state == "running" && v.state != "running" {
 				old := c.Node
-				c.Node, c.Target = idOf(x), old
+				c.Node, c.Target = x.node, old
 				c.Retire = appendOnce(c.Retire, old)
 				c.LastCopy, c.CopyBytes = "", 0
-				h.eventLocked("warning", fmt.Sprintf("%s runs on %s (its copy was started there); the old one on %s is switched off", name, h.nodeName(c.Node), h.nodeName(old)))
+				h.eventLocked("warning", fmt.Sprintf("%s runs on %s (its copy was started there); the old one on %s is switched off", label(c.Kind, name), h.nodeName(c.Node), h.nodeName(old)))
 				v = x
 				break
 			}
 		}
-		node := idOf(v)
-		if v.State == "unknown" {
+		node := v.node
+		if v.state == "unknown" {
 			continue
 		}
 		if node != c.Node { // moved by hand
 			c.Node = node
 			if c.Target == node {
-				drops = append(drops, struct{ node, name string }{node, name})
+				drops = append(drops, drop{c.Kind, node, name})
 				c.Target, c.LastCopy, c.CopyBytes = "", "", 0
 			}
 		}
@@ -523,19 +663,21 @@ func (h *HA) masterTick(ctx context.Context) {
 			c.LastCopy, c.CopyBytes = "", 0
 		}
 		switch {
-		case h.back[node] && v.State == "stopped" && c.LastState == "running":
+		case h.back[node] && v.state == "stopped" && c.LastState == "running":
 			starts = append(starts, todo{name, node, "restarted after its server came back"})
-		case v.State == "crashed":
+		case v.state == "crashed":
 			starts = append(starts, todo{name, node, "restarted after it crashed"})
+		case c.Kind == KindCT && v.state != "running" && v.state != "stopped":
+			// starting, stopping…: wait for a settled state
 		default:
-			c.LastState = string(v.State)
+			c.LastState = v.state
 		}
 	}
 	h.back = map[string]bool{}
 	h.saveLocked()
 	h.mu.Unlock()
 	for _, d := range drops {
-		_ = h.dropCopy(ctx, d.node, d.name)
+		_ = h.dropCopy(ctx, d.kind, d.node, d.name)
 	}
 	for _, s := range starts {
 		h.start(ctx, s.name, s.why)
@@ -546,8 +688,14 @@ func (h *HA) masterTick(ctx context.Context) {
 }
 
 func (h *HA) start(ctx context.Context, name, why string) {
-	if _, err := h.C.Start(ctx, name); err != nil {
-		h.event("warning", fmt.Sprintf("%s couldn't be started (%s): %v", name, why, err), "")
+	h.mu.Lock()
+	kind := ""
+	if c := h.st.VMs[name]; c != nil {
+		kind = c.Kind
+	}
+	h.mu.Unlock()
+	if err := h.startGuest(ctx, kind, name); err != nil {
+		h.event("warning", fmt.Sprintf("%s couldn't be started (%s): %v", label(kind, name), why, err), "")
 		return
 	}
 	h.mu.Lock()
@@ -555,7 +703,7 @@ func (h *HA) start(ctx context.Context, name, why string) {
 		c.LastState = "running"
 	}
 	h.mu.Unlock()
-	h.event("warning", name+" "+why, "High availability started the VM again.")
+	h.event("warning", label(kind, name)+" "+why, "High availability started it again.")
 }
 
 // syncWorkers renews every online worker's lease and learns what it fenced.
@@ -734,20 +882,37 @@ func (h *HA) failover(ctx context.Context, name string, auto bool) error {
 	if !h.online(cp.Target) {
 		return fmt.Errorf("the server with the copy (%s) is offline too", h.nodeName(cp.Target))
 	}
-	var res moved
-	if cp.Target == h.self() {
-		v, note, err := h.Local.PromoteReplica(ctx, name)
+	var res struct {
+		Note string `json:"note"`
+	}
+	remember := h.C.remember
+	if cp.Kind == KindCT {
+		if !h.hasCT() {
+			return errors.New("containers aren't available on this server")
+		}
+		remember = h.CT.remember
+	}
+	switch {
+	case cp.Target == h.self() && cp.Kind == KindCT:
+		_, note, err := h.CT.Local.PromoteReplica(ctx, name)
 		if err != nil {
 			return err
 		}
-		res = moved{VM: v, Note: note}
-		h.C.remember(name, "")
-	} else {
-		n, _ := h.C.node(cp.Target)
-		if err := h.C.call(ctx, n, "POST", "/cluster/replica/"+url.PathEscape(name)+"/promote", nil, &res); err != nil {
+		res.Note = note
+		remember(name, "")
+	case cp.Target == h.self():
+		_, note, err := h.Local.PromoteReplica(ctx, name)
+		if err != nil {
 			return err
 		}
-		h.C.remember(name, n.ID)
+		res.Note = note
+		remember(name, "")
+	default:
+		n, _ := h.C.node(cp.Target)
+		if err := h.C.call(ctx, n, "POST", kq("/cluster/replica/"+url.PathEscape(name)+"/promote", cp.Kind), nil, &res); err != nil {
+			return err
+		}
+		remember(name, n.ID)
 	}
 	h.mu.Lock()
 	if c = h.st.VMs[name]; c != nil {
@@ -760,10 +925,10 @@ func (h *HA) failover(ctx context.Context, name string, auto bool) error {
 	h.saveLocked()
 	h.mu.Unlock()
 	how := map[bool]string{true: "automatically", false: "by hand"}[auto]
-	msg := fmt.Sprintf("%s started on %s %s (%s is offline)", name, h.nodeName(cp.Target), how, h.nodeName(cp.Node))
-	detail := fmt.Sprintf("The VM runs from its copy of %s; changes after that were on %s and are lost unless it comes back.", cp.LastCopy, h.nodeName(cp.Node))
+	msg := fmt.Sprintf("%s started on %s %s (%s is offline)", label(cp.Kind, name), h.nodeName(cp.Target), how, h.nodeName(cp.Node))
+	detail := fmt.Sprintf("It runs from its copy of %s; changes after that were on %s and are lost unless it comes back.", cp.LastCopy, h.nodeName(cp.Node))
 	if cp.LastState == "running" {
-		if _, err := h.C.Start(ctx, name); err != nil {
+		if err := h.startGuest(ctx, cp.Kind, name); err != nil {
 			msg += "; starting it failed: " + err.Error()
 		}
 	} else {
@@ -785,26 +950,33 @@ func appendOnce(l []string, s string) []string {
 // retireOld switches off the old VM on servers that came back after a failover.
 func (h *HA) retireOld(ctx context.Context) {
 	h.mu.Lock()
-	type job struct{ name, node, from string }
+	type job struct{ kind, name, node, from string }
 	var jobs []job
 	for name, c := range h.st.VMs {
 		for _, r := range c.Retire {
 			if h.online(r) {
-				jobs = append(jobs, job{name, r, h.nodeName(c.Node)})
+				jobs = append(jobs, job{c.Kind, name, r, h.nodeName(c.Node)})
 			}
 		}
 	}
 	h.mu.Unlock()
 	for _, j := range jobs {
 		var err error
-		if j.node == h.self() {
+		switch {
+		case j.node == h.self() && j.kind == KindCT:
+			if !h.hasCT() {
+				err = errors.New("containers aren't available on this server")
+			} else {
+				err = h.CT.Local.RetireCopy(ctx, j.name, j.from)
+			}
+		case j.node == h.self():
 			err = h.Local.RetireVM(ctx, j.name, j.from)
-		} else {
+		default:
 			n, _ := h.C.node(j.node)
-			err = h.C.call(ctx, n, "POST", "/cluster/replica/"+url.PathEscape(j.name)+"/retire?from="+url.QueryEscape(j.from), nil, nil)
+			err = h.C.call(ctx, n, "POST", kq("/cluster/replica/"+url.PathEscape(j.name)+"/retire?from="+url.QueryEscape(j.from), j.kind), nil, nil)
 		}
 		if err != nil {
-			h.event("warning", fmt.Sprintf("the old %s on %s couldn't be switched off: %v", j.name, h.nodeName(j.node), err), "")
+			h.event("warning", fmt.Sprintf("the old %s on %s couldn't be switched off: %v", label(j.kind, j.name), h.nodeName(j.node), err), "")
 			continue
 		}
 		h.mu.Lock()
@@ -819,7 +991,7 @@ func (h *HA) retireOld(ctx context.Context) {
 		}
 		h.saveLocked()
 		h.mu.Unlock()
-		h.event("info", fmt.Sprintf("%s is back: its old %s is switched off and becomes the copy", h.nodeName(j.node), j.name), "")
+		h.event("info", fmt.Sprintf("%s is back: its old %s is switched off and becomes the copy", h.nodeName(j.node), label(j.kind, j.name)), "")
 	}
 }
 
@@ -891,14 +1063,17 @@ func (h *HA) copyOnce(ctx context.Context, c HAVM) (vm.Replica, error) {
 	src, _ := h.C.node(c.Node)
 	dst, _ := h.C.node(c.Target)
 	var have []string
-	var err error
+	local, err := h.loc(c.Kind)
+	if err != nil && (c.Node == self || c.Target == self) {
+		return vm.Replica{}, err
+	}
 	if c.Target == self {
-		have, err = h.Local.ReplicaSnaps(ctx, c.Name)
+		have, err = local.ReplicaSnaps(ctx, c.Name)
 	} else {
 		var r struct {
 			Snaps []string `json:"snaps"`
 		}
-		err = h.C.call(ctx, dst, "GET", "/cluster/replica/"+url.PathEscape(c.Name), nil, &r)
+		err = h.C.call(ctx, dst, "GET", kq("/cluster/replica/"+url.PathEscape(c.Name), c.Kind), nil, &r)
 		have = r.Snaps
 	}
 	if err != nil {
@@ -906,12 +1081,13 @@ func (h *HA) copyOnce(ctx context.Context, c HAVM) (vm.Replica, error) {
 	}
 	from := h.nodeName(c.Node)
 	var rep vm.Replica
-	sendPath := "/cluster/replica-send/" + url.PathEscape(c.Name) + "?" + url.Values{"have": {strings.Join(have, ",")}, "from": {from}}.Encode()
+	sendPath := kq("/cluster/replica-send/"+url.PathEscape(c.Name)+"?"+url.Values{"have": {strings.Join(have, ",")}, "from": {from}}.Encode(), c.Kind)
+	recvPath := kq("/cluster/replica-recv", c.Kind)
 	switch {
 	case c.Node == self:
 		pr, pw := io.Pipe()
-		go func() { pw.CloseWithError(h.Local.SendReplica(ctx, c.Name, have, from, pw)) }()
-		resp, err := h.C.M.stream(ctx, dst, "POST", "/cluster/replica-recv", pr)
+		go func() { pw.CloseWithError(local.SendReplica(ctx, c.Name, have, from, pw)) }()
+		resp, err := h.C.M.stream(ctx, dst, "POST", recvPath, pr)
 		pr.CloseWithError(errors.New("copy ended"))
 		if err != nil {
 			return rep, err
@@ -925,14 +1101,14 @@ func (h *HA) copyOnce(ctx context.Context, c HAVM) (vm.Replica, error) {
 			return rep, err
 		}
 		defer resp.Body.Close()
-		return h.Local.RecvReplica(ctx, resp.Body)
+		return local.RecvReplica(ctx, resp.Body)
 	default:
 		in, err := h.C.M.stream(ctx, src, "GET", sendPath, nil)
 		if err != nil {
 			return rep, err
 		}
 		defer in.Body.Close()
-		resp, err := h.C.M.stream(ctx, dst, "POST", "/cluster/replica-recv", in.Body)
+		resp, err := h.C.M.stream(ctx, dst, "POST", recvPath, in.Body)
 		if err != nil {
 			return rep, err
 		}
@@ -942,22 +1118,33 @@ func (h *HA) copyOnce(ctx context.Context, c HAVM) (vm.Replica, error) {
 	}
 }
 
-func (h *HA) dropCopy(ctx context.Context, node, name string) error {
+func (h *HA) dropCopy(ctx context.Context, kind, node, name string) error {
 	if node == "" {
 		return nil
 	}
 	if node == h.self() {
-		return h.Local.DropReplica(ctx, name)
+		local, err := h.loc(kind)
+		if err != nil {
+			return err
+		}
+		return local.DropReplica(ctx, name)
 	}
 	n, ok := h.C.node(node)
 	if !ok {
 		return nil
 	}
-	return h.C.call(ctx, n, "DELETE", "/cluster/replica/"+url.PathEscape(name), nil, nil)
+	return h.C.call(ctx, n, "DELETE", kq("/cluster/replica/"+url.PathEscape(name), kind), nil, nil)
 }
 
-func (h *HA) setAutostart(ctx context.Context, node, name string, on bool) error {
+func (h *HA) setAutostart(ctx context.Context, kind, node, name string, on bool) error {
 	if node == h.self() {
+		if kind == KindCT {
+			if !h.hasCT() {
+				return fmt.Errorf("%w: containers aren't available on this server", vm.ErrNotFound)
+			}
+			_, err := h.CT.Local.SetAutostart(ctx, name, on)
+			return err
+		}
 		_, err := h.Local.SetAutostart(ctx, name, on)
 		return err
 	}
@@ -965,18 +1152,29 @@ func (h *HA) setAutostart(ctx context.Context, node, name string, on bool) error
 	if !ok {
 		return fmt.Errorf("%w: server %s", vm.ErrNotFound, node)
 	}
+	if kind == KindCT {
+		return h.C.call(ctx, n, "PATCH", cpath(name), map[string]bool{"autostart": on}, nil)
+	}
 	return h.C.call(ctx, n, "PUT", vpath(name, "/autostart"), map[string]bool{"autostart": on}, nil)
 }
 
-func (h *HA) haCheck(ctx context.Context, node, name string) (string, error) {
+func (h *HA) haCheck(ctx context.Context, kind, node, name string) (string, error) {
 	if node == h.self() {
-		return h.Local.HACheck(ctx, name)
+		local, err := h.loc(kind)
+		if err != nil {
+			return "", err
+		}
+		return local.HACheck(ctx, name)
 	}
 	n, _ := h.C.node(node)
 	var r struct {
 		Why string `json:"why"`
 	}
-	err := h.C.call(ctx, n, "GET", vpath(name, "/ha-check"), nil, &r)
+	p := vpath(name, "/ha-check")
+	if kind == KindCT {
+		p = cpath(name, "/ha-check")
+	}
+	err := h.C.call(ctx, n, "GET", p, nil, &r)
 	return r.Why, err
 }
 
@@ -1034,7 +1232,7 @@ func (h *HA) noQuorum(ctx context.Context) {
 	}
 	h.mu.Unlock()
 	sort.Strings(names)
-	stopped := h.Local.Fence(ctx, names)
+	stopped := h.fence(ctx, names)
 	h.event("critical", "this master can't reach most of the cluster: high availability paused"+
 		map[bool]string{true: ", switched off " + strings.Join(stopped, ", "), false: ""}[len(stopped) > 0],
 		"The other servers may choose a new master and start the copies there. This server follows the new master when the network is back.")
@@ -1073,7 +1271,7 @@ func (h *HA) workerTick(ctx context.Context) {
 	} else if h.gatewayOK(ctx) {
 		return // the master is gone, not us: keep running (it can't fail us over without its network)
 	}
-	stopped := h.Local.Fence(ctx, names)
+	stopped := h.fence(ctx, names)
 	h.mu.Lock()
 	h.fenced = append(h.fenced, stopped...)
 	h.leaseVMs = nil // once per outage
@@ -1146,29 +1344,26 @@ type HAInfo struct {
 	Targets   []MoveTarget `json:"targets"`       // servers that can keep the copy
 }
 
-// Info tells the dashboard about one VM.
-func (h *HA) Info(ctx context.Context, name string) (HAInfo, error) {
+// Info tells the dashboard about one VM or (kind "ct") container.
+func (h *HA) Info(ctx context.Context, kind, name string) (HAInfo, error) {
 	info := HAInfo{Targets: []MoveTarget{}}
 	if h.C.M == nil || h.C.M.Role() != "master" {
 		info.Why = "high availability needs a cluster (Server → Cluster → Add a server)"
-		if _, err := h.C.Get(ctx, name); err != nil {
+		if _, err := h.guest(ctx, kind, name); err != nil {
 			return info, err
 		}
 		return info, nil
 	}
-	v, err := h.C.Get(ctx, name)
+	v, err := h.guest(ctx, kind, name)
 	if err != nil {
 		return info, err
 	}
-	node := v.NodeID
-	if node == "" {
-		node = h.self()
-	}
-	if c, ok := h.Config(ctx, name); ok {
+	node := v.node
+	if c, ok := h.Config(ctx, name); ok && c.Kind == kind {
 		info.Protected, info.Config = true, &c
 		node = c.Node
-	} else if v.State != "unknown" {
-		if info.Why, err = h.haCheck(ctx, node, name); err != nil {
+	} else if v.state != "unknown" {
+		if info.Why, err = h.haCheck(ctx, kind, node, name); err != nil {
 			return info, err
 		}
 	}

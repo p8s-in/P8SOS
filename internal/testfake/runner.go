@@ -15,6 +15,8 @@ type Runner struct {
 	Calls []string
 	Fail  map[string]string // "zfs set" -> stderr
 	Out   map[string]string // "zfs list" -> stdout
+	// Hook sees every command first (with the lock held: it may change Out and Fail).
+	Hook func(r *Runner, line string)
 }
 
 func (r *Runner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -22,6 +24,9 @@ func (r *Runner) Run(_ context.Context, name string, args ...string) ([]byte, er
 	defer r.mu.Unlock()
 	line := strings.Join(append([]string{name}, args...), " ")
 	r.Calls = append(r.Calls, line)
+	if r.Hook != nil {
+		r.Hook(r, line)
+	}
 	for prefix, stderr := range r.Fail {
 		if strings.HasPrefix(line, prefix) {
 			return nil, &execx.Error{Cmd: name, Args: args, Stderr: stderr, Err: context.Canceled}

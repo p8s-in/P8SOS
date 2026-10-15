@@ -21,6 +21,29 @@ func (s *Server) haOn(w http.ResponseWriter) bool {
 	return false
 }
 
+// haKind: "ct" for containers (their pages, or ?kind=ct on the server-to-server calls).
+func haKind(r *http.Request) string {
+	if r.URL.Query().Get("kind") == cluster.KindCT || strings.HasPrefix(r.URL.Path, "/api/v1/containers/") {
+		return cluster.KindCT
+	}
+	return ""
+}
+
+// haLocal is this server's side of the copies for the request's kind.
+func (s *Server) haLocal(w http.ResponseWriter, r *http.Request) (cluster.HACopier, bool) {
+	if !s.haOn(w) {
+		return nil, false
+	}
+	if haKind(r) == cluster.KindCT {
+		if s.CTLocal == nil {
+			writeErr(w, http.StatusNotFound, "not_found", "containers aren't available on this server")
+			return nil, false
+		}
+		return s.CTLocal, true
+	}
+	return s.LocalHA, true
+}
+
 func (s *Server) haStatus(w http.ResponseWriter, r *http.Request) {
 	if !s.adminOnly(w, r) {
 		return
@@ -51,7 +74,7 @@ func (s *Server) haInfo(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, cluster.HAInfo{Why: "high availability isn't available on this server", Targets: []cluster.MoveTarget{}})
 		return
 	}
-	info, err := s.HA.Info(r.Context(), r.PathValue("name"))
+	info, err := s.HA.Info(r.Context(), haKind(r), r.PathValue("name"))
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -80,7 +103,7 @@ func (s *Server) haSet(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	v, err := s.HA.Protect(r.Context(), name, body.Target, body.EveryMin)
+	v, err := s.HA.Protect(r.Context(), haKind(r), name, body.Target, body.EveryMin)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -101,10 +124,14 @@ func (s *Server) haFailover(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) haCheck(w http.ResponseWriter, r *http.Request) {
-	if !s.adminOnly(w, r) || !s.haOn(w) {
+	if !s.adminOnly(w, r) {
 		return
 	}
-	why, err := s.LocalHA.HACheck(r.Context(), r.PathValue("name"))
+	local, ok := s.haLocal(w, r)
+	if !ok {
+		return
+	}
+	why, err := local.HACheck(r.Context(), r.PathValue("name"))
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -167,10 +194,14 @@ func (s *Server) haSync(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) replicaSnaps(w http.ResponseWriter, r *http.Request) {
-	if !s.adminOnly(w, r) || !s.haOn(w) {
+	if !s.adminOnly(w, r) {
 		return
 	}
-	l, err := s.LocalHA.ReplicaSnaps(r.Context(), r.PathValue("name"))
+	local, ok := s.haLocal(w, r)
+	if !ok {
+		return
+	}
+	l, err := local.ReplicaSnaps(r.Context(), r.PathValue("name"))
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -179,11 +210,15 @@ func (s *Server) replicaSnaps(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) replicaSend(w http.ResponseWriter, r *http.Request) {
-	if !s.adminOnly(w, r) || !s.haOn(w) {
+	if !s.adminOnly(w, r) {
+		return
+	}
+	local, ok := s.haLocal(w, r)
+	if !ok {
 		return
 	}
 	name := r.PathValue("name")
-	if why, err := s.LocalHA.HACheck(r.Context(), name); err != nil {
+	if why, err := local.HACheck(r.Context(), name); err != nil {
 		s.fail(w, r, err)
 		return
 	} else if why != "" {
@@ -200,21 +235,25 @@ func (s *Server) replicaSend(w http.ResponseWriter, r *http.Request) {
 	_ = rc.SetWriteDeadline(time.Now().Add(24 * time.Hour))
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.WriteHeader(http.StatusOK)
-	if err := s.LocalHA.SendReplica(r.Context(), name, have, r.URL.Query().Get("from"), w); err != nil {
+	if err := local.SendReplica(r.Context(), name, have, r.URL.Query().Get("from"), w); err != nil {
 		if s.Log != nil {
-			s.Log.Error("send vm copy", "vm", name, "err", err)
+			s.Log.Error("send copy", "name", name, "kind", haKind(r), "err", err)
 		}
 		panic(http.ErrAbortHandler) // the receiver sees a cut stream
 	}
 }
 
 func (s *Server) replicaRecv(w http.ResponseWriter, r *http.Request) {
-	if !s.adminOnly(w, r) || !s.haOn(w) {
+	if !s.adminOnly(w, r) {
+		return
+	}
+	local, ok := s.haLocal(w, r)
+	if !ok {
 		return
 	}
 	rc := http.NewResponseController(w)
 	_ = rc.SetReadDeadline(time.Now().Add(24 * time.Hour))
-	rep, err := s.LocalHA.RecvReplica(r.Context(), r.Body)
+	rep, err := local.RecvReplica(r.Context(), r.Body)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -223,7 +262,19 @@ func (s *Server) replicaRecv(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) replicaPromote(w http.ResponseWriter, r *http.Request) {
-	if !s.adminOnly(w, r) || !s.haOn(w) {
+	if !s.adminOnly(w, r) {
+		return
+	}
+	if _, ok := s.haLocal(w, r); !ok {
+		return
+	}
+	if haKind(r) == cluster.KindCT {
+		c, note, err := s.CTLocal.PromoteReplica(r.Context(), r.PathValue("name"))
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"container": c, "note": note})
 		return
 	}
 	v, note, err := s.LocalHA.PromoteReplica(r.Context(), r.PathValue("name"))
@@ -235,10 +286,17 @@ func (s *Server) replicaPromote(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) replicaRetire(w http.ResponseWriter, r *http.Request) {
-	if !s.adminOnly(w, r) || !s.haOn(w) {
+	if !s.adminOnly(w, r) {
 		return
 	}
-	if err := s.LocalHA.RetireVM(r.Context(), r.PathValue("name"), r.URL.Query().Get("from")); err != nil {
+	if _, ok := s.haLocal(w, r); !ok {
+		return
+	}
+	retire := s.LocalHA.RetireVM
+	if haKind(r) == cluster.KindCT {
+		retire = s.CTLocal.RetireCopy
+	}
+	if err := retire(r.Context(), r.PathValue("name"), r.URL.Query().Get("from")); err != nil {
 		s.fail(w, r, err)
 		return
 	}
@@ -257,6 +315,25 @@ func (s *Server) haStartCopy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := r.PathValue("name")
+	if _, ok := s.haLocal(w, r); !ok {
+		return
+	}
+	if haKind(r) == cluster.KindCT {
+		c, note, err := s.CTLocal.PromoteReplica(r.Context(), name)
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		if body.Start {
+			if sc, err := s.CTLocal.Start(r.Context(), name); err != nil {
+				note += "; starting it failed: " + err.Error()
+			} else {
+				c = sc
+			}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"container": c, "note": strings.TrimPrefix(note, "; ")})
+		return
+	}
 	v, note, err := s.LocalHA.PromoteReplica(r.Context(), name)
 	if err != nil {
 		s.fail(w, r, err)
@@ -273,10 +350,14 @@ func (s *Server) haStartCopy(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) haDropCopy(w http.ResponseWriter, r *http.Request) {
-	if !s.adminOnly(w, r) || !s.haOn(w) {
+	if !s.adminOnly(w, r) {
 		return
 	}
-	if err := s.LocalHA.DropReplica(r.Context(), r.PathValue("name")); err != nil {
+	local, ok := s.haLocal(w, r)
+	if !ok {
+		return
+	}
+	if err := local.DropReplica(r.Context(), r.PathValue("name")); err != nil {
 		s.fail(w, r, err)
 		return
 	}

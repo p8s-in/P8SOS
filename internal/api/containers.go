@@ -288,6 +288,12 @@ func (s *Server) resizeCT(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
+	if s.HA != nil && req.Autostart != nil && *req.Autostart {
+		if cfg, protected := s.HA.Config(r.Context(), c.Name); protected && cfg.Kind == cluster.KindCT {
+			writeErr(w, http.StatusConflict, "conflict", "high availability starts this container; turn HA off first")
+			return
+		}
+	}
 	p := who(r)
 	if !p.Admin {
 		d := Usage{}

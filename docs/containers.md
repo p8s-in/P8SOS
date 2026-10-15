@@ -46,15 +46,23 @@ list `/var/lib/p8s/containers.json`. Shell on the server: `p8 ct enter NAME`.
 - **One list:** the master lists the containers of every server ("on NODE");
   start/stop, resize, snapshots, backups, passwords and the terminal work the
   same wherever the container runs.
-- **Moving:** Manage → **Move to server** (stopped containers without a public IP).
+- **Moving:** Manage → **Move to server** (containers without a public IP).
   The disk is copied with `zfs send`, the container is removed from the old server
   and optionally started on the new one. `p8 ct-move NAME SERVER [--start]`.
+  A **running** container moves with a short pause: its disk is copied while it
+  keeps running, then it is shut down, only what changed since is copied, and it
+  starts on the new server (off for its shutdown plus a few seconds; open
+  connections are dropped, like a reboot). If something fails before the end it
+  stays on the old server and runs again there.
   If its network doesn't exist on the new server it's put on the NAT network (the job says so).
 - **Virtual networks:** pick a `vnet:NAME` network in the dialog; the container gets
   an MTU of 1230 like VMs on virtual networks.
 
+- **High availability:** Manage → High availability keeps a copy of the
+  container on another server of the cluster and starts it there if its
+  server dies. See [ha.md](ha.md#containers).
+
 ## Not yet (next steps)
 
 - Separate (cheaper) plans for containers; plans currently are shared with VMs
-- Containers in high availability (restart on another server when one fails)
-- Live moves of running containers
+- Moving a running container without any pause (memory copy, CRIU): it moves with a short pause instead

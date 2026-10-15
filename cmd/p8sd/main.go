@@ -610,13 +610,25 @@ func serve(args []string) error {
 	apiSrv.Migrate, apiSrv.LocalMoves = cvms, svc // moving VMs between servers
 	apiSrv.LocalISOs = svc                        // the master copies its ISOs here
 	apiSrv.LocalPublicIPs = svc
+	apiSrv.BootSec = func(ctx context.Context, stdin string, args ...string) ([]byte, error) {
+		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		c := exec.CommandContext(ctx, "/bin/bash", append([]string{filepath.Join(scriptsDir(), "bootsec.sh")}, args...)...)
+		if stdin != "" {
+			c.Stdin = strings.NewReader(stdin)
+		}
+		return c.CombinedOutput()
+	}
 	apiSrv.LocalLive, apiSrv.LocalCPU = svc, svc // live moves, CPU types
 	apiSrv.Dial, apiSrv.RemoteMetrics = cvms.Dial, cvms.RemoteMetrics
 	go clu.Loop(ctx, 15*time.Second)
 	go clu.Watch(ctx, 5*time.Second) // elections when the master is gone
 	ha := &cluster.HA{C: cvms, Local: svc, Dir: filepath.Join(cfg.DataDir, "cluster"), Log: log,
 		Notify: func(sev, title, detail string) { mon.Notice("ha", sev, title, detail) }}
-	apiSrv.HA, apiSrv.LocalHA = ha, svc                                              // high availability
+	apiSrv.HA, apiSrv.LocalHA = ha, svc // high availability
+	if c, ok := apiSrv.CTs.(*cluster.CTs); ok {
+		ha.CT = c // containers are protected too
+	}
 	apiSrv.SSO = &sso.Manager{Dir: cfg.DataDir, HTTP: netx.Client(15 * time.Second)} // company login
 	apiSrv.LDAP = &ldap.Manager{Dir: cfg.DataDir}                                    // company directory (AD / LDAP)
 	apiSrv.Security = &secpol.Store{Dir: cfg.DataDir}                                // allowed networks, password policy, staff 2FA

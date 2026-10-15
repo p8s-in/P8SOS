@@ -88,3 +88,72 @@ func TestContainerOnVNet(t *testing.T) {
 		t.Fatalf("%+v\n%s", c, cfg)
 	}
 }
+
+func TestMoveRunningContainer(t *testing.T) {
+	ctx := context.Background()
+	a, runA := newSvc(t)
+	if _, err := a.Create(ctx, CreateRequest{Name: "web", Template: "debian-13", MemoryMiB: 1024, DiskGB: 10}); err != nil {
+		t.Fatal(err)
+	}
+	var sent []string
+	a.Cmd = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		sent = append(sent, strings.Join(args, " "))
+		return exec.CommandContext(ctx, "printf", "ROUND")
+	}
+	// the final round needs it stopped; the first works while it runs
+	var buf bytes.Buffer
+	if err := a.ExportPhase(ctx, "web", PhaseFinal, &buf); !errors.Is(err, vm.ErrConflict) {
+		t.Fatalf("final while running: %v", err)
+	}
+	buf.Reset()
+	if err := a.ExportPhase(ctx, "web", PhasePre, &buf); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(sent[0], "send -c tank/p8s/ct/web@p8s-move-pre") {
+		t.Fatalf("%v", sent)
+	}
+	b, runB := newSvc(t)
+	dir := t.TempDir()
+	var recv []string
+	b.Cmd = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		recv = append(recv, strings.Join(args, " "))
+		return exec.CommandContext(ctx, "sh", "-c", "cat >> "+filepath.Join(dir, "disk"))
+	}
+	runB.Fail = map[string]string{"nsenter --mount=/proc/1/ns/mnt -- zfs destroy -r tank/p8s/ct/web": "dataset does not exist"}
+	if _, _, err := b.Import(ctx, &buf); err != nil {
+		t.Fatal(err)
+	}
+	if b.Exists("web") || !strings.Contains(recv[0], "receive -u -o mountpoint=") {
+		t.Fatalf("first round made a container / %v", recv)
+	}
+	// shut down; the last changes
+	runA.Out["lxc-info -n web -sH"] = "STOPPED\n"
+	buf.Reset()
+	if err := a.ExportPhase(ctx, "web", PhaseFinal, &buf); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(sent[1], "send -c -i tank/p8s/ct/web@p8s-move-pre tank/p8s/ct/web@p8s-move") {
+		t.Fatalf("%v", sent)
+	}
+	if calls := strings.Join(runA.Calls, "\n"); !strings.Contains(calls, "zfs destroy tank/p8s/ct/web@p8s-move-pre") {
+		t.Fatal("pre snapshot kept on the old server")
+	}
+	c, _, err := b.Import(ctx, &buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "disk")); string(got) != "ROUNDROUND" || c.MemoryMiB != 1024 || !b.Exists("web") {
+		t.Fatalf("%q %+v", got, c)
+	}
+	if !strings.Contains(recv[1], "receive -u -F tank/p8s/ct/web") {
+		t.Fatalf("%v", recv)
+	}
+	calls := strings.Join(runB.Calls, "\n")
+	if !strings.Contains(calls, "zfs destroy tank/p8s/ct/web@p8s-move-pre") || !strings.Contains(calls, "zfs mount tank/p8s/ct/web") {
+		t.Fatal(calls)
+	}
+	// a move that stopped halfway: its disk is removed, never a real container
+	if err := b.DropMove(ctx, "web"); !errors.Is(err, vm.ErrConflict) {
+		t.Fatalf("drop of a real container: %v", err)
+	}
+}

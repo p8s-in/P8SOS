@@ -433,8 +433,11 @@ func (c *CTs) DialShell(ctx context.Context, n Node, name string) (net.Conn, err
 	return c.M.dialUpgrade(ctx, n, "/api/v1/cluster/ct-shell/"+url.PathEscape(name), "p8s-shell")
 }
 
-// Move moves a stopped container to another server (a job): the disk goes
-// across the tunnel, then the old one is deleted. start: start it there.
+// Move moves a container to another server (a job): the disk goes across
+// the tunnel, then the old one is deleted. A running container is copied
+// while it runs, then shut down for the last changes only and started on the
+// new server (it is off for its shutdown and that last copy). start: start a
+// stopped one there.
 func (c *CTs) Move(ctx context.Context, name, to string, start bool) (jobs.Job, error) {
 	if c.M == nil || c.M.Role() != "master" {
 		return jobs.Job{}, fmt.Errorf("%w: move containers from the cluster master", vm.ErrConflict)
@@ -460,38 +463,49 @@ func (c *CTs) Move(ctx context.Context, name, to string, start bool) (jobs.Job, 
 	if toSelf && !remote || remote && dst.ID == src.ID {
 		return jobs.Job{}, fmt.Errorf("%w: container %q is on that server already", vm.ErrConflict, name)
 	}
-	// it must be stopped and without a public IP
+	// no public IP; running is fine (two rounds)
+	var x ct.Container
 	if remote {
-		var x ct.Container
 		if err := c.call(ctx, src, "GET", cpath(name), nil, &x); err != nil {
 			return jobs.Job{}, err
 		}
-		if x.State != "stopped" || x.PublicIP != "" {
-			return jobs.Job{}, fmt.Errorf("%w: shut it down first (and it can't have a public IP)", vm.ErrConflict)
+	} else {
+		var err error
+		if x, err = c.Local.Get(ctx, name); err != nil {
+			return jobs.Job{}, err
 		}
-	} else if why, err := c.Local.MoveCheck(ctx, name); err != nil {
-		return jobs.Job{}, err
-	} else if why != "" {
-		return jobs.Job{}, fmt.Errorf("%w: %s", vm.ErrConflict, why)
 	}
+	if x.PublicIP != "" || x.Network == vm.NetPublic {
+		return jobs.Job{}, fmt.Errorf("%w: %s has a public IP from its server's pool; it can't take it along", vm.ErrConflict, name)
+	}
+	switch x.State {
+	case "stopped", "running":
+	default:
+		return jobs.Job{}, fmt.Errorf("%w: %s is %s; try again in a moment", vm.ErrConflict, name, x.State)
+	}
+	live := x.State == "running"
 	if c.V == nil || c.V.Jobs == nil {
 		return jobs.Job{}, fmt.Errorf("%w: background jobs aren't set up", vm.ErrConflict)
 	}
-	return c.V.Jobs.Start("move-ct", name, func(ctx context.Context, p jobs.Progress) (string, error) {
-		p("copying the disk")
+	// transfer sends one round (phase "" = all of a stopped container).
+	transfer := func(ctx context.Context, phase string) (string, error) {
 		pr, pw := io.Pipe()
 		errc := make(chan error, 1)
 		go func() {
 			var err error
 			if remote {
+				p := "/cluster/ct-export/" + url.PathEscape(name)
+				if phase != "" {
+					p += "?phase=" + phase
+				}
 				var resp *http.Response
-				resp, err = c.M.stream(ctx, src, "GET", "/cluster/ct-export/"+url.PathEscape(name), nil)
+				resp, err = c.M.stream(ctx, src, "GET", p, nil)
 				if err == nil {
 					_, err = io.Copy(pw, resp.Body)
 					resp.Body.Close()
 				}
 			} else {
-				err = c.Local.Export(ctx, name, pw)
+				err = c.Local.ExportPhase(ctx, name, phase, pw)
 			}
 			pw.CloseWithError(err)
 			errc <- err
@@ -516,14 +530,54 @@ func (c *CTs) Move(ctx context.Context, name, to string, start bool) (jobs.Job, 
 		if serr := <-errc; serr != nil && err == nil {
 			err = serr
 		}
-		if err != nil {
-			return "", err
+		return note, err
+	}
+	// dropHalf deletes the new server's disk after a failed live move.
+	dropHalf := func(ctx context.Context) {
+		if toSelf {
+			_ = c.Local.DropMove(ctx, name)
+		} else {
+			_ = c.call(ctx, dst, "DELETE", "/cluster/ct-import/"+url.PathEscape(name), nil, nil)
+		}
+	}
+	return c.V.Jobs.Start("move-ct", name, func(ctx context.Context, p jobs.Progress) (string, error) {
+		bg := context.WithoutCancel(ctx)
+		var note string
+		var err error
+		if live {
+			p("copying the disk while it runs")
+			if _, err := transfer(ctx, ct.PhasePre); err != nil {
+				dropHalf(bg)
+				return "", fmt.Errorf("copy (it keeps running here): %w", err)
+			}
+			p("shutting it down for the last changes")
+			if err := c.stopLong(ctx, src, remote, name); err != nil {
+				dropHalf(bg)
+				return "", fmt.Errorf("shut it down: %w (it stays here)", err)
+			}
+			p("copying the last changes")
+			if note, err = transfer(ctx, ct.PhaseFinal); err != nil {
+				dropHalf(bg)
+				msg := "it stays here"
+				if _, serr := c.Start(bg, name); serr != nil {
+					msg += ", but starting it again failed: " + serr.Error()
+				} else {
+					msg += " and runs again"
+				}
+				return "", fmt.Errorf("copy the last changes: %w (%s)", err, msg)
+			}
+			start = true
+		} else {
+			p("copying the disk")
+			if note, err = transfer(ctx, ""); err != nil {
+				return "", err
+			}
 		}
 		p("removing it from the old server")
 		if remote {
-			err = c.call(ctx, src, "DELETE", cpath(name), nil, nil)
+			err = c.call(bg, src, "DELETE", cpath(name), nil, nil)
 		} else {
-			err = c.Local.Delete(ctx, name)
+			err = c.Local.Delete(bg, name)
 		}
 		if err != nil {
 			note += "; the old copy couldn't be deleted: " + err.Error()
@@ -536,7 +590,8 @@ func (c *CTs) Move(ctx context.Context, name, to string, start bool) (jobs.Job, 
 			where = dst.Name
 		}
 		if start {
-			if _, err := c.Start(ctx, name); err != nil {
+			p("starting it")
+			if _, err := c.Start(bg, name); err != nil {
 				note += "; starting it failed: " + err.Error()
 			} else {
 				note += "; started"
@@ -544,4 +599,22 @@ func (c *CTs) Move(ctx context.Context, name, to string, start bool) (jobs.Job, 
 		}
 		return fmt.Sprintf("container %s is on %s now%s", name, where, note), nil
 	})
+}
+
+// stopLong shuts a container down cleanly, waiting up to its 60 s shutdown.
+func (c *CTs) stopLong(ctx context.Context, src Node, remote bool, name string) error {
+	if !remote {
+		_, err := c.Local.Stop(ctx, name, false)
+		return err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 100*time.Second)
+	defer cancel()
+	var x ct.Container
+	if err := errFrom(c.M.call(ctx, src, "POST", cpath(name, "/stop"), map[string]bool{"force": false}, &x)); err != nil {
+		return err
+	}
+	if x.State != "stopped" {
+		return fmt.Errorf("it is still %s", x.State)
+	}
+	return nil
 }

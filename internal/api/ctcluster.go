@@ -98,18 +98,40 @@ func (s *Server) ctExport(w http.ResponseWriter, r *http.Request) {
 	if !s.ctClusterOnly(w, r) {
 		return
 	}
-	name := r.PathValue("name")
-	if why, err := s.CTLocal.MoveCheck(r.Context(), name); err != nil {
+	name, phase := r.PathValue("name"), r.URL.Query().Get("phase")
+	check := s.CTLocal.MoveCheck
+	if phase == ct.PhasePre {
+		check = s.CTLocal.LiveMoveCheck
+	}
+	if why, err := check(r.Context(), name); err != nil {
 		s.fail(w, r, err)
 		return
 	} else if why != "" {
 		s.fail(w, r, fmt.Errorf("%w: %s can't move: %s", vm.ErrConflict, name, why))
 		return
 	}
+	rc := http.NewResponseController(w)
+	_ = rc.SetWriteDeadline(time.Now().Add(24 * time.Hour))
 	w.Header().Set("Content-Type", "application/octet-stream")
-	if err := s.CTLocal.Export(r.Context(), name, w); err != nil && s.Log != nil {
-		s.Log.Error("container export", "ct", name, "err", err)
+	if err := s.CTLocal.ExportPhase(r.Context(), name, phase, w); err != nil {
+		if s.Log != nil {
+			s.Log.Error("container export", "ct", name, "err", err)
+		}
+		panic(http.ErrAbortHandler) // the receiver sees a cut stream
 	}
+}
+
+// ctImportDrop: DELETE /cluster/ct-import/{name} removes the disk of a move
+// of a running container that stopped halfway.
+func (s *Server) ctImportDrop(w http.ResponseWriter, r *http.Request) {
+	if !s.ctClusterOnly(w, r) {
+		return
+	}
+	if err := s.CTLocal.DropMove(r.Context(), r.PathValue("name")); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // ctImport: POST /cluster/ct-import takes a stream from ctExport.

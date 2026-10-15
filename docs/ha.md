@@ -1,7 +1,7 @@
 # High availability (HA)
 
-If a server of the cluster dies, its protected VMs start again on another
-server, by themselves, within about 3 minutes. Needs a cluster
+If a server of the cluster dies, its protected VMs and containers start again
+on another server, by themselves, within about 3 minutes. Needs a cluster
 ([cluster.md](cluster.md)) of at least 2 servers.
 
 ## How it works
@@ -26,6 +26,18 @@ server, by themselves, within about 3 minutes. Needs a cluster
 - Protected VMs don't use the host's autostart; HA starts them after a reboot
   or an outage if they were running. A crashed VM is started again.
 
+## Containers
+
+Containers ([containers.md](containers.md)) are protected the same way:
+container → Manage → **High availability**. Their disk (a ZFS dataset) is
+copied with `zfs send` every few minutes, also while the container runs; the
+other server keeps it as `<pool>/p8s/ct-replica/NAME` (not mounted). On
+failover the copy becomes the container there (same name, MAC, sizes, owner,
+network; a network that server doesn't have becomes the private one) and is
+started if it was running. Fencing, coming back, autostart and the limits
+below are as for VMs. The Server → High availability list marks them
+"container".
+
 ## When it is automatic, and when by hand
 
 | VM runs on | Automatic failover |
@@ -49,10 +61,10 @@ you aren't sure): otherwise the VM runs twice with the same disk and IP.
 
 ## Limits
 
-- VMs only (containers later). VMs with data disks are copied with all their disks, snapshotted at
+- VMs and containers on local ZFS. VMs with data disks are copied with all their disks, snapshotted at
   the same instant (a disk added later is copied in full once, then only its changes). VMs on
   **Ceph** ([ceph.md](ceph.md)) need no copies at all: they start from the same disks and lose nothing.
-- Not for VMs with a public IP from a pool (the IP belongs to one server).
+- Not for VMs or containers with a public IP from a pool (the IP belongs to one server).
 - The copy needs room on the second server's pool (about the used size of the disk).
 - With 2 servers on the same network, a broken switch port between them while
   both still reach the router could make both run the VM. Use a good switch;
@@ -70,7 +82,13 @@ you aren't sure): otherwise the VM runs twice with the same disk and IP.
 | PUT | `/api/v1/ha/settings` | `{"fence_after_s":60,"failover_after_s":180}` |
 | POST | `/api/v1/ha/replicas/{name}/start` · DELETE `/api/v1/ha/replicas/{name}` | a copy kept on this server: start it here / delete it |
 | PUT | `/api/v1/vms/{name}/autostart` | `{"autostart":bool}` (refused for protected VMs) |
+| GET · PUT | `/api/v1/containers/{name}/ha` | the same for a container |
+| POST | `/api/v1/containers/{name}/ha/failover` | start a container's copy now |
+| POST · DELETE | `/api/v1/ha/replicas/{name}…?kind=ct` | a container's copy kept here (the list shows `"kind":"ct"`) |
+
+`PATCH /api/v1/containers/{name}` with `"autostart":true` is refused while the container is protected.
 
 Server to server (cluster): `GET /cluster/ha-sync`, `GET|DELETE /cluster/replica/{name}`,
 `GET /cluster/replica-send/{name}`, `POST /cluster/replica-recv`,
-`POST /cluster/replica/{name}/promote|retire`.
+`POST /cluster/replica/{name}/promote|retire` (with `?kind=ct` for containers;
+`GET /containers/{name}/ha-check`).

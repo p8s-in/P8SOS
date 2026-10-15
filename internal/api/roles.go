@@ -45,7 +45,7 @@ var (
 		"PUT /license", "DELETE /license", "POST /license/check",
 		"POST /cluster/join-code", "POST /cluster/join", "POST /cluster/leave", "DELETE /cluster/nodes/[^/]+",
 		"POST /cluster/invite-send", "POST /cluster/invites/[^/]+/[^/]+", "POST /cluster/check", "GET /cluster/shell",
-		"POST /node/shell", "POST /node/tasks",
+		"POST /node/shell", "POST /node/tasks", "POST /node/boot-security/.+", "DELETE /node/boot-security/.+",
 		"POST /updates/check", "POST /updates/install", "PUT /updates/channel",
 		"PUT /alerts/settings", "PUT /ha/settings",
 		"PUT /offsite/targets/[^/]+", "DELETE /offsite/targets/[^/]+",
@@ -55,7 +55,7 @@ var (
 		"POST /vms/[^/]+/template", "DELETE /templates/[^/]+",
 		"PUT /remote/vpn", "POST /remote/vpn/devices", "DELETE /remote/vpn/devices/[^/]+", "POST /remote/forward",
 		// server-to-server calls of the cluster (the master's token is an admin)
-		"* /cluster/(vm-export|replica|replica-send|ct-export|ct-shell|iso)/.+", "* /cluster/(vm-import|replica-recv|ha-sync|ct-import)",
+		"* /cluster/(vm-export|replica|replica-send|ct-export|ct-import|ct-shell|iso)/.+", "* /cluster/(vm-import|replica-recv|ha-sync|ct-import)",
 		"* /cluster/live-[a-z]+(/.+)?", "GET /cluster/cpu",
 		"POST /cluster/(book|vote|promote)", "GET /cluster/peer",
 	)

@@ -75,6 +75,7 @@ document.body.insertAdjacentHTML("beforeend", `
   <div id="cmOwnerBox" hidden><h3>Owner</h3><div class="inline"><select id="cmOwner" style="flex:1"></select><button class="btn" id="cmOwnerGo">Change</button></div></div>
   <div id="cmPubBox" hidden><h3>Public IP addresses</h3><div id="cmPub"></div></div>
   <div id="cmMoveBox" hidden><h3>Move to another server</h3>
+    <div class="sub">A running container is copied while it runs, then shut down for the last changes and started there (it is off for a few seconds plus its shutdown). A stopped one starts there only if ticked.</div>
     <div class="inline"><select id="cmMoveTo" style="flex:1"></select>
       <label style="display:flex;gap:6px;align-items:center;font-weight:400;margin:0"><input type="checkbox" id="cmMoveStart" style="width:auto" checked> start it there</label>
       <button class="btn" id="cmMoveGo">Move</button></div>

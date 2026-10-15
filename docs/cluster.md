@@ -176,8 +176,8 @@ company sign-in). The master hands it out every 15 seconds.
 
 ## High availability
 
-Protected VMs are copied to a second server every few minutes and started there
-if their server dies. See [ha.md](ha.md).
+Protected VMs and containers are copied to a second server every few minutes
+and started there if their server dies. See [ha.md](ha.md).
 
 ## Security
 
@@ -209,6 +209,6 @@ Files: `/var/lib/p8s/cluster/state.json` (roles, keys, tokens; root only),
 
 ## Not yet
 
-- Containers in high availability (VMs: see [ha.md](ha.md)); live moves of running containers
+- Moving a running container without any pause (it moves with a short pause: [containers.md](containers.md))
 - Public IPs for containers on workers (they stay on the master)
 - Copying a template made from a VM to other servers (new VMs from it go on the server that has it)

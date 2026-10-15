@@ -523,3 +523,12 @@ curl -s -H "Authorization: Bearer $TOK" -X DELETE $P8S/vms/web1 -w '%{http_code}
 - Change autostart on an existing VM; CPU/RAM changes on a running VM.
 - Async jobs: `POST` returns `202` + `/jobs/{id}` for long operations.
 - Scoped API tokens per user; billing (v0.5).
+
+### Boot security (admins; changes: full admins)
+
+| | | |
+|---|---|---|
+| GET | `/api/v1/node/boot-security` | `{uefi, secure_boot, mok: none\|made\|pending\|enrolled, zfs_signer, sb_entry, encrypted, unlock_ssh, unlock_keys:[{type,comment,fp}]}` |
+| POST | `/api/v1/node/boot-security/secureboot` | task: signed boot loader, signed ZFS module, key queued (one-time password in the task log) |
+| POST / DELETE | `/api/v1/node/boot-security/unlock-keys` `{"key"}` · `/unlock-keys/{n}` | task: SSH key for unlocking an encrypted system at start (port 2222) |
+| POST | `/api/v1/node/boot-security/passphrase` | `{"passphrase","password"}` (or `"otp"`) change the disk passphrase |

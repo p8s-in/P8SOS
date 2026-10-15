@@ -12,6 +12,9 @@
 #                          this lets you type it over SSH (port 2222) instead of on the
 #                          server's screen: ssh -p 2222 root@SERVER, then: zfsunlock
 #   passphrase             change the disk passphrase (encrypted system)
+#   json                   everything above as one JSON line (for the dashboard)
+#   passphrase-stdin       change the passphrase; the new one comes on stdin
+#   unlock add-file FILE   add the SSH key in FILE (the dashboard writes it there)
 set -euo pipefail
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 [[ $EUID -eq 0 ]] || { echo "run as root: sudo $0 $*" >&2; exit 1; }
@@ -171,6 +174,10 @@ unlock() {
       else
         say "Unlock over SSH is off. Turn it on: p8 boot-unlock add \"ssh-ed25519 AAAA… you@pc\""
       fi ;;
+    add-file)
+      [[ -f ${1:-} ]] || die "usage: unlock add-file FILE"
+      local k; k=$(head -1 "$1" | tr -d '\r'); rm -f "$1"
+      unlock add "$k" ;;
     add)
       local key=${1:-}
       [[ $key =~ ^(ssh-(ed25519|rsa)|ecdsa-sha2-nistp(256|384|521))\ [A-Za-z0-9+/=]+(\ .*)?$ ]] || die "usage: p8 boot-unlock add \"ssh-ed25519 AAAA… you@pc\""
@@ -198,6 +205,39 @@ unlock() {
   esac
 }
 
+# json: the state for the dashboard (quick: no network, no changes)
+status_json() {
+  local uefi=false sb="" mok="none" signer="" entry=false enc=false unlock=false keys="[]"
+  [[ -d /sys/firmware/efi ]] && uefi=true
+  if command -v mokutil >/dev/null 2>&1; then
+    sb=$(mokutil --sb-state 2>/dev/null | head -1 || true)
+    if [[ -f $MOK_PUB ]]; then
+      if mokutil --test-key "$MOK_PUB" 2>/dev/null | grep -q "is already enrolled"; then mok=enrolled
+      elif mokutil --list-new 2>/dev/null | grep -q .; then mok=pending
+      else mok=made; fi
+    fi
+  fi
+  signer=$(zfs_signer); [[ $signer == "no zfs module" ]] && signer=""
+  [[ -f $SB_DIR/shimx64.efi ]] && efibootmgr 2>/dev/null | grep -q "$SB_LABEL" && entry=true
+  encrypted && enc=true
+  if dpkg -s dropbear-initramfs >/dev/null 2>&1 && [[ -s $DROPBEAR_KEYS ]]; then
+    unlock=true
+    keys=$(jq -R -s -c 'split("\n") | map(select(length > 0)) | map(split(" ") | {type: .[0], comment: (.[2:] | join(" ")), fp: (.[1] | .[-12:])})' "$DROPBEAR_KEYS")
+  fi
+  jq -n -c --argjson uefi "$uefi" --arg sb "$sb" --arg mok "$mok" --arg signer "$signer" --argjson entry "$entry" \
+    --argjson enc "$enc" --argjson unlock "$unlock" --argjson keys "$keys" \
+    '{uefi: $uefi, secure_boot: $sb, mok: $mok, zfs_signer: $signer, sb_entry: $entry, encrypted: $enc, unlock_ssh: $unlock, unlock_keys: $keys}'
+}
+
+passphrase_stdin() {
+  encrypted || die "the system isn't encrypted with a passphrase"
+  local p1
+  IFS= read -r p1 || true
+  (( ${#p1} >= 8 )) || die "the passphrase needs at least 8 characters"
+  printf '%s\n' "$p1" | zfs change-key -o keyformat=passphrase -o keylocation=prompt "$POOL"
+  ok "passphrase changed"
+}
+
 passphrase() {
   encrypted || die "the system isn't encrypted with a passphrase"
   say "New disk passphrase for $POOL (at least 8 characters; asked at every start from now on)."
@@ -213,5 +253,7 @@ case ${1:-} in
   secureboot) case ${2:-status} in status) secureboot_status ;; setup) secureboot_setup ;; *) die "usage: p8 secureboot status|setup" ;; esac ;;
   unlock) shift; unlock "$@" ;;
   passphrase) passphrase ;;
+  passphrase-stdin) passphrase_stdin ;;
+  json) status_json ;;
   *) die "usage: $0 secureboot status|setup | unlock status|add KEY|list|remove N | passphrase" ;;
 esac
