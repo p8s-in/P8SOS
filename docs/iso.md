@@ -31,7 +31,7 @@ The **classic** ISO (Debian's own installer, ext4, P8S set up on the first start
 > (the installer marks it `HAS DATA` and asks twice before erasing anything that isn't empty).
 
 1. **BIOS first:** power on, press **F2** →
-   - Security → **Secure Boot: Disabled** (ZFS's kernel module is not signed)
+   - Security → **Secure Boot: Disabled** while installing (the installer's ZFS module is not signed; afterwards `p8 secureboot setup` makes the server ready for it)
    - Advanced → **Intel Virtualization Technology: Enabled**
    - Save & Exit (F10).
 2. Plug in the USB stick and Ethernet if you have it (Wi-Fi also works).

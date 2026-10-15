@@ -260,6 +260,10 @@ func (s *Server) encryptionKey(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
+	if e.Passphrase {
+		writeErr(w, http.StatusConflict, "conflict", "the system is encrypted with the passphrase you type at every start; there is no key file. Change it with: sudo p8 disk-passphrase")
+		return
+	}
 	if !e.On || e.KeyFile == "" || !strings.HasPrefix(e.KeyFile, "/") {
 		writeErr(w, http.StatusNotFound, "not_found", "the VM storage isn't encrypted with a key file")
 		return

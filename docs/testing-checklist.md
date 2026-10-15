@@ -564,6 +564,18 @@ Build a new ISO on the laptop: `sudo bash iso/build-installer.sh ~/P8SOS/dist` (
 - [ ] On Ceph: Linked clone → refused with a clear message
 - [ ] `p8 clone web1 web3 --linked`, `p8 unlink web3`
 
+## 52. Encrypted system, remote unlock, Secure Boot
+
+- [ ] VirtualBox (EFI), installer → mirror → "Encrypt EVERYTHING" + passphrase → summary says so; after the install it asks for the passphrase at boot; wrong one → asks again; right one → boots, first-start setup runs
+- [ ] `zfs get encryption,keylocation tank tank/ROOT/debian tank/p8s` → aes-256-gcm / prompt (inherited); `bpool` not encrypted
+- [ ] Server → Storage says "Everything is encrypted"; "Show the key" isn't offered
+- [ ] `sudo p8 disk-passphrase` → reboot asks for the new one
+- [ ] `p8 boot-unlock add "<your key>"` → reboot → from the PC: `ssh -p 2222 root@<ip>`, `zfsunlock`, passphrase → the server boots (static address server too)
+- [ ] Answers file with `"encrypt_system": true` and an ext4 layout → refused
+- [ ] Secure Boot (VirtualBox 7, EFI, Secure Boot off): `sudo p8 secureboot setup` → one-time password; reboot → MokManager → enroll → boots; Secure Boot on → boots; `p8 secureboot status` all ✔, `mokutil --sb-state` = enabled; VMs start (ZFS module loads)
+- [ ] After a kernel update (apt upgrade) with Secure Boot on: still boots (DKMS signed the new module)
+- [ ] Secure Boot on but the old entry chosen in the boot menu → refused by the firmware; switching Secure Boot off → old entry boots
+
 ## Add new features here as they are built
 
 (Every new feature adds its own lines above before it counts as done.)

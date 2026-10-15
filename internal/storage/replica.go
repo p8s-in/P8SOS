@@ -240,6 +240,9 @@ type Encryption struct {
 	Root      string `json:"root,omitempty"`      // dataset that holds the key
 	KeyStatus string `json:"key_status,omitempty"`
 	KeyFile   string `json:"key_file,omitempty"`
+	// Passphrase: the whole system is encrypted with a passphrase asked at
+	// every start (no key file to keep).
+	Passphrase bool `json:"passphrase,omitempty"`
 }
 
 // Encryption reads the encryption of the VM disks' dataset.
@@ -262,7 +265,11 @@ func (z *ZFS) Encryption(ctx context.Context) (Encryption, error) {
 	}
 	if e.On && e.Root != "" && e.Root != "-" {
 		if b, err := z.Run.Run(ctx, "zfs", "get", "-H", "-o", "value", "keylocation", e.Root); err == nil {
-			e.KeyFile = strings.TrimPrefix(strings.TrimSpace(string(b)), "file://")
+			if loc := strings.TrimSpace(string(b)); loc == "prompt" {
+				e.Passphrase = true
+			} else {
+				e.KeyFile = strings.TrimPrefix(loc, "file://")
+			}
 		}
 	}
 	if !e.On {

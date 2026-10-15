@@ -27,8 +27,12 @@ type Answers struct {
 	Password string   `json:"password"`           // at least 8 characters
 	Network  Network  `json:"network"`
 	Encrypt  bool     `json:"encrypt_vm_storage"` // VM disks encrypted at rest (key on the system disk)
-	RootGB   int      `json:"root_gb,omitempty"`  // ext4 only: system partition size (default 32)
-	Erase    bool     `json:"erase"`              // must be true: "yes, wipe the disks above"
+	// EncryptSystem: the whole ZFS pool (system and VM disks) is encrypted with
+	// Passphrase, asked at every start (ZFS layouts only).
+	EncryptSystem bool   `json:"encrypt_system,omitempty"`
+	Passphrase    string `json:"passphrase,omitempty"`
+	RootGB        int    `json:"root_gb,omitempty"` // ext4 only: system partition size (default 32)
+	Erase         bool   `json:"erase"`             // must be true: "yes, wipe the disks above"
 }
 
 // Network is the server's network setup.
@@ -136,6 +140,20 @@ func (a *Answers) Check(zoneOK func(string) bool) error {
 	}
 	if strings.ContainsAny(a.Password, "\n\r") {
 		return fmt.Errorf("password: no line breaks")
+	}
+	if a.EncryptSystem {
+		if a.Layout == Ext4 {
+			return fmt.Errorf("encrypting the whole system needs a ZFS layout (not ext4); with ext4 encrypt the VM disks only")
+		}
+		if len(a.Passphrase) < 8 || len(a.Passphrase) > 512 {
+			return fmt.Errorf("system passphrase: at least 8 characters")
+		}
+		if strings.ContainsAny(a.Passphrase, "\n\r") {
+			return fmt.Errorf("system passphrase: no line breaks")
+		}
+		a.Encrypt = false // the VM disks are inside the encrypted pool already
+	} else {
+		a.Passphrase = ""
 	}
 	if a.Layout == Ext4 {
 		if a.RootGB == 0 {

@@ -704,7 +704,38 @@ func (m *Manager) NodeStatus(id string) Status {
 	if s := m.status[id]; s != nil {
 		return *s
 	}
+	// a worker doesn't poll the master; the master's calls tell it is there
+	if _ = m.load(); m.st.Role == "worker" {
+		for _, n := range m.st.Nodes {
+			if n.ID != id {
+				continue
+			}
+			t := m.heard
+			if m.lastMaster.After(t) { // its address book, pushed on every poll
+				t = m.lastMaster
+			}
+			if t.IsZero() {
+				return Status{Connecting: true}
+			}
+			st := Status{Seen: t.UTC().Format(time.RFC3339), Online: m.now().Sub(t) < masterQuiet}
+			if !st.Online {
+				st.Error = fmt.Sprintf("no word from the master for %s (switched off, asleep, or it can't reach this server)",
+					m.now().Sub(t).Round(time.Second))
+			}
+			return st
+		}
+	}
 	return Status{}
+}
+
+// masterQuiet: a worker counts its master offline after this long without a call.
+const masterQuiet = 45 * time.Second
+
+// HeardFromMaster is told when the master called this worker.
+func (m *Manager) HeardFromMaster() {
+	m.mu.Lock()
+	m.heard = m.now()
+	m.mu.Unlock()
 }
 
 // Poll asks every worker for its capacity (the master runs it every few seconds).

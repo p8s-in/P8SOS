@@ -575,3 +575,47 @@ func TestFailedStep(t *testing.T) {
 		t.Fatalf("short: %q", s)
 	}
 }
+
+func TestEncryptSystem(t *testing.T) {
+	disks := testDisks(t)
+	a := good()
+	a.EncryptSystem, a.Passphrase, a.Encrypt = true, "short", true
+	if _, err := NewPlan(a, disks, nics, true, nil); err == nil || !strings.Contains(err.Error(), "passphrase") {
+		t.Fatalf("short passphrase: %v", err)
+	}
+	a.Passphrase = "a long disk passphrase"
+	p, err := NewPlan(a, disks, nics, true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.A.Encrypt {
+		t.Fatal("VM storage encryption should be off inside an encrypted pool")
+	}
+	var create *Step
+	for i, s := range p.Steps() {
+		if len(s.Cmd) > 2 && s.Cmd[0] == "zpool" && s.Cmd[1] == "create" && strings.Contains(strings.Join(s.Cmd, " "), " tank ") {
+			create = &p.Steps()[i]
+		}
+		if strings.Contains(s.String(), "a long disk passphrase") || strings.Contains(s.Title, "a long disk passphrase") {
+			t.Fatalf("passphrase shown: %s", s)
+		}
+	}
+	if create == nil || !strings.Contains(strings.Join(create.Cmd, " "), "-O encryption=aes-256-gcm -O keyformat=passphrase -O keylocation=prompt") ||
+		create.Stdin != "a long disk passphrase\n" || !strings.Contains(create.String(), "hidden input") {
+		t.Fatalf("pool create %+v", create)
+	}
+	// /boot stays unencrypted (GRUB reads it)
+	for _, s := range p.Steps() {
+		if strings.Contains(strings.Join(s.Cmd, " "), "bpool") && strings.Contains(strings.Join(s.Cmd, " "), "encryption=") {
+			t.Fatalf("boot pool encrypted: %s", s)
+		}
+	}
+	if !strings.Contains(p.Summary(), "passphrase is asked at every start") || !strings.Contains(p.record(), `"encrypted": true`) {
+		t.Fatalf("summary/record:\n%s\n%s", p.Summary(), p.record())
+	}
+	a.Layout = Ext4
+	a.Disks = a.Disks[:1]
+	if _, err := NewPlan(a, disks, nics, true, nil); err == nil || !strings.Contains(err.Error(), "ZFS layout") {
+		t.Fatalf("ext4 + system encryption: %v", err)
+	}
+}

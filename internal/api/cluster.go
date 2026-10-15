@@ -187,6 +187,9 @@ func (s *Server) clusterCapacity(w http.ResponseWriter, r *http.Request) {
 	if !s.adminOnly(w, r) || !s.clusterOn(w) {
 		return
 	}
+	if who(r).Cluster {
+		s.Cluster.HeardFromMaster()
+	}
 	c := cluster.Capacity{}
 	if s.Cluster.LocalCapacity != nil {
 		c = s.Cluster.LocalCapacity(r.Context())

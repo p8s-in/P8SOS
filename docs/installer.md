@@ -72,6 +72,8 @@ Rufus → the installer ISO → **DD Image** mode (everything on the stick is er
    - Server name, network port, automatic (DHCP) or fixed address, Wi-Fi name if it's a Wi-Fi port.
    - Time zone, keyboard layout.
    - Admin user + password (gets sudo; root login stays off, as before).
+   - Encrypt **everything** (ZFS layouts)? Then a disk passphrase, asked at every start — see
+     [security.md](security.md#encrypting-everything-system-and-vm-disks). If not:
    - Encrypt the VM disks? (same as before: the key is on the system disk; back it up.)
 4. A summary shows everything that will be **ERASED**. If a disk isn't empty you're asked again,
    then you **type ERASE**. Nothing is written before that.
@@ -115,6 +117,8 @@ Answers file:
   "network": {"interface": "auto", "mode": "static", "address": "192.168.1.21/24",
               "gateway": "192.168.1.1", "dns": ["1.1.1.1"]},
   "encrypt_vm_storage": false,
+  "encrypt_system": false,
+  "passphrase": "",
   "erase": true
 }
 ```
@@ -169,5 +173,7 @@ until the new disk has the `p8s-esp0` label: label the new partition `p8s-esp0`,
 
 ## Not yet
 
-- No ZFS encryption of the system itself (only of the VM disks), no swap on ZFS layouts.
-- Secure Boot must be off.
+- No swap on ZFS layouts.
+- Secure Boot must be off **while installing**; afterwards `p8 secureboot setup` makes the server ready
+  for it (see [security.md](security.md#secure-boot)).
+- An encrypted system can't be installed with the ext4 layout (encrypt the VM disks there).

@@ -116,6 +116,9 @@ func (p *Plan) Summary() string {
 	if p.A.Encrypt {
 		b.WriteString("VM disks: encrypted at rest\n")
 	}
+	if p.A.EncryptSystem {
+		b.WriteString("Encrypted: everything (system and VM disks); the passphrase is asked at every start\n")
+	}
 	boot := "BIOS (legacy)"
 	if p.UEFI {
 		boot = "UEFI"
@@ -263,8 +266,14 @@ func (p *Plan) Steps() []Step {
 			boot = append(boot, "mirror") // GRUB reads mirrors; /boot is small, so every disk has a copy
 		}
 		cmd("Creating the boot pool", append(boot, p.parts(3)...)...)
-		cmd("Creating the ZFS pool ("+string(p.A.Layout)+")", append(append([]string{"zpool", "create"}, poolOpts...),
-			append([]string{RootPool}, p.A.Layout.vdevs(p.parts(4))...)...)...)
+		create := append(append([]string{"zpool", "create"}, poolOpts...), append([]string{RootPool}, p.A.Layout.vdevs(p.parts(4))...)...)
+		if p.A.EncryptSystem { // the passphrase comes on stdin (never logged); /boot (bpool) stays readable for GRUB
+			opts := []string{"-O", "encryption=aes-256-gcm", "-O", "keyformat=passphrase", "-O", "keylocation=prompt"}
+			create = append(append(append([]string{}, create[:2]...), opts...), create[2:]...)
+			s = append(s, Step{Title: "Creating the encrypted ZFS pool (" + string(p.A.Layout) + ")", Cmd: create, Stdin: p.A.Passphrase + "\n"})
+		} else {
+			cmd("Creating the ZFS pool ("+string(p.A.Layout)+")", create...)
+		}
 		cmd("Creating the system file system", "zfs", "create", "-o", "canmount=off", "-o", "mountpoint=none", RootPool+"/ROOT")
 		cmd("Creating the system file system", "zfs", "create", "-o", "canmount=noauto", "-o", "mountpoint=/", RootDS)
 		cmd("Mounting the system file system", "zfs", "mount", RootDS)
@@ -465,8 +474,8 @@ func (p *Plan) record() string {
 		disks = append(disks, fmt.Sprintf("%q", d.Dev()))
 	}
 	sort.Strings(disks)
-	return fmt.Sprintf("{\n  \"layout\": %q,\n  \"disks\": [%s],\n  \"root\": %q,\n  \"uefi\": %t\n}\n",
-		p.A.Layout, strings.Join(disks, ", "), map[bool]string{true: RootDS, false: "ext4"}[p.A.Layout.ZFSRoot()], p.UEFI)
+	return fmt.Sprintf("{\n  \"layout\": %q,\n  \"disks\": [%s],\n  \"root\": %q,\n  \"uefi\": %t,\n  \"encrypted\": %t\n}\n",
+		p.A.Layout, strings.Join(disks, ", "), map[bool]string{true: RootDS, false: "ext4"}[p.A.Layout.ZFSRoot()], p.UEFI, p.A.EncryptSystem)
 }
 
 // keyboardLayout splits "de-nodeadkeys" into layout and variant.

@@ -91,7 +91,11 @@ if (typeof openSettings === "function") {
 $("#ndStorage").insertAdjacentHTML("afterend", `<div id="encBox" class="sub" style="margin-top:6px"></div>`);
 async function loadEncryption(){
   let e; try { e = await call("GET", "/node/encryption"); } catch { return; }
-  $("#encBox").innerHTML = e.on
+  $("#encBox").innerHTML = e.on && e.passphrase
+    ? `🔒 Everything is encrypted (${esc(e.algorithm)}): the system and the VM disks. The server asks for the passphrase at every start —
+       on its screen, or over SSH once set up (<span class="mono">p8 boot-unlock add "ssh-ed25519 …"</span>). Change it: <span class="mono">sudo p8 disk-passphrase</span>.
+       Without the passphrase nothing on the disks can be read.`
+    : e.on
     ? `🔒 Encrypted at rest (${esc(e.algorithm)}, key ${esc(e.key_status)}). Keep a copy of the key somewhere safe:
        without it the VM disks can't be read. ${isFullAdmin() ? `<button class="btn" id="encKey">Show the key…</button>
        <span id="encAsk" hidden><input id="encPw" type="password" placeholder="your password" style="width:180px"> <input id="encOtp" placeholder="or 2FA code" style="width:110px"> <button class="btn" id="encGo">Show</button></span>

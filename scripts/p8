@@ -153,6 +153,10 @@ p8 — manage P8S OS virtual machines
   p8 lan-setup                     let VMs join your home network (Ethernet only, once)
   p8 bond-setup PORT [--mode M]    add a second cable to the home network (failover; M: active-backup, 802.3ad)
   p8 ipv6 on|off|status            IPv6 for VMs on the private network
+  p8 secureboot [status|setup]     get ready for Secure Boot (signed boot loader, signed ZFS module)
+  p8 boot-unlock add "ssh-ed25519 …"   encrypted system: type the passphrase over SSH at start (port 2222)
+  p8 boot-unlock status|list|remove N
+  p8 disk-passphrase               change the passphrase of an encrypted system
   p8 cluster                       servers in this cluster (master + workers) and their room
   p8 cluster find                  P8S OS servers on this network (and whether they can join)
   p8 cluster invite NAME|IP        on the master: invite one of them (accepted on that server)
@@ -1299,6 +1303,15 @@ TXT
     T=/usr/local/share/p8s/setup-bond.sh
     [[ -f $T ]] || T=$(dirname "$(readlink -f "$0")")/setup-bond.sh
     exec sudo bash "$T" "$@" ;;
+
+  secureboot|boot-unlock|disk-passphrase)
+    T=/usr/local/share/p8s/bootsec.sh
+    [[ -f $T ]] || T=$(dirname "$(readlink -f "$0")")/bootsec.sh
+    case $cmd in
+      secureboot) exec sudo bash "$T" secureboot "${1:-status}" ;;
+      boot-unlock) exec sudo bash "$T" unlock "$@" ;;
+      disk-passphrase) exec sudo bash "$T" passphrase ;;
+    esac ;;
 
   ipv6)
     T=/usr/local/share/p8s/ipv6.sh

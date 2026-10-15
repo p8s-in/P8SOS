@@ -59,7 +59,7 @@ const STEPS = ["Welcome", "Disks", "Layout", "Server", "Network", "Admin", "Chec
 let step = 0, M = null, pin = "", plan = null;
 const A = {disks: [], layout: "", hostname: "", timezone: "Etc/UTC", keyboard: "us", user: "admin", password: "",
   network: {interface: "auto", mode: "dhcp", address: "", gateway: "", dns: [], wifi_ssid: "", wifi_password: ""},
-  encrypt_vm_storage: false, root_gb: 32};
+  encrypt_vm_storage: false, encrypt_system: false, passphrase: "", root_gb: 32};
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
 
@@ -206,14 +206,27 @@ function admin(){
     <label for="user">User name</label><input type="text" id="user" value="${esc(A.user)}" autocomplete="off">
     <div class="row"><div><label for="pw1">Password (8 or more characters)</label><input type="password" id="pw1" autocomplete="new-password"></div>
       <div><label for="pw2">The same password again</label><input type="password" id="pw2" autocomplete="new-password"></div></div>
-    <label class="choice"><input type="checkbox" id="enc" ${A.encrypt_vm_storage ? "checked" : ""}><span><b>Encrypt the VM disks at rest</b>
+    ${A.layout !== "ext4" ? `<label class="choice"><input type="checkbox" id="encAll" ${A.encrypt_system ? "checked" : ""}><span><b>Encrypt everything (system and VM disks)</b>
+      <span class="sub">The server asks for a passphrase at every start (on its screen, or over SSH once set up: <code>p8 boot-unlock</code>). Without it nothing on the disks can be read — not even by you. Leave it off for a server that must start by itself after a power cut.</span></span></label>
+    <div class="row" id="ppRow" ${A.encrypt_system ? "" : "hidden"}><div><label for="pp1">Disk passphrase (8 or more)</label><input type="password" id="pp1" autocomplete="new-password"></div>
+      <div><label for="pp2">The same passphrase again</label><input type="password" id="pp2" autocomplete="new-password"></div></div>` : ""}
+    <label class="choice" id="encVMRow" ${A.encrypt_system ? "hidden" : ""}><input type="checkbox" id="enc" ${A.encrypt_vm_storage ? "checked" : ""}><span><b>Encrypt the VM disks at rest</b>
       <span class="sub">The key stays on the system disk, so the VM disks alone (stolen, sent back, sold) can't be read. Back the key up afterwards: Server page → Storage.</span></span></label>
     ${nav(true, true, "Check everything")}`);
+  if ($("#encAll")) $("#encAll").onchange = () => { $("#ppRow").hidden = !$("#encAll").checked; $("#encVMRow").hidden = $("#encAll").checked; };
   wire(() => go(4), async () => {
     const p1 = $("#pw1").value, p2 = $("#pw2").value;
     if (p1.length < 8) throw new Error("The password needs at least 8 characters.");
     if (p1 !== p2) throw new Error("The two passwords are different.");
-    A.user = $("#user").value.trim(); A.password = p1; A.encrypt_vm_storage = $("#enc").checked;
+    A.user = $("#user").value.trim(); A.password = p1;
+    A.encrypt_system = !!$("#encAll")?.checked; A.passphrase = "";
+    if (A.encrypt_system) {
+      const q1 = $("#pp1").value, q2 = $("#pp2").value;
+      if (q1.length < 8) throw new Error("The disk passphrase needs at least 8 characters.");
+      if (q1 !== q2) throw new Error("The two disk passphrases are different.");
+      A.passphrase = q1;
+    }
+    A.encrypt_vm_storage = !A.encrypt_system && $("#enc").checked;
     plan = await api("POST", "/plan", A);
     go(6);
   });

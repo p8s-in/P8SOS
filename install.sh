@@ -207,6 +207,7 @@ install -m 0755 "$REPO/scripts/iommu.sh" /usr/local/share/p8s/iommu.sh
 install -m 0755 "$REPO/scripts/acme.sh" /usr/local/share/p8s/acme.sh
 install -m 0755 "$REPO/scripts/netcheck.sh" /usr/local/share/p8s/netcheck.sh
 install -m 0755 "$REPO/scripts/tailscale.sh" /usr/local/share/p8s/tailscale.sh
+install -m 0755 "$REPO/scripts/bootsec.sh" /usr/local/share/p8s/bootsec.sh
 install -m 0755 "$REPO/scripts/vlans.sh" /usr/local/share/p8s/vlans.sh
 install -m 0755 "$REPO/scripts/sdn.sh" /usr/local/share/p8s/sdn.sh
 install -m 0755 "$REPO/scripts/setup-bond.sh" /usr/local/share/p8s/setup-bond.sh

@@ -88,6 +88,46 @@ system disk (`/etc/p8s/keys/p8s.key`), unlocked at boot by
 - An existing server can't be switched on in place: reinstall, or move its VMs
   to a new encrypted server (cluster → Move).
 
+### Encrypting everything (system and VM disks)
+
+The installer (ZFS layouts) asks **Encrypt EVERYTHING?** (answers file:
+`"encrypt_system": true, "passphrase": "…"`). Then the whole `tank` pool —
+system, VM disks, containers, logs, settings — is AES-256-GCM, unlocked with
+a passphrase **at every start**. Only `/boot` (kernel and boot image, nothing
+secret) stays readable, because GRUB loads it.
+
+- Without the passphrase nothing on the disks can be read, also not by you:
+  write it down somewhere safe. There is no key file to back up.
+- The server **doesn't start by itself** after a power cut until someone types
+  the passphrase — on its screen, or over SSH:
+  `p8 boot-unlock add "ssh-ed25519 AAAA… you@pc"` puts a tiny SSH server in the
+  boot image (port 2222, unlocking only; it uses the server's fixed address,
+  or DHCP). At a start: `ssh -p 2222 root@<server>` → `zfsunlock` → passphrase.
+- Change the passphrase: `sudo p8 disk-passphrase` (ZFS re-wraps its key, the
+  data isn't rewritten).
+- Server → Storage shows "Everything is encrypted".
+
+## Secure Boot
+
+P8S OS can boot with Secure Boot on, using Debian's signed boot loader (shim +
+GRUB, signed by Microsoft/Debian) and a key of your own (MOK) that signs the
+ZFS kernel module:
+
+1. Install with Secure Boot **off** (the installer's ZFS module isn't signed).
+2. `sudo p8 secureboot setup` (internet needed): installs shim-signed and
+   grub-efi-amd64-signed, makes the key, rebuilds and signs the ZFS module for
+   every kernel (DKMS signs it again after every kernel update), adds the boot
+   entry **"P8S OS (Secure Boot)"** first in the boot order (the old entry
+   stays), and queues the key — it prints a one-time password.
+3. Reboot: a blue **MokManager** screen appears → Enroll MOK → Continue → Yes →
+   the password → Reboot. (You need the server's screen this once.)
+4. Switch **Secure Boot on** in the firmware setup. `p8 secureboot status`
+   shows the state, the key and the module's signature.
+
+If it doesn't start with Secure Boot on, switch it off again: the old boot
+entry still works. Test it in VirtualBox 7 first (Settings → System → Enable
+Secure Boot). BIOS (legacy) installs can't use Secure Boot.
+
 ## Activity log (audit)
 
 - Every change and sign-in, with user and IP. Kept **180 days** by default

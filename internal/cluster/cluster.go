@@ -152,6 +152,7 @@ type Manager struct {
 	st     State
 	loaded bool
 	status map[string]*Status
+	heard  time.Time // worker: when the master last called (it polls every few seconds)
 	inv    inviteBox
 	// elections (quorum.go)
 	lastMaster time.Time // worker: last book from the master

@@ -454,9 +454,37 @@ func (u *menus) ask() error {
 		a.Password = p1
 		break
 	}
-	_, err = wt("--defaultno", "--yesno", "Encrypt the VM disks at rest?\n\nThe key is kept on the system disk, so the VM disks alone "+
-		"(stolen, sent back, sold) can't be read. Back the key up after installing: Server page → Storage → Download the key.", "13", "74")
-	a.Encrypt = err == nil
+	a.EncryptSystem, a.Passphrase = false, ""
+	if a.Layout != installer.Ext4 {
+		_, err = wt("--defaultno", "--yesno", "Encrypt EVERYTHING (the system and the VM disks)?\n\nThe server then asks for a passphrase "+
+			"at every start, on its screen (or over SSH once you set that up: p8 boot-unlock). Without the passphrase nothing on the "+
+			"disks can be read — not even by you. Choose No for a server that must start by itself after a power cut.", "15", "74")
+		if err == nil {
+			for {
+				p1, err := wt("--passwordbox", "Passphrase for the disks (at least 8 characters; you type it at every start):", "10", "74")
+				if err != nil {
+					return err
+				}
+				p2, err := wt("--passwordbox", "The same passphrase again:", "10", "74")
+				if err != nil {
+					return err
+				}
+				if p1 != p2 || len(p1) < 8 {
+					msg("The two passphrases differ or are shorter than 8 characters. Try again.")
+					continue
+				}
+				a.EncryptSystem, a.Passphrase = true, p1
+				break
+			}
+		}
+	}
+	if !a.EncryptSystem {
+		_, err = wt("--defaultno", "--yesno", "Encrypt the VM disks at rest?\n\nThe key is kept on the system disk, so the VM disks alone "+
+			"(stolen, sent back, sold) can't be read. Back the key up after installing: Server page → Storage → Download the key.", "13", "74")
+		a.Encrypt = err == nil
+	} else {
+		a.Encrypt = false
+	}
 	a.Erase = false
 	return nil
 }
