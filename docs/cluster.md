@@ -87,8 +87,10 @@ VM → Manage → Options → **Move to another server** (admins). Pick the serv
 leave "Start it there" ticked, press Move (twice, to confirm). The move runs as
 a job (shown like a backup), from any server to any other, also worker → worker.
 
-- The VM must be **shut down**. Not yet movable: VMs with a public IP from a pool
-  (release it first) and VMs with an installer CD in the drive (eject it first).
+- The VM must be **shut down**. Not movable: VMs with an installer CD in the drive (eject it first).
+- A VM with a **public IP** keeps its address: the new server must have the pool's bridge
+  (`sudo p8 lan-setup` there; refused otherwise, with the reason), and the address is pinned
+  to the VM there. Moving it needs the servers on the same cable / block of addresses.
 - What happens: a ZFS snapshot of the disk is sent over the tunnel (compressed,
   only the used blocks), the VM is defined on the new server with the same name,
   UUID, CPU/RAM, firmware, disk/NIC type, MAC address, owner, network, firewall
@@ -127,7 +129,7 @@ sessions and connections normally survive. Its private IP can still change
   added later with an older CPU: set it again.
 - **Live moves** work for UEFI VMs and Windows 11 too (their UEFI variables and TPM state come
   along) and for VMs on a SAN disk (they land on the other server's local storage, like a normal
-  move). Not live: VMs with a public IP, a CD in the drive or PCI/USB devices — move those shut down.
+  move). A VM with a public IP moves live too and keeps its address (the new server needs the pool's bridge). Not live: a CD in the drive or PCI/USB devices — move those shut down.
 - **VMs on Ceph** ([ceph.md](ceph.md)) move without copying any disk: shut down it is instant,
   running only the memory goes over.
 - **How:** libvirt on each server listens on its tunnel address only
@@ -213,4 +215,3 @@ Files: `/var/lib/p8s/cluster/state.json` (roles, keys, tokens; root only),
 ## Not yet
 
 - Moving a running container without any pause (it moves with a short pause: [containers.md](containers.md))
-- Moving VMs and containers that have a public IP (shut down or live)

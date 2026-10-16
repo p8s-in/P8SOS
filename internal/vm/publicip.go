@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	"p8sos/internal/cloudinit"
 	"p8sos/internal/ippool"
@@ -60,9 +61,24 @@ func static(l *ippool.Lease, mac string) *cloudinit.Static {
 		Extra: l.Extra, IP6: l.IP6, Prefix6: l.Prefix6, Gateway6: l.Gateway6}
 }
 
+// movedAway: VMs being deleted after a move; their address went with them.
+var movedAway sync.Map
+
+// DeleteMoved deletes a VM that was moved to another server: its public
+// address stays (it belongs to the VM on its new server now).
+func (s *Service) DeleteMoved(ctx context.Context, name string) error {
+	movedAway.Store(name, true)
+	defer movedAway.Delete(name)
+	return s.Delete(ctx, name)
+}
+
 // releaseIP frees a deleted VM's address and its pinning rules.
 func (s *Service) releaseIP(ctx context.Context, name string) {
 	if s.Pools == nil {
+		return
+	}
+	if _, moved := movedAway.Load(name); moved {
+		s.logErr("firewall after move of "+name, s.ApplyFirewalls(ctx))
 		return
 	}
 	if _, had := s.Pools.Lookup(name); !had {

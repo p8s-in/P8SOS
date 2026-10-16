@@ -222,16 +222,25 @@ func (s *Server) deleteCT(w http.ResponseWriter, r *http.Request) {
 	if c.PublicIP != "" {
 		defer s.reapplyFirewall(r.Context()) // drop its address pinning
 	}
-	if err := s.CTs.Delete(r.Context(), r.PathValue("name")); err != nil {
+	moved := r.URL.Query().Get("moved") == "1" && who(r).Admin && s.CTLocal != nil
+	var err error
+	if moved { // the old copy after a move: its public address, login and billing stay with it
+		err = s.CTLocal.DeleteMoved(r.Context(), r.PathValue("name"))
+	} else {
+		err = s.CTs.Delete(r.Context(), r.PathValue("name"))
+	}
+	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	_ = s.Creds.Delete("ct", r.PathValue("name"))
+	if !moved {
+		_ = s.Creds.Delete("ct", r.PathValue("name"))
+	}
 	if g, ok := s.VMs.(guestFirewalls); ok {
 		_ = g.DropGuestFirewall(r.Context(), "ct:"+r.PathValue("name"))
 	}
 	_ = s.VMs.SetSchedule("ct:"+r.PathValue("name"), vm.Schedule{}) // backups stay, the daily run goes
-	if s.Billing != nil {                                           // stop charging
+	if s.Billing != nil && !moved {                                 // stop charging
 		if err := s.Billing.Unsubscribe(r.PathValue("name")); err != nil && s.Log != nil {
 			s.Log.Error("stop billing of deleted container", "container", r.PathValue("name"), "err", err)
 		}

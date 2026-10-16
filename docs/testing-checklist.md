@@ -721,6 +721,15 @@ Build a new ISO on the laptop: `sudo bash iso/build-installer.sh ~/P8SOS/dist` (
 - [ ] Home line with Jio/Airtel CGNAT: the From outside column says so; with Tailscale on: "reachable from anywhere through: Tailscale (100.x.y.z)"
 - [ ] Operator account: no Network panel
 
+## 70. Moving guests with a public IP
+
+- [ ] Cluster of 2, both with br0: a VM with Public IP — dc1 on the worker, shut down → Manage → Move to server → master → job done, "its public IP … came along"; start it: same address, reachable from outside, `nft list table bridge p8s_fw` on the master pins it
+- [ ] The pool still lists the address as used by that VM (not released by the move)
+- [ ] Live move of a running VM with a public IP (tick "while it runs") → it keeps running and keeps its address; a ping from outside drops at most one reply
+- [ ] A container with a public IP, running → Move to server → moves live, keeps its address
+- [ ] Target without br0 → refused with "no bridge br0 for public IP pool dc1"
+- [ ] Delete the moved VM → its address is free again
+
 ## Add new features here as they are built
 
 (Every new feature adds its own lines above before it counts as done.)

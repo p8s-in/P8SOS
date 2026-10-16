@@ -13,6 +13,7 @@ import (
 
 	"p8sos/internal/cloudinit"
 	"p8sos/internal/firewall"
+	"p8sos/internal/ippool"
 	"p8sos/internal/virt"
 )
 
@@ -125,7 +126,7 @@ func (s *Service) LiveCheck(ctx context.Context, name string) (string, error) {
 	switch {
 	case v.State != virt.Running:
 		return "it isn't running (use a normal move)", nil
-	case v.Public != nil:
+	case v.Public != nil && (s.PoolsShared == nil || !s.PoolsShared()):
 		return "it has a public IP from this server's pool; release it first", nil
 	case v.ISO != "" || v.Drivers != "":
 		return "eject its CDs first (Manage → Installer CD)", nil
@@ -204,9 +205,26 @@ func (s *Service) LivePrepare(ctx context.Context, h LiveHeader) (LivePlan, erro
 	if h.Network == NetLAN && !s.LANAvailable() {
 		return LivePlan{}, fmt.Errorf("%w: this server has no home network, which the VM uses", ErrConflict)
 	}
-	bridge, err := s.bridgeVLAN(ctx, h.Network, h.VLAN)
-	if err != nil {
-		return LivePlan{}, fmt.Errorf("%w: network: %v", ErrConflict, err)
+	var bridge string
+	var pub *cloudinit.Static
+	if h.PublicPool != "" { // its public address comes along (the cluster's pools)
+		l, ok := ippool.Lease{}, false
+		if s.Pools != nil {
+			l, ok = s.Pools.Lookup(h.Name)
+		}
+		if !ok {
+			return LivePlan{}, fmt.Errorf("%w: %s's public address isn't in the cluster's pools", ErrConflict, h.Name)
+		}
+		if s.BridgeUp != nil && !s.BridgeUp(l.Bridge) {
+			return LivePlan{}, fmt.Errorf("%w: the bridge %s of its public IP pool %s isn't on this server (sudo p8 lan-setup)", ErrConflict, l.Bridge, l.Pool)
+		}
+		bridge, pub = l.Bridge, static(&l, h.MAC)
+	} else {
+		b, err := s.bridgeVLAN(ctx, h.Network, h.VLAN)
+		if err != nil {
+			return LivePlan{}, fmt.Errorf("%w: network: %v", ErrConflict, err)
+		}
+		bridge = b
 	}
 	bg := context.WithoutCancel(ctx)
 	var undo []func()
@@ -251,7 +269,7 @@ func (s *Service) LivePrepare(ctx context.Context, h LiveHeader) (LivePlan, erro
 		repl[d.Path] = dev
 	}
 	if h.Seed && h.SeedPath != "" {
-		seed, err := s.Seeds.Build(ctx, dom, cloudinit.Spec{InstanceID: h.UUID, Hostname: h.Name, SSHKeys: s.defaultKeys(h.Owner)})
+		seed, err := s.Seeds.Build(ctx, dom, cloudinit.Spec{InstanceID: h.UUID, Hostname: h.Name, SSHKeys: s.defaultKeys(h.Owner), Static: pub})
 		if err != nil {
 			return fail(err)
 		}

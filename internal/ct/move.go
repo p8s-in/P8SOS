@@ -78,11 +78,13 @@ func (s *Service) MoveCheck(ctx context.Context, name string) (string, error) {
 	switch {
 	case s.state(ctx, name) != "stopped":
 		return "shut it down first", nil
-	case m.Network == vm.NetPublic:
+	case m.Network == vm.NetPublic && !s.poolsShared():
 		return "it has a public IP from this server's pool; it can't take it along", nil
 	}
 	return "", nil
 }
+
+func (s *Service) poolsShared() bool { return s.PoolsShared != nil && s.PoolsShared() }
 
 // LiveMoveCheck says whether a container can move while it runs ("" = yes).
 func (s *Service) LiveMoveCheck(ctx context.Context, name string) (string, error) {
@@ -90,7 +92,7 @@ func (s *Service) LiveMoveCheck(ctx context.Context, name string) (string, error
 	if err != nil {
 		return "", err
 	}
-	if m.Network == vm.NetPublic {
+	if m.Network == vm.NetPublic && !s.poolsShared() {
 		return "it has a public IP from this server's pool; it can't take it along", nil
 	}
 	return "", nil
@@ -242,7 +244,16 @@ func (s *Service) finishImport(ctx context.Context, h MoveHeader) (Container, st
 	ds := s.dataset(h.Name)
 	note := ""
 	network := h.Network
-	if _, err := s.bridgeFor(h.Name, network); err != nil {
+	if network == vm.NetPublic { // its address came along (the cluster's pools)
+		l, ok := s.lease(h.Name)
+		if !ok {
+			return Container{}, "", fmt.Errorf("%w: %s's public address isn't in the cluster's pools", vm.ErrConflict, h.Name)
+		}
+		if s.BridgeUp != nil && !s.BridgeUp(l.Bridge) {
+			return Container{}, "", fmt.Errorf("%w: the bridge %s of its public IP pool %s isn't on this server (sudo p8 lan-setup)", vm.ErrConflict, l.Bridge, l.Pool)
+		}
+		note = "; its public IP " + l.IP + " came along"
+	} else if _, err := s.bridgeFor(h.Name, network); err != nil {
 		network, note = vm.NetNAT, fmt.Sprintf("; its network %s isn't available here, so it is on the private network", h.Network)
 	}
 	undo := func() {

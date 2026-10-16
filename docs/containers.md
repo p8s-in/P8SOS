@@ -47,7 +47,7 @@ list `/var/lib/p8s/containers.json`. Shell on the server: `p8 ct enter NAME`.
 - **One list:** the master lists the containers of every server ("on NODE");
   start/stop, resize, snapshots, backups, passwords and the terminal work the
   same wherever the container runs.
-- **Moving:** Manage → **Move to server** (containers without a public IP).
+- **Moving:** Manage → **Move to server**. A container with a public IP keeps it, if the other server has the pool's bridge.
   The disk is copied with `zfs send`, the container is removed from the old server
   and optionally started on the new one. `p8 ct-move NAME SERVER [--start]`.
   A **running** container moves with a short pause: its disk is copied while it

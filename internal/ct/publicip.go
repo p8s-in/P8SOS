@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"p8sos/internal/cloudinit"
 	"p8sos/internal/ippool"
@@ -72,7 +73,20 @@ func (s *Service) takeIP(pool, name, prefer string) (ippool.Lease, error) {
 	return l, err
 }
 
+// movedAway: containers being deleted after a move (their address went with them).
+var movedAway sync.Map
+
+// DeleteMoved deletes a container that moved to another server; its public address stays.
+func (s *Service) DeleteMoved(ctx context.Context, name string) error {
+	movedAway.Store(name, true)
+	defer movedAway.Delete(name)
+	return s.Delete(ctx, name)
+}
+
 func (s *Service) releaseIP(name string) {
+	if _, moved := movedAway.Load(name); moved {
+		return
+	}
 	if s.Pools != nil {
 		_ = s.Pools.Release(name)
 	}

@@ -555,6 +555,10 @@ func serve(args []string) error {
 	clu.DataDir = cfg.DataDir
 	// a worker hands out the master's public addresses; leaving, it keeps those of its VMs and containers
 	pools.Leader = cluster.PoolsLeader{M: clu}
+	svc.PoolsShared = func() bool { return clu.Role() != "" } // a cluster: public addresses move with their VMs
+	if cts != nil {
+		cts.PoolsShared = svc.PoolsShared
+	}
 	clu.BeforeLeave = func() {
 		n, err := pools.Adopt(func(name string) bool {
 			if _, err := svc.Get(context.Background(), name); err == nil {

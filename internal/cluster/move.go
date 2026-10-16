@@ -114,6 +114,11 @@ func (c *VMs) StartMove(ctx context.Context, name, to string, start, live bool) 
 	if !target.Online {
 		return vm.Job{}, fmt.Errorf("%w: server %s is offline", vm.ErrConflict, target.Name)
 	}
+	if v, err := c.Get(ctx, name); err == nil && v.Public != nil { // its address comes along: the bridge must be there
+		if why := c.bridgeReason(ctx, to, v.Public.Bridge, v.Public.Pool); why != "" {
+			return vm.Job{}, fmt.Errorf("%w: %s can't take %s: %s", vm.ErrConflict, target.Name, name, why)
+		}
+	}
 	if live {
 		return c.startLive(ctx, name, info, to)
 	}
@@ -200,9 +205,9 @@ func (c *VMs) move(ctx context.Context, name, from, to, self string, start bool,
 	p("removing the original")
 	var derr error
 	if from == self {
-		derr = c.Local.Delete(context.WithoutCancel(ctx), name)
+		derr = c.deleteMovedLocal(context.WithoutCancel(ctx), name)
 	} else {
-		derr = c.call(context.WithoutCancel(ctx), src, "DELETE", vpath(name), nil, nil)
+		derr = c.call(context.WithoutCancel(ctx), src, "DELETE", vpath(name)+"?moved=1", nil, nil)
 	}
 	if to == self {
 		c.remember(name, "")

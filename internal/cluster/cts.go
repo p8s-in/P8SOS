@@ -476,8 +476,17 @@ func (c *CTs) Move(ctx context.Context, name, to string, start bool) (jobs.Job, 
 			return jobs.Job{}, err
 		}
 	}
-	if x.PublicIP != "" || x.Network == vm.NetPublic {
-		return jobs.Job{}, fmt.Errorf("%w: %s has a public IP from its server's pool; it can't take it along", vm.ErrConflict, name)
+	if x.PublicIP != "" || x.Network == vm.NetPublic { // its address comes along: the bridge must be there
+		if x.Public == nil || c.V == nil {
+			return jobs.Job{}, fmt.Errorf("%w: %s has a public IP from its server's pool; it can't take it along", vm.ErrConflict, name)
+		}
+		id := dst.ID
+		if toSelf {
+			id = c.M.SelfID()
+		}
+		if why := c.V.bridgeReason(ctx, id, x.Public.Bridge, x.Public.Pool); why != "" {
+			return jobs.Job{}, fmt.Errorf("%w: that server can't take %s: %s", vm.ErrConflict, name, why)
+		}
 	}
 	switch x.State {
 	case "stopped", "running":
@@ -576,7 +585,11 @@ func (c *CTs) Move(ctx context.Context, name, to string, start bool) (jobs.Job, 
 		}
 		p("removing it from the old server")
 		if remote {
-			err = c.call(bg, src, "DELETE", cpath(name), nil, nil)
+			err = c.call(bg, src, "DELETE", cpath(name)+"?moved=1", nil, nil)
+		} else if d, ok := any(c.Local).(interface {
+			DeleteMoved(ctx context.Context, name string) error
+		}); ok {
+			err = d.DeleteMoved(bg, name) // its public address stays with it
 		} else {
 			err = c.Local.Delete(bg, name)
 		}

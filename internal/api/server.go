@@ -748,6 +748,18 @@ func (s *Server) deleteVM(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.vmFor(w, r); !ok {
 		return
 	}
+	if r.URL.Query().Get("moved") == "1" && who(r).Admin { // the old copy after a move: its address, billing and websites stay
+		if dm, ok := s.VMs.(interface {
+			DeleteMoved(ctx context.Context, name string) error
+		}); ok {
+			if err := dm.DeleteMoved(r.Context(), r.PathValue("name")); err != nil {
+				s.fail(w, r, err)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+	}
 	if err := s.VMs.Delete(r.Context(), r.PathValue("name")); err != nil {
 		s.fail(w, r, err)
 		return

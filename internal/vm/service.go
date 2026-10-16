@@ -73,9 +73,12 @@ type Service struct {
 	AgentWait time.Duration
 	Log       *slog.Logger
 
-	Backups      *backup.Store // nil = backups off
-	ISOs         *isos.Library // installer images; nil = ISO installs off
-	Pools        *ippool.Store // public IP pools; nil = none
+	Backups *backup.Store // nil = backups off
+	ISOs    *isos.Library // installer images; nil = ISO installs off
+	Pools   *ippool.Store // public IP pools; nil = none
+	// PoolsShared: this server is in a cluster, whose servers share the
+	// master's pools — a VM's public address can move with it.
+	PoolsShared  func() bool
 	Jobs         *jobs.Manager // runs backups and restores in the background
 	ScheduleFile string        // daily-backup settings per VM (JSON); empty = in memory only
 	FirewallFile string        // per-VM firewall settings (JSON); empty = in memory only

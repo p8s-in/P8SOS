@@ -70,8 +70,11 @@ type MoveHeader struct {
 	// the header, the other server opens the same disks.
 	Shared string           `json:"shared,omitempty"`
 	Extra  []virt.ExtraDisk `json:"extra,omitempty"` // data disks (shared storage: opened there; local: streamed after the root disk)
-	TPM    []byte           `json:"tpm,omitempty"`   // software TPM state (Windows 11, BitLocker)
-	NICs   []NIC            `json:"nics,omitempty"`  // the other network cards (same MACs)
+	// PublicPool: the VM has a public address from this pool (the cluster's
+	// pools: the address stays with the VM's name).
+	PublicPool string `json:"public_pool,omitempty"`
+	TPM        []byte `json:"tpm,omitempty"`  // software TPM state (Windows 11, BitLocker)
+	NICs       []NIC  `json:"nics,omitempty"` // the other network cards (same MACs)
 }
 
 // maxHeader caps the header line (UEFI variables are about 0.7 MB in base64).
@@ -166,6 +169,11 @@ func (s *Service) moveHeader(ctx context.Context, name string) (MoveHeader, erro
 	if s.shared(dom) {
 		h.Shared = s.storageOf(dom)
 	}
+	if s.Pools != nil {
+		if l, ok := s.Pools.Lookup(name); ok {
+			h.PublicPool, h.Network = l.Pool, NetPublic
+		}
+	}
 	for _, d := range sp.Extra {
 		h.Extra = append(h.Extra, virt.ExtraDisk{Index: d.Index, SizeGB: d.SizeGB})
 	}
@@ -186,7 +194,7 @@ func (s *Service) MoveCheck(ctx context.Context, name string) (string, error) {
 	switch {
 	case v.State != virt.Stopped:
 		return "shut it down first (it is " + string(v.State) + ")", nil
-	case v.Public != nil:
+	case v.Public != nil && (s.PoolsShared == nil || !s.PoolsShared()):
 		return "it has a public IP from this server's pool; release it first", nil
 	case v.ISO != "" || v.Drivers != "":
 		return "eject its CDs first (Manage → Installer CD)", nil
@@ -313,10 +321,24 @@ func (s *Service) defineMoved(ctx context.Context, h MoveHeader, disk string, un
 			note = fmt.Sprintf("; %s isn't available here (%v), so it is on the private network", network, err)
 		}
 	}
+	var pub *cloudinit.Static
+	if h.PublicPool != "" { // its public address came along (the cluster's pools)
+		if s.Pools == nil {
+			return VM{}, "", fmt.Errorf("%w: public IPs aren't available on this server", ErrConflict)
+		}
+		l, ok := s.Pools.Lookup(h.Name)
+		if !ok {
+			return VM{}, "", fmt.Errorf("%w: %s's public address isn't in the cluster's pools", ErrConflict, h.Name)
+		}
+		if s.BridgeUp != nil && !s.BridgeUp(l.Bridge) {
+			return VM{}, "", fmt.Errorf("%w: the bridge %s of its public IP pool %s isn't on this server (sudo p8 lan-setup)", ErrConflict, l.Bridge, l.Pool)
+		}
+		bridge, note, pub = l.Bridge, "", static(&l, h.MAC)
+	}
 	seed := ""
 	if h.Seed {
 		// the same instance-id: cloud-init sees the same machine and changes nothing
-		seed, err = s.Seeds.Build(ctx, dom, cloudinit.Spec{InstanceID: h.UUID, Hostname: h.Name, SSHKeys: s.defaultKeys(h.Owner)})
+		seed, err = s.Seeds.Build(ctx, dom, cloudinit.Spec{InstanceID: h.UUID, Hostname: h.Name, SSHKeys: s.defaultKeys(h.Owner), Static: pub})
 		if err != nil {
 			return VM{}, "", err
 		}
@@ -374,6 +396,10 @@ func (s *Service) defineMoved(ctx context.Context, h MoveHeader, disk string, un
 	}
 	if h.Schedule != nil {
 		s.logErr("daily backup schedule of moved vm", s.SetSchedule(h.Name, *h.Schedule))
+	}
+	if pub != nil {
+		s.logErr("firewall of moved vm", s.ApplyFirewalls(bg)) // its address is pinned to it here now
+		note += "; its public IP " + pub.IP + " came along"
 	}
 	v, err := s.get(ctx, dom)
 	if err != nil {

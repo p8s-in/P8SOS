@@ -37,6 +37,9 @@ gives a VM or container, so an address is never handed out twice.
 - A routed block (vmbr1) works only on the server it is routed to: keep such VMs
   there with **Server** in the Create dialog, or make one pool per server.
 - Manage → Public IP addresses works from the master for VMs on any server.
+- **Moving** (Manage → Move to server, also live while it runs) keeps the address: VMs
+  and containers go to a server with the pool's bridge and keep their IP; the old server
+  lets go of it, the new one pins it to the guest.
 - If the master can't be reached, existing VMs keep their addresses; new
   addresses wait until it is back.
 - A worker that leaves keeps the addresses of its VMs and containers (copied into

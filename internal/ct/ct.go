@@ -151,6 +151,8 @@ type Service struct {
 	// Pools are the public IP pools (shared with VMs); BridgeUp checks a pool's bridge.
 	Pools    *ippool.Store
 	BridgeUp func(bridge string) bool
+	// PoolsShared: a cluster sharing the master's pools — a public address moves with its container.
+	PoolsShared func() bool
 	// Refresh re-applies the firewall (public address pinning) after a restore; nil = none.
 	Refresh func(ctx context.Context) error
 	// AfterBackup is told about every finished backup (off-site copies); nil = nothing.

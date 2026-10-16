@@ -125,3 +125,40 @@ func (c *CTs) ChangePublicIPs(ctx context.Context, name string, r vm.PublicIPReq
 	}
 	return l.ChangePublicIPs(ctx, name, r)
 }
+
+// bridgeReason says why server id can't take a guest with a public address
+// on bridge ("" = it can).
+func (c *VMs) bridgeReason(ctx context.Context, id, bridge, pool string) string {
+	if c.M == nil || id == c.M.SelfID() {
+		return "" // this server: the move checks its bridge
+	}
+	if _, ok := c.node(id); !ok {
+		return "it isn't in the cluster"
+	}
+	capa := c.M.NodeStatus(id).Capacity
+	if !capa.SharedPools {
+		return "public IPs from the pools need P8S OS updated on it"
+	}
+	if !contains(capa.Bridges, bridge) {
+		return "no bridge " + bridge + " for public IP pool " + pool + " (run: sudo p8 lan-setup there)"
+	}
+	return ""
+}
+
+// deleteMovedLocal deletes this server's copy of a moved VM, keeping its public address.
+func (c *VMs) deleteMovedLocal(ctx context.Context, name string) error {
+	if d, ok := c.Local.(interface {
+		DeleteMoved(ctx context.Context, name string) error
+	}); ok {
+		return d.DeleteMoved(ctx, name)
+	}
+	return c.Local.Delete(ctx, name)
+}
+
+// DeleteMoved deletes a moved VM's old copy (on the server that has it), keeping its public address.
+func (c *VMs) DeleteMoved(ctx context.Context, name string) error {
+	if n, remote := c.locate(ctx, name); remote {
+		return c.call(ctx, n, "DELETE", vpath(name)+"?moved=1", nil, nil)
+	}
+	return c.deleteMovedLocal(ctx, name)
+}
