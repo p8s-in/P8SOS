@@ -61,6 +61,9 @@ type VMs struct {
 	Local
 	M    *Manager
 	Jobs *jobs.Manager // runs moves (the local service's job list, so /jobs shows them)
+	// PoolBridge is a public IP pool's bridge (VMs with a public IP go on a
+	// server that has it); nil = public IPs only on this server.
+	PoolBridge func(pool string) (string, bool)
 
 	mu    sync.Mutex
 	where map[string]string  // vm -> node id (workers only)
@@ -638,8 +641,8 @@ func (c *VMs) Candidates(ctx context.Context, r vm.CreateRequest) []Candidate {
 			cd.Reason = "offline"
 		case have != nil && !have[cd.Node.ID]:
 			cd.Reason = "no copy of template " + r.Template + " (Server → OS templates → Copy)"
-		case !cd.Local && r.IPPool != "":
-			cd.Reason = "public IPs use this server's pools"
+		case c.poolReason(*cd, r.IPPool) != "":
+			cd.Reason = c.poolReason(*cd, r.IPPool)
 		case r.Network == vm.NetLAN && !contains(cd.Cap.Networks, "lan"):
 			cd.Reason = "no home network set up"
 		case cd.Cap.MemTotalMiB > 0 && free(cd.Cap) < need:

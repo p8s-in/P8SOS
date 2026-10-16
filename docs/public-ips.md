@@ -24,6 +24,25 @@ on public VMs as on any other.
 **Plans:** customers can use pools marked "Customers may use this pool", up to
 `public_ips` in their plan (`p8 user quota alice ips=1`).
 
+## In a cluster
+
+The **master's pools are the cluster's**: add and change pools on the master's
+dashboard (a worker's pool page shows them read-only). Every server gets a copy
+with the cluster's settings, and a worker asks the master for each address it
+gives a VM or container, so an address is never handed out twice.
+
+- A VM or container with a public IP goes on a server that has the pool's
+  **bridge** (bridged setup: `sudo p8 lan-setup` on each server on that cable).
+  The others show "no bridge br0 for public IP pool …" in the placement list.
+- A routed block (vmbr1) works only on the server it is routed to: keep such VMs
+  there with **Server** in the Create dialog, or make one pool per server.
+- Manage → Public IP addresses works from the master for VMs on any server.
+- If the master can't be reached, existing VMs keep their addresses; new
+  addresses wait until it is back.
+- A worker that leaves keeps the addresses of its VMs and containers (copied into
+  its own pools file); the master keeps them marked used.
+- Pools a server had before it joined keep working there for its old VMs.
+
 ## Which setup does my provider use?
 
 ### Bridged (the block is on the same cable as the server)

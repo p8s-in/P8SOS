@@ -68,7 +68,8 @@ make a machine with a public IP (e.g. a VPS) the master instead.
   that have them; new VMs from such a template go on one of those. Copy one to
   other servers with Server → OS templates → Made from VMs → Copy
   ([clones-templates.md](clones-templates.md)).
-- VMs with a **public IP** go on the master for now (its IP pools).
+- VMs and containers with a **public IP** go on a server that has the pool's bridge (e.g. `br0`:
+  `sudo p8 lan-setup` there); the master hands out every address ([public-ips.md](public-ips.md#in-a-cluster)).
 
 Each worker has a **>_ Shell** button in Server → Cluster: a root shell of that
 server in the browser, through the tunnel (logged on both servers).
@@ -212,4 +213,4 @@ Files: `/var/lib/p8s/cluster/state.json` (roles, keys, tokens; root only),
 ## Not yet
 
 - Moving a running container without any pause (it moves with a short pause: [containers.md](containers.md))
-- Public IPs for containers on workers (they stay on the master)
+- Moving VMs and containers that have a public IP (shut down or live)

@@ -533,7 +533,8 @@ func serve(args []string) error {
 		Hostname: func() string { h, _ := os.Hostname(); return h },
 		LocalCapacity: func(ctx context.Context) cluster.Capacity {
 			in := hostinfo.Collect(ctx, run, cfg.VMDataset)
-			c := cluster.Capacity{CPUs: in.CPUs, MemTotalMiB: in.MemTotalMiB, PoolFreeGB: in.PoolFreeGB, Networks: svc.Networks(), Version: version}
+			c := cluster.Capacity{CPUs: in.CPUs, MemTotalMiB: in.MemTotalMiB, PoolFreeGB: in.PoolFreeGB, Networks: svc.Networks(), Version: version,
+				Bridges: cluster.LocalBridges(), SharedPools: true}
 			c.Hostname, _ = os.Hostname()
 			if l, err := svc.List(ctx); err == nil {
 				for _, v := range l {
@@ -552,7 +553,20 @@ func serve(args []string) error {
 		}}
 	// no single master: every server keeps the master's settings and can take over
 	clu.DataDir = cfg.DataDir
-	clu.BookFiles = []string{"users.json", "vm-shares.json", "firewall-dc.json", "cluster/ha.json", "ippools.json", "security.json", "ldap.json", "sso.json", "sdn.json"}
+	// a worker hands out the master's public addresses; leaving, it keeps those of its VMs and containers
+	pools.Leader = cluster.PoolsLeader{M: clu}
+	clu.BeforeLeave = func() {
+		n, err := pools.Adopt(func(name string) bool {
+			if _, err := svc.Get(context.Background(), name); err == nil {
+				return true
+			}
+			return cts != nil && cts.Exists(name)
+		})
+		if err != nil || n > 0 {
+			log.Info("public addresses kept after leaving the cluster", "guests", n, "err", err)
+		}
+	}
+	clu.BookFiles = []string{"users.json", "vm-shares.json", "firewall-dc.json", "cluster/ha.json", cluster.PoolsFile, "security.json", "ldap.json", "sso.json", "sdn.json"}
 	// virtual networks across the servers (VXLAN in the tunnel; the master is their gateway)
 	vnets := &sdn.Manager{Store: &sdn.Store{Path: filepath.Join(cfg.DataDir, "sdn.json")}, Run: run, DataDir: cfg.DataDir,
 		Where: func() sdn.Where {
@@ -612,7 +626,8 @@ func serve(args []string) error {
 	if err := clu.Apply(ctx); err != nil {
 		log.Error("cluster tunnel", "err", err)
 	}
-	cvms := &cluster.VMs{Local: svc, M: clu, Jobs: svc.Jobs}
+	cvms := &cluster.VMs{Local: svc, M: clu, Jobs: svc.Jobs,
+		PoolBridge: func(name string) (string, bool) { p, err := pools.Get(name); return p.Bridge, err == nil }}
 	apiSrv.VMs, apiSrv.Cluster, apiSrv.ClusterVMs = cvms, clu, cvms
 	if cts != nil { // containers on every server of the cluster (the master forwards)
 		cts.VNets = vnets

@@ -90,8 +90,10 @@ const MaxSize = 1024
 
 type Store struct {
 	Path string // e.g. /var/lib/p8s/ippools.json; empty = memory only
-	mu   sync.Mutex
-	mem  []Pool
+	// Leader: in a cluster, a worker follows the master's pools (follow.go).
+	Leader Leader
+	mu     sync.Mutex
+	mem    []Pool
 }
 
 func (s *Store) load() ([]Pool, error) {
@@ -326,7 +328,7 @@ func view(p Pool) View {
 func (s *Store) List() ([]View, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	l, err := s.load()
+	l, err := s.read()
 	out := []View{}
 	for _, p := range l {
 		out = append(out, view(p))
@@ -338,7 +340,7 @@ func (s *Store) List() ([]View, error) {
 func (s *Store) Get(name string) (View, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	l, err := s.load()
+	l, err := s.read()
 	if err != nil {
 		return View{}, err
 	}
@@ -359,6 +361,9 @@ func (s *Store) Add(p Pool) (View, error) {
 	p.Used, p.Extra, p.Used6 = map[string]string{}, map[string]string{}, map[string]string{}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.following() != nil {
+		return View{}, ErrNotMaster
+	}
 	l, err := s.load()
 	if err != nil {
 		return View{}, err
@@ -392,6 +397,9 @@ type V6 struct{ CIDR6, Gateway6 string }
 func (s *Store) UpdateV6(name string, dns, exclude []string, customers bool, v6 *V6) (View, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.masterPool(name) {
+		return View{}, ErrNotMaster
+	}
 	l, err := s.load()
 	if err != nil {
 		return View{}, err
@@ -432,6 +440,9 @@ func (s *Store) UpdateV6(name string, dns, exclude []string, customers bool, v6 
 func (s *Store) Delete(name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.masterPool(name) {
+		return ErrNotMaster
+	}
 	l, err := s.load()
 	if err != nil {
 		return err
@@ -482,6 +493,10 @@ func lease(p Pool, ip string) Lease {
 func (s *Store) Allocate(pool, vm, prefer string) (Lease, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if f := s.remote(vm, pool); f != nil {
+		r, err := apply(f, Op{Kind: OpAllocate, Pool: pool, VM: vm, IP: prefer})
+		return r.Lease, err
+	}
 	l, err := s.load()
 	if err != nil {
 		return Lease{}, err
@@ -550,6 +565,10 @@ func find(l []Pool, vm string) (int, string) {
 func (s *Store) AddExtra(vm, want string) (Lease, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if f := s.remote(vm, ""); f != nil {
+		r, err := apply(f, Op{Kind: OpAddExtra, VM: vm, IP: want})
+		return r.Lease, err
+	}
 	l, err := s.load()
 	if err != nil {
 		return Lease{}, err
@@ -593,6 +612,10 @@ func (s *Store) AddExtra(vm, want string) (Lease, error) {
 func (s *Store) RemoveExtra(vm, ip string) (Lease, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if f := s.remote(vm, ""); f != nil {
+		r, err := apply(f, Op{Kind: OpRemoveExtra, VM: vm, IP: ip})
+		return r.Lease, err
+	}
 	l, err := s.load()
 	if err != nil {
 		return Lease{}, err
@@ -618,6 +641,10 @@ func (s *Store) RemoveExtra(vm, ip string) (Lease, error) {
 func (s *Store) AddV6(vm string) (Lease, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if f := s.remote(vm, ""); f != nil {
+		r, err := apply(f, Op{Kind: OpAddV6, VM: vm})
+		return r.Lease, err
+	}
 	l, err := s.load()
 	if err != nil {
 		return Lease{}, err
@@ -647,6 +674,10 @@ func (s *Store) AddV6(vm string) (Lease, error) {
 func (s *Store) Change(vm, pool, want string) (Lease, Lease, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if f := s.remote(vm, pool); f != nil {
+		r, err := apply(f, Op{Kind: OpChange, Pool: pool, VM: vm, IP: want})
+		return r.Old, r.Lease, err
+	}
 	l, err := s.load()
 	if err != nil {
 		return Lease{}, Lease{}, err
@@ -724,6 +755,20 @@ func (s *Store) Change(vm, pool, want string) (Lease, Lease, error) {
 func (s *Store) Release(vm string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if f := s.remote(vm, ""); f != nil {
+		if m, ok := s.master(); ok {
+			if i, _ := find(m, vm); i < 0 {
+				return s.releaseLocal(vm) // no address on the master: nothing to ask
+			}
+		}
+		_, err := apply(f, Op{Kind: OpRelease, VM: vm})
+		return err
+	}
+	return s.releaseLocal(vm)
+}
+
+// releaseLocal frees vm's addresses in this server's own file (caller holds mu).
+func (s *Store) releaseLocal(vm string) error {
 	l, err := s.load()
 	if err != nil {
 		return err
@@ -749,7 +794,7 @@ func (s *Store) Release(vm string) error {
 func (s *Store) Lookup(vm string) (Lease, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	l, err := s.load()
+	l, err := s.read()
 	if err != nil {
 		return Lease{}, false
 	}
@@ -768,7 +813,7 @@ func (s *Store) All() map[string]Lease {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := map[string]Lease{}
-	l, _ := s.load()
+	l, _ := s.read()
 	for _, p := range l {
 		for ip, v := range p.Used {
 			out[v] = lease(p, ip)

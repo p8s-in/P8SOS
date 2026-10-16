@@ -239,6 +239,7 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("POST /api/v1/templates/{name}/copy", s.copyTemplate)
 	auth.HandleFunc("GET /api/v1/cluster/tpl-export/{name}", s.tplExport)
 	auth.HandleFunc("POST /api/v1/cluster/tpl-import", s.tplImport)
+	auth.HandleFunc("POST /api/v1/cluster/ippool", s.clusterPool)
 	auth.HandleFunc("POST /api/v1/vms/{name}/clone", s.cloneVM)
 	auth.HandleFunc("POST /api/v1/vms/{name}/unlink", s.unlinkVM)
 	auth.HandleFunc("POST /api/v1/vms/{name}/template", s.templateFromVM)

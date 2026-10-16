@@ -175,14 +175,15 @@ func (c *CTs) localTemplate(ctx context.Context, tpl string) bool {
 // Create makes a container on the server asked for, or the best one that has its template.
 func (c *CTs) Create(ctx context.Context, r ct.CreateRequest) (ct.Container, error) {
 	ws := c.workers()
-	if len(ws) == 0 || r.IPPool != "" || r.Network == vm.NetPublic {
-		x, err := c.Local.Create(ctx, r) // public IPs come from this server's pools
+	if len(ws) == 0 {
+		x, err := c.Local.Create(ctx, r)
 		return c.selfTag(x), err
 	}
 	if c.Exists(r.Name) {
 		return ct.Container{}, fmt.Errorf("%w: container %q", vm.ErrExists, r.Name)
 	}
-	vr := vm.CreateRequest{Name: r.Name, VCPUs: r.VCPUs, MemoryMiB: max(r.MemoryMiB, 512), DiskGB: max(r.DiskGB, 8), Network: r.Network, Node: r.Node}
+	vr := vm.CreateRequest{Name: r.Name, VCPUs: r.VCPUs, MemoryMiB: max(r.MemoryMiB, 512), DiskGB: max(r.DiskGB, 8), Network: r.Network, Node: r.Node,
+		IPPool: r.IPPool} // public IPs: a server with the pool's bridge
 	var target Node
 	if r.Node != "" {
 		t, err := c.V.place(ctx, vr)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"p8sos/internal/cluster"
 	"strings"
 
 	"p8sos/internal/ippool"
@@ -143,12 +144,18 @@ func (s *Server) changePublicIPs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var c PublicIPChanger = s.LocalPublicIPs
+	if c != nil && s.ClusterVMs != nil {
+		c = s.ClusterVMs // a VM on another server: changed there
+	}
 	if strings.HasPrefix(r.URL.Path, "/api/v1/containers/") {
 		if s.CTLocal == nil {
 			writeErr(w, http.StatusNotFound, "not_found", "containers are not available on this host")
 			return
 		}
 		c = s.CTLocal
+		if cc, ok := s.CTs.(*cluster.CTs); ok {
+			c = cc
+		}
 	}
 	if c == nil {
 		writeErr(w, http.StatusNotFound, "not_found", "public IPs can't be changed on this host")
@@ -160,4 +167,17 @@ func (s *Server) changePublicIPs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
+}
+
+// clusterPool: POST /cluster/ippool — a worker asks the master for an address
+// change (ippool.Op); the answer carries the master's pools file.
+func (s *Server) clusterPool(w http.ResponseWriter, r *http.Request) {
+	if !s.adminOnly(w, r) || !s.poolsOn(w) {
+		return
+	}
+	var op ippool.Op
+	if !decode(w, r, &op) {
+		return
+	}
+	writeJSON(w, http.StatusOK, s.Pools.Do(op))
 }

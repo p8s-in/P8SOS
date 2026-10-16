@@ -118,6 +118,10 @@ type Capacity struct {
 	PoolFreeGB  float64  `json:"pool_free_gb"`
 	VMs         int      `json:"vms"`
 	Networks    []string `json:"networks"`
+	// Bridges are this server's network bridges (a public IP pool's bridge must be there);
+	// SharedPools: it hands out addresses from the master's pools (newer servers).
+	Bridges     []string `json:"bridges,omitempty"`
+	SharedPools bool     `json:"shared_pools,omitempty"`
 	Version     string   `json:"version,omitempty"`
 	Hostname    string   `json:"hostname,omitempty"` // the server's name now (renames show up by themselves)
 }
@@ -143,6 +147,8 @@ type Manager struct {
 	// OnRoleChange runs when this server became the master or stopped being it
 	// (p8sd restarts itself to pick up the new role's settings).
 	OnRoleChange func(role string)
+	// BeforeLeave runs on a worker before it leaves the cluster (it keeps its public addresses).
+	BeforeLeave func()
 	// OnTunnel runs after the tunnel is set up (this server's tunnel address)
 	// or taken down (""): libvirt listens there for live moves.
 	OnTunnel     func(ctx context.Context, ip string)
@@ -683,6 +689,9 @@ func (m *Manager) Join(ctx context.Context, masterURL, code string) (RegisterRep
 
 // Leave makes this server standalone again (the master should remove it too).
 func (m *Manager) Leave(ctx context.Context) error {
+	if m.BeforeLeave != nil && m.Role() == "worker" {
+		m.BeforeLeave()
+	}
 	m.mu.Lock()
 	if err := m.load(); err != nil {
 		m.mu.Unlock()

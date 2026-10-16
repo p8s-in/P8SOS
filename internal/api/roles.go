@@ -55,7 +55,7 @@ var (
 		"POST /vms/[^/]+/template", "DELETE /templates/[^/]+", "POST /templates/[^/]+/copy",
 		"PUT /remote/vpn", "POST /remote/vpn/devices", "DELETE /remote/vpn/devices/[^/]+", "POST /remote/forward",
 		// server-to-server calls of the cluster (the master's token is an admin)
-		"* /cluster/(vm-export|replica|replica-send|ct-export|ct-import|ct-shell|iso|mirror|tpl-export)/.+", "* /cluster/(vm-import|replica-recv|ha-sync|ct-import|mirror-target|tpl-import)",
+		"* /cluster/(vm-export|replica|replica-send|ct-export|ct-import|ct-shell|iso|mirror|tpl-export)/.+", "* /cluster/(vm-import|replica-recv|ha-sync|ct-import|mirror-target|tpl-import|ippool)",
 		"* /cluster/live-[a-z]+(/.+)?", "GET /cluster/cpu",
 		"POST /cluster/(book|vote|promote)", "GET /cluster/peer",
 	)

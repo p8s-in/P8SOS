@@ -42,7 +42,7 @@ list `/var/lib/p8s/containers.json`. Shell on the server: `p8 ct enter NAME`.
 
 - **Where it runs:** on the master the New container dialog has a **Server** list
   (Automatic picks the server with the most free memory that has the template).
-  Containers with a public IP always run on the master.
+  Containers with a public IP go on a server that has the pool's bridge (the master hands out the address).
 - **One list:** the master lists the containers of every server ("on NODE");
   start/stop, resize, snapshots, backups, passwords and the terminal work the
   same wherever the container runs.

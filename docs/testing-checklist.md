@@ -680,6 +680,16 @@ Build a new ISO on the laptop: `sudo bash iso/build-installer.sh ~/P8SOS/dist` (
 - [ ] Open the dashboard in a new tab, sign in with the form, click **Import VMs** in the sidebar → the Import dialog opens (it used to do nothing until the page was reloaded)
 - [ ] Upload a small .qcow2 → Check → Import → the job finishes and the VM is listed
 
+## 65. Public IPs on workers
+
+- [ ] Cluster of 2, pool dc1 on bridge br0 (on the master). Worker without br0: + Create VM → Public IP — dc1 → it goes to the master; the placement list says "no bridge br0 for public IP pool dc1" for the worker
+- [ ] `sudo p8 lan-setup` on the worker; create another VM (or container) with Public IP — dc1, Server = the worker → it gets the next free address, works from the internet; Settings → Public IP pools on the master shows it as used
+- [ ] On the worker's own dashboard: the pool is listed; adding a pool there is refused ("manage them on the master's dashboard")
+- [ ] Master → Manage → Public IP addresses → + Extra IPv4 for the worker's VM: added (on the master's pool), set inside the guest
+- [ ] Delete that VM: its addresses are free again on the master
+- [ ] Stop p8sd on the master: the worker's public VMs keep working; creating a new public VM on the worker fails with "the master … didn't answer"
+- [ ] Remove the worker from the cluster: its public VMs keep their addresses (`p8 ippools` on it), the master still shows them used
+
 ## Add new features here as they are built
 
 (Every new feature adds its own lines above before it counts as done.)
