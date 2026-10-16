@@ -618,6 +618,15 @@ Build a new ISO on the laptop: `sudo bash iso/build-installer.sh ~/P8SOS/dist` (
 - [ ] Reboot after Remove → no Ceph service starts, no errors about ceph-volume
 - [ ] `p8 ceph alone`, `p8 ceph remove [--wipe]` ask first and work the same
 
+## 57. No sideways scrolling
+
+- [ ] Server page → every tab (Storage with Ceph and Disks, Templates …) at full screen and with the browser window half-wide: no left-right scroll bar inside any card; long names and messages wrap
+- [ ] ISO images, All backups, Settings, Users, Activity, Account dialogs: wider on a big screen, no left-right scroll bar; buttons wrap onto a second line on a narrow window
+- [ ] VM / container page → every tab: no left-right scroll bar; CPU type list and its Set button stay on one line
+- [ ] Narrow window (800 px): the top bar fits (version text and "Create" words are hidden)
+- [ ] Server → Disks and "Give to Ceph" no longer list the VMs' own ZFS volumes (zd16, zd112 …) as disks
+- [ ] Ceph that doesn't answer: the card shows the error, then right away what to do (Keep this monitor only / Remove Ceph); no "Next: Give to Ceph" hints meanwhile
+
 ## Add new features here as they are built
 
 (Every new feature adds its own lines above before it counts as done.)

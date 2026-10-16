@@ -619,3 +619,15 @@ func TestEncryptSystem(t *testing.T) {
 		t.Fatalf("ext4 + system encryption: %v", err)
 	}
 }
+
+func TestVirtualDisksNotListed(t *testing.T) {
+	out := []byte(`{"blockdevices":[{"name":"sdb","type":"disk","size":21474836480},{"name":"zd16","type":"disk","size":3221225472},
+	 {"name":"rbd0","type":"disk","size":1073741824},{"name":"nbd0","type":"disk","size":0},{"name":"zram0","type":"disk","size":1}]}`)
+	d, err := ParseLsblk(out, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(d) != 1 || d[0].Name != "sdb" {
+		t.Fatalf("ZFS volumes / Ceph / nbd devices listed as disks: %+v", d)
+	}
+}

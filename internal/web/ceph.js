@@ -58,7 +58,7 @@ function cephNode(c, n){
   const disks = c.configured && i.installed ? (i.disks || []).map(d =>
     `<div class="sub mono">${esc(d.label)} <button class="btn" data-cp="osd" data-node="${id}" data-disk="${esc(d.path)}" ${busy}>Give to Ceph</button></div>`) : [];
   // no empty disk here: say why and how (disks with data are never offered)
-  if (c.configured && i.installed && !disks.length && !osds.length)
+  if (c.configured && i.installed && !disks.length && !osds.length && !c.status_error)
     disks.push(`<div class="sub">No empty disk on this server. Ceph only takes a disk with nothing on it (disks with data or partitions are never offered).
       Add one — on a VirtualBox VM: shut it down, Settings → Storage → add a new 20 GB disk, start it — then reload this page.</div>`);
   return `<tr><td><b>${esc(n.name)}</b>${n.self ? ' <span class="sub">(this server)</span>' : ""} <span class="sub">${esc((i.addrs || []).join(", "))}</span>
@@ -90,7 +90,9 @@ function renderCeph(){
   }
   let pool = "";
   const upDisks = (s?.osds || []).filter(o => o.up && o.in).length;
-  if (c.configured && !c.pool_ready && !upDisks) {
+  if (c.status_error) {
+    // nothing to add while Ceph doesn't answer: the box above says what to do
+  } else if (c.configured && !c.pool_ready && !upDisks) {
     pool = `<div class="hint" style="margin-top:8px">Next: press <b>Give to Ceph</b> on an empty disk above (one per server is best).
       When a disk shows <b>up</b>, you can create the VM pool here.</div>`;
   } else if (c.configured && !c.pool_ready) {
@@ -123,9 +125,9 @@ function renderCeph(){
   $("#ndCeph").innerHTML = `
     <div class="sub">Storage made of the servers' own disks, shared by all of them — like Proxmox's Ceph. Needs at least 3 servers with
       an empty disk each for real safety; works with 1 for trying it out.</div>
-    ${head}${adv.length ? `<ul class="sub" style="margin:6px 0">${adv.map(a => `<li>${esc(a)}</li>`).join("")}</ul>` : ""}
+    ${head}${c.status_error ? repair : ""}${adv.length && !c.status_error ? `<ul class="sub" style="margin:6px 0">${adv.map(a => `<li>${esc(a)}</li>`).join("")}</ul>` : ""}
     <table class="snaps"><tbody>${(c.nodes || []).map(n => cephNode(c, n)).join("")}</tbody></table>
-    ${init}${pool}${repair}`;
+    ${init}${pool}${c.status_error ? "" : repair}`;
   if ($("#cephAlone")) $("#cephAlone").onclick = e => {
     if (!armed(e.target, "Sure the other server is gone for good?")) return;
     cephDo("POST", "/ceph/mon-alone", {}, "Making this server's monitor the only one");

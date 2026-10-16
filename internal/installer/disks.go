@@ -183,6 +183,17 @@ func (d lsblkDev) mounts() []string {
 	return m
 }
 
+// virtualDisk: block devices that aren't disks of the server: ZFS volumes (zd*,
+// the VMs' own disks), Ceph / network block devices, RAM and loop devices.
+func virtualDisk(name string) bool {
+	for _, p := range []string{"zram", "loop", "zd", "rbd", "nbd", "drbd"} {
+		if strings.HasPrefix(name, p) {
+			return true
+		}
+	}
+	return false
+}
+
 // ParseLsblk turns lsblk's JSON into the list of disks, with the ones the
 // installer must not touch marked (Why). byID maps /dev/sdX to its by-id link.
 func ParseLsblk(out []byte, byID map[string]string) ([]Disk, error) {
@@ -194,7 +205,7 @@ func ParseLsblk(out []byte, byID map[string]string) ([]Disk, error) {
 	}
 	var disks []Disk
 	for _, b := range doc.Blockdevices {
-		if b.Type != "disk" || strings.HasPrefix(b.Name, "zram") || strings.HasPrefix(b.Name, "loop") {
+		if b.Type != "disk" || virtualDisk(b.Name) {
 			continue
 		}
 		path := b.Path

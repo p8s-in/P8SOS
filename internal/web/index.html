@@ -67,7 +67,7 @@ input,select,textarea{width:100%;padding:8px 10px;border:1px solid var(--line);b
 textarea{min-height:64px;resize:vertical}
 .row{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
 .hint{font-size:12px;color:var(--muted);margin-top:4px}
-dialog{border:1px solid var(--line);border-radius:12px;padding:0;background:var(--panel);color:var(--text);width:min(460px,calc(100vw - 32px))}
+dialog{border:1px solid var(--line);border-radius:12px;padding:0;background:var(--panel);color:var(--text);width:min(540px,calc(100vw - 32px))}
 dialog::backdrop{background:rgba(0,0,0,.45)}
 dialog form{padding:20px}
 dialog h2{margin:0 0 4px;font-size:17px}
@@ -76,7 +76,7 @@ dialog h2{margin:0 0 4px;font-size:17px}
 .toast{background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--ok);padding:10px 14px;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.15);max-width:360px}
 .toast.err{border-left-color:var(--bad)}
 .copy{cursor:pointer;border-bottom:1px dashed var(--muted)}
-dialog.wide{width:min(620px,calc(100vw - 32px))}
+dialog.wide{width:min(880px,calc(100vw - 32px))}
 .dlg-body{padding:20px}
 .dlg-body h3{margin:20px 0 2px;font-size:14px}
 .inline{display:flex;gap:8px;align-items:center;margin-top:8px}
@@ -196,6 +196,21 @@ dialog.as-page #ndClose{display:none}
 #taskbar table td.msg{white-space:normal;color:var(--muted);width:100%}
 .shell{padding-bottom:34px}
 @media (max-width:900px){ dialog.as-page{left:0} dialog.as-page>.dlg-body{padding:14px 16px} }
+/* ---------- nothing scrolls sideways: inside dialogs, pages and cards text wraps and button rows wrap ---------- */
+dialog td,dialog th,.nd-card td,.nd-card th{white-space:normal;overflow-wrap:anywhere}
+dialog td[style*="nowrap"],.nd-card td[style*="nowrap"],#pList td:last-child{white-space:normal!important}
+dialog .sub,dialog .hint,dialog .mono,dialog b,dialog code,dialog li,dialog label,.nd-card .sub{overflow-wrap:anywhere}
+dialog pre,.nd-card pre{white-space:pre-wrap;overflow-wrap:anywhere}
+dialog td .btn,.nd-card td .btn{margin:2px 0 2px 4px}
+dialog td:first-child .btn,.nd-card td:first-child .btn{margin-left:0}
+.inline,.dlg-actions,.actions,.page-bar{flex-wrap:wrap}
+.inline>input,.inline>select{flex:1 1 160px;width:auto;min-width:0}
+.inline>.btn,.inline>button{flex:0 0 auto}
+dialog .row>*,.nd-card .row>*{min-width:0}
+dialog:not(.as-page){overflow-x:hidden}
+dialog.as-page{overflow-x:hidden}
+#dlgNode .nd-card{overflow-x:hidden}
+@media (max-width:640px){ dialog .row,dialog .qrow{grid-template-columns:1fr} }
 #bSideToggle{display:none}
 .side-mobile{display:none}
 @media (max-width:900px){
@@ -205,6 +220,13 @@ dialog.as-page #ndClose{display:none}
   #bSideToggle{display:inline-flex}
   #vmFilter{width:140px}
   .shell>main{padding:14px 16px}
+}
+/* medium screens: a shorter top bar so it never runs off the right edge */
+@media (max-width:1100px){
+  .shell>header #hVer{display:none}
+  .shell>header .lg{display:none}
+  #vmFilter{width:130px;min-width:60px}
+  #bMe{max-width:140px;overflow:hidden;text-overflow:ellipsis}
 }
 @media (max-width:640px){
   .shell>header #bMe,.shell>header #bOut,.shell>header #hVer{display:none}
