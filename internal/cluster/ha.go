@@ -119,6 +119,10 @@ type HAVM struct {
 	FailedOf  string   `json:"failed_over_from,omitempty"` // server name
 	Retire    []string `json:"retire,omitempty"`           // servers with an old copy of the VM to switch off
 	Autostart bool     `json:"autostart,omitempty"`        // its autostart before HA (set back when HA is turned off)
+	// Mode "mirror": the disks are mirrored live (mirror.go) instead of copied every EveryMin.
+	Mode        string `json:"mode,omitempty"`
+	Synced      bool   `json:"synced,omitempty"`       // mirror: the copy's server knows it caught up
+	MirrorState string `json:"mirror_state,omitempty"` // mirror: how it stands, for the dashboard
 }
 
 // HAVMView is a protected VM as the dashboard shows it.
@@ -364,12 +368,18 @@ func (h *HA) fence(ctx context.Context, names []string) []string {
 
 // Protect turns HA on for a VM or (kind "ct") a container (target "" = pick
 // the best other server).
-func (h *HA) Protect(ctx context.Context, kind, name, target string, everyMin int) (HAVMView, error) {
+func (h *HA) Protect(ctx context.Context, kind, name, target string, everyMin int, mode string) (HAVMView, error) {
 	if h.C.M.Role() != "master" {
 		return HAVMView{}, fmt.Errorf("%w: high availability needs a cluster (Server → Cluster → Add a server)", vm.ErrConflict)
 	}
 	if kind != "" && kind != KindCT {
 		return HAVMView{}, fmt.Errorf("%w: kind must be \"\" (VM) or \"ct\"", vm.ErrInvalid)
+	}
+	if mode != "" && mode != ModeMirror {
+		return HAVMView{}, fmt.Errorf("%w: mode must be \"\" (copies) or \"mirror\"", vm.ErrInvalid)
+	}
+	if mode == ModeMirror && kind == KindCT {
+		return HAVMView{}, fmt.Errorf("%w: live mirrors are for VMs; protect containers with copies", vm.ErrInvalid)
 	}
 	v, err := h.guest(ctx, kind, name)
 	if err != nil {
@@ -401,6 +411,19 @@ func (h *HA) Protect(ctx context.Context, kind, name, target string, everyMin in
 	if !h.known(target) {
 		return HAVMView{}, fmt.Errorf("%w: no server %q", vm.ErrInvalid, target)
 	}
+	if mode == ModeMirror {
+		// every write waits for the other server: only on one local network
+		for _, id := range []string{node, target} {
+			if n, ok := h.C.node(id); ok && !h.sameLAN(ctx, n) {
+				return HAVMView{}, fmt.Errorf("%w: %s is on another network; a live mirror needs both servers on the same local network (use copies)", vm.ErrConflict, n.Name)
+			}
+		}
+		if why, err := h.mirrorCheck(ctx, node, name); err != nil {
+			return HAVMView{}, err
+		} else if why != "" {
+			return HAVMView{}, fmt.Errorf("%w: %s can't be mirrored: %s", vm.ErrConflict, name, why)
+		}
+	}
 	// HA starts the VM after outages; the host's own autostart would start it
 	// even where it must not run (a server that was cut off).
 	if err := h.setAutostart(ctx, kind, node, name, false); err != nil {
@@ -409,18 +432,32 @@ func (h *HA) Protect(ctx context.Context, kind, name, target string, everyMin in
 	h.mu.Lock()
 	h.loadLocked()
 	old := h.st.VMs[name]
-	c := &HAVM{Kind: kind, Name: name, Target: target, EveryMin: everyMin, Node: node, LastState: v.state, Autostart: v.autostart}
+	c := &HAVM{Kind: kind, Name: name, Target: target, EveryMin: everyMin, Node: node, LastState: v.state, Autostart: v.autostart, Mode: mode}
+	stopMirror := false
 	if old != nil {
 		c.LastCopy, c.CopyBytes, c.Retire, c.Autostart = old.LastCopy, old.CopyBytes, old.Retire, old.Autostart
+		if old.Mode == ModeMirror && (mode != ModeMirror || old.Target != target) {
+			stopMirror = true // the copy changes way or place: the live mirror ends
+		}
+		if old.Mode != mode {
+			c.LastCopy, c.CopyBytes = "", 0 // the new way starts with a full copy
+		}
 		if old.Target != target {
 			c.LastCopy, c.CopyBytes = "", 0
 			go h.dropCopy(context.WithoutCancel(ctx), kind, old.Target, name)
 		}
 	}
 	h.st.VMs[name] = c
-	h.eventLocked("info", fmt.Sprintf("%s protected: copies to %s every %d min", label(kind, name), h.nodeName(target), everyMin))
+	if mode == ModeMirror {
+		h.eventLocked("info", fmt.Sprintf("%s protected: live mirror to %s", label(kind, name), h.nodeName(target)))
+	} else {
+		h.eventLocked("info", fmt.Sprintf("%s protected: copies to %s every %d min", label(kind, name), h.nodeName(target), everyMin))
+	}
 	h.saveLocked()
 	h.mu.Unlock()
+	if stopMirror {
+		_ = h.mirrorStop(ctx, node, name)
+	}
 	go h.replicate(context.WithoutCancel(ctx), name) // first copy now
 	return h.view(ctx, c), nil
 }
@@ -438,6 +475,11 @@ func (h *HA) Unprotect(ctx context.Context, name string) error {
 	h.eventLocked("info", label(c.Kind, name)+" no longer protected")
 	h.saveLocked()
 	h.mu.Unlock()
+	if c.Mode == ModeMirror {
+		if err := h.mirrorStop(ctx, c.Node, name); err != nil {
+			return fmt.Errorf("turned off, but the mirror on %s couldn't be stopped: %w", h.nodeName(c.Node), err)
+		}
+	}
 	if err := h.dropCopy(ctx, c.Kind, c.Target, name); err != nil {
 		return fmt.Errorf("turned off, but the copy on %s couldn't be deleted: %w", h.nodeName(c.Target), err)
 	}
@@ -921,6 +963,7 @@ func (h *HA) failover(ctx context.Context, name string, auto bool) error {
 		c.Node, c.Target = cp.Target, old // copies go back once the old server returns
 		c.Retire = appendOnce(c.Retire, old)
 		c.LastCopy, c.CopyBytes = "", 0
+		c.Synced, c.MirrorState = false, ""
 	}
 	h.saveLocked()
 	h.mu.Unlock()
@@ -1007,7 +1050,11 @@ func (h *HA) replicateDue(ctx context.Context) {
 			continue
 		}
 		last, _ := time.Parse(time.RFC3339, c.LastTry)
-		if now.Sub(last) >= time.Duration(c.EveryMin)*time.Minute && h.online(c.Node) && h.online(c.Target) {
+		every := time.Duration(c.EveryMin) * time.Minute
+		if c.Mode == ModeMirror {
+			every = 10 * time.Second // a mirror is looked after often (starts with the VM)
+		}
+		if now.Sub(last) >= every && h.online(c.Node) && h.online(c.Target) {
 			due = append(due, name)
 		}
 	}
@@ -1035,6 +1082,13 @@ func (h *HA) replicate(ctx context.Context, name string) {
 	c.LastTry = h.now().UTC().Format(time.RFC3339)
 	cp := *c
 	h.mu.Unlock()
+	if cp.Mode == ModeMirror {
+		h.mirrorRound(ctx, cp)
+		h.mu.Lock()
+		delete(h.busy, name)
+		h.mu.Unlock()
+		return
+	}
 	rep, err := h.copyOnce(ctx, cp)
 	h.mu.Lock()
 	delete(h.busy, name)

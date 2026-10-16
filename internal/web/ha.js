@@ -32,22 +32,35 @@ async function loadHAFor(kind, box, inner, cur, pfx){
     inner.innerHTML = info.why ? `<div class="sub">Not possible: ${esc(info.why)}</div>` : `
       <div class="sub">Keeps a copy of this ${what} on another server, updated every few minutes (also while it runs). If this ${what}'s server dies,
         the copy is started there automatically. Changes since the last copy are lost then, like after a power cut.</div>
-      <div class="row" style="grid-template-columns:1fr 1fr">
+      <div class="row" style="grid-template-columns:${kind === "ct" ? "1fr 1fr" : "1fr 1fr 1fr"}">
         <div><label for="${pfx}To">Copy to</label><select id="${pfx}To">${opts}</select></div>
-        <div><label for="${pfx}Every">Copy every (minutes)</label><input id="${pfx}Every" type="number" min="1" max="1440" value="15"></div>
+        ${kind === "ct" ? "" : `<div><label for="${pfx}Mode">How</label><select id="${pfx}Mode">
+          <option value="">Copies every few minutes</option>
+          <option value="mirror">Live mirror — nothing lost (P8S Mirror)</option></select></div>`}
+        <div data-every><label for="${pfx}Every">Copy every (minutes)</label><input id="${pfx}Every" type="number" min="1" max="1440" value="15"></div>
       </div>
+      ${kind === "ct" ? "" : `<div class="sub" data-mirror-hint hidden>Every write goes to both servers before the VM goes on, so the copy is always exact.
+        Both servers must be on the same local network (each write waits for the other server). The first sync copies the whole disk in the background,
+        and again each time the VM starts.</div>`}
       <div class="inline" style="margin-top:6px"><span class="spacer"></span><button class="btn primary" id="${pfx}On">Protect</button></div>`;
+    if (q("Mode")) q("Mode").onchange = () => {
+      const m = q("Mode").value === "mirror";
+      inner.querySelector("[data-every]").hidden = m;
+      inner.querySelector("[data-mirror-hint]").hidden = !m;
+    };
     if (q("On")) q("On").onclick = async () => {
       const b = q("On"); b.disabled = true;
-      try { await call("PUT", haPath(kind, name) + "/ha", {enabled: true, target: q("To").value, every_min: +q("Every").value});
+      try { await call("PUT", haPath(kind, name) + "/ha", {enabled: true, target: q("To").value, every_min: +q("Every").value, mode: q("Mode")?.value || ""});
         toast(`${name} is protected; the first copy is being made`); setTimeout(reload, 1500); }
       catch (e) { toast(e.message, true); b.disabled = false; }
     };
     return;
   }
   const c = info.config;
+  const mirror = c.mode === "mirror";
   const lines = [
-    `Copies to <b>${esc(c.target_name)}</b> every ${c.every_min} min · last copy <b>${esc(haWhen(c.last_copy))}</b>${c.copy_bytes ? " (" + fmtBytes(c.copy_bytes) + ")" : ""}${c.copying ? " · copying now…" : ""}`,
+    mirror ? `Live mirror to <b>${esc(c.target_name)}</b> (P8S Mirror) · <b>${esc(c.mirror_state || "starting…")}</b>${c.last_copy && !String(c.mirror_state || "").startsWith("in sync") ? " · last in sync " + esc(haWhen(c.last_copy)) : ""}`
+      : `Copies to <b>${esc(c.target_name)}</b> every ${c.every_min} min · last copy <b>${esc(haWhen(c.last_copy))}</b>${c.copy_bytes ? " (" + fmtBytes(c.copy_bytes) + ")" : ""}${c.copying ? " · copying now…" : ""}`,
     c.auto ? `<span style="color:var(--ok)">✔ Automatic failover</span> if ${esc(c.node_name)} goes offline`
       : `<span style="color:var(--warn)">Failover by hand:</span> ${esc(c.why || "")}`,
   ];
@@ -104,7 +117,7 @@ async function loadHASrv(){
   const wasOpen = [...box.querySelectorAll("details")].map(d => d.open);
   const sev = {critical: "var(--bad)", warning: "var(--warn)", info: "var(--muted)"};
   const vmsRows = st.vms.map(v => `<tr><td><b>${esc(v.name)}</b>${v.kind === "ct" ? ' <span class="sub">container</span>' : ""}<div class="sub">on ${esc(v.node_name)}${v.node_online ? "" : " (offline)"} → copy on ${esc(v.target_name)}</div></td>
-      <td class="sub">${v.error ? `<span style="color:var(--bad)">${esc(v.error)}</span>` : "last copy " + esc(haWhen(v.last_copy))}<br>${v.auto ? "automatic failover" : "failover by hand"}</td></tr>`).join("");
+      <td class="sub">${v.error ? `<span style="color:var(--bad)">${esc(v.error)}</span>` : v.mode === "mirror" ? "live mirror · " + esc(v.mirror_state || "starting") : "last copy " + esc(haWhen(v.last_copy))}<br>${v.auto ? "automatic failover" : "failover by hand"}</td></tr>`).join("");
   const copies = st.replicas.map(r => `<tr data-copy="${esc(r.name)}" data-kind="${esc(r.kind || "")}"><td><b>${esc(r.name)}</b>${r.kind === "ct" ? ' <span class="sub">container</span>' : ""}<div class="sub">from ${esc(r.from || "?")} · ${esc(haWhen(r.at))} · ${fmtBytes(r.bytes || 0)}</div></td>
       <td style="text-align:right;white-space:nowrap"><button class="btn danger" data-ha="start" title="Only when its own server is really off">Start here</button> <button class="btn" data-ha="drop">Delete</button></td></tr>`).join("");
   const ev = st.events.slice(0, 20).map(e => `<tr><td class="sub" style="white-space:nowrap">${esc(new Date(e.time).toLocaleString())}</td><td><span style="color:${sev[e.severity] || "inherit"}">●</span> ${esc(e.text)}</td></tr>`).join("");

@@ -26,6 +26,30 @@ on another server, by themselves, within about 3 minutes. Needs a cluster
 - Protected VMs don't use the host's autostart; HA starts them after a reboot
   or an outage if they were running. A crashed VM is started again.
 
+## Live mirror (P8S Mirror) — nothing lost
+
+Instead of a copy every few minutes, a VM can be protected with a **live
+mirror**: VM → Options → High availability → How: **Live mirror**. Every write
+of the VM goes to both servers before the VM is told it is done, so the second
+server always has an exact copy. If the VM's server dies, the VM starts there
+with nothing lost.
+
+- Built from parts that have run for years: ZFS volumes on both servers,
+  QEMU's own block mirror (write-blocking mode) and NBD over the cluster
+  tunnel (WireGuard); P8S OS drives it (no Ceph, no monitors, almost no RAM).
+- Both servers must be on the **same local network**: each write waits for the
+  other server (a few tenths of a millisecond on a LAN).
+- The first sync copies the whole disk in the background while the VM runs,
+  and **again every time the VM starts** (only the changes: a later version).
+  While a sync runs, the copy keeps a snapshot of its last complete state:
+  if the VM's server dies then, the copy goes back to that state (a crash
+  copy of then) instead of a half-copied disk.
+- If the other server or the network goes away, the VM keeps running on its
+  own disk; the mirror starts again (a full sync) when the other server is back.
+- A live move (Move → live) stops the mirror; it starts again from the new server.
+- Disks grow only while the VM is off (as always); the next start syncs the new size.
+- VMs only (containers: copies). Ports 10810-10899 on the cluster tunnel.
+
 ## Containers
 
 Containers ([containers.md](containers.md)) are protected the same way:
@@ -83,6 +107,7 @@ you aren't sure): otherwise the VM runs twice with the same disk and IP.
 | POST | `/api/v1/ha/replicas/{name}/start` · DELETE `/api/v1/ha/replicas/{name}` | a copy kept on this server: start it here / delete it |
 | PUT | `/api/v1/vms/{name}/autostart` | `{"autostart":bool}` (refused for protected VMs) |
 | GET · PUT | `/api/v1/containers/{name}/ha` | the same for a container |
+| PUT | `/api/v1/vms/{name}/ha` | `{"enabled":true,"target":"n2","mode":"mirror"}`: a live mirror instead of copies |
 | POST | `/api/v1/containers/{name}/ha/failover` | start a container's copy now |
 | POST · DELETE | `/api/v1/ha/replicas/{name}…?kind=ct` | a container's copy kept here (the list shows `"kind":"ct"`) |
 

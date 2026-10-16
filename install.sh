@@ -67,6 +67,7 @@ if zpool list -H "$POOL" >/dev/null 2>&1 && zfs list -H "$POOL/p8s/vms" >/dev/nu
   command -v ping >/dev/null || apt-get install -y iputils-ping >/dev/null 2>&1 || true  # high availability: is the router reachable
   command -v lspci >/dev/null || apt-get install -y pciutils usbutils >/dev/null 2>&1 || true  # PCI/USB passthrough: device names
   [[ -x /usr/sbin/dnsmasq ]] || apt-get install -y dnsmasq-base >/dev/null 2>&1 || true  # virtual networks: DHCP and DNS on their gateway
+  command -v qemu-storage-daemon >/dev/null || apt-get install -y qemu-utils >/dev/null 2>&1 || apt-get install -y qemu-system-common >/dev/null 2>&1 || true  # P8S Mirror: serves mirror disks
 else
   P8S_BRIDGE=$BRIDGE bash "$REPO/scripts/bootstrap-debian13.sh" $DEV
 fi
@@ -236,6 +237,17 @@ timedatectl set-ntp true >/dev/null 2>&1 || true  # synced clock for logs and 2F
 ok "installed /usr/local/bin/p8sd and the 'p8' command"
 
 # ---------------------------------------------------------------------------
+# VM disks (ZFS volumes, also mirror copies) can hold the guests' own LVM:
+# the host must never pick those up
+if [[ -d /etc/lvm ]] && ! grep -q 'p8s: VM disks' /etc/lvm/lvmlocal.conf 2>/dev/null &&
+   ! grep -Eqs '^[[:space:]]*global_filter' /etc/lvm/lvm.conf /etc/lvm/lvmlocal.conf; then
+  cp -a /etc/lvm/lvmlocal.conf /etc/lvm/lvmlocal.conf.p8s-old 2>/dev/null || true
+  printf '\n# p8s: VM disks are the guests'"'"', not the host'"'"'s\ndevices {\n\tglobal_filter = [ "r|^/dev/zd.*|", "r|^/dev/zvol/.*|" ]\n}\n' >>/etc/lvm/lvmlocal.conf
+  if command -v lvmconfig >/dev/null && ! lvmconfig --validate >/dev/null 2>&1; then  # never leave LVM broken
+    if [[ -f /etc/lvm/lvmlocal.conf.p8s-old ]]; then mv /etc/lvm/lvmlocal.conf.p8s-old /etc/lvm/lvmlocal.conf; else sed -i '/p8s: VM disks/,$d' /etc/lvm/lvmlocal.conf; fi
+  fi
+fi
+
 say "Writing config and API token"
 if [[ ! -f $USER_HOME/.ssh/id_ed25519.pub ]]; then
   sudo -u "$USER_NAME" mkdir -p "$USER_HOME/.ssh"

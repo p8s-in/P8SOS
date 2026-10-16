@@ -2,6 +2,7 @@ package virt
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -361,4 +362,32 @@ func ParseIfList(out string) []string {
 		ports = append(ports, f[0])
 	}
 	return ports
+}
+
+// Monitor sends one QMP command to a running domain's QEMU and returns its
+// "return" value (P8S Mirror uses it for the live disk mirror).
+func (v *Virsh) Monitor(ctx context.Context, name string, cmd []byte) ([]byte, error) {
+	out, err := v.virsh(ctx, "qemu-monitor-command", name, string(cmd))
+	if err != nil {
+		return nil, err
+	}
+	return QMPReturn(out)
+}
+
+// QMPReturn takes the "return" value out of a QMP answer (an "error" becomes an error).
+func QMPReturn(out []byte) ([]byte, error) {
+	var r struct {
+		Return json.RawMessage `json:"return"`
+		Error  *struct {
+			Class string `json:"class"`
+			Desc  string `json:"desc"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(out, &r); err != nil {
+		return nil, fmt.Errorf("QEMU monitor: %v: %s", err, strings.TrimSpace(string(out)))
+	}
+	if r.Error != nil {
+		return nil, fmt.Errorf("QEMU: %s", r.Error.Desc)
+	}
+	return r.Return, nil
 }

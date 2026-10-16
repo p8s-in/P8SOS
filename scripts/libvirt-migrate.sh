@@ -3,7 +3,8 @@
 # Lets the other servers of the cluster move running VMs here (live moves):
 # libvirt listens on this server's cluster-tunnel address only (TCP 16509,
 # no password: only cluster servers can reach the tunnel), and QEMU's
-# migration ports (49152-49215) are open on the tunnel only. p8sd runs this
+# migration ports (49152-49215) and P8S Mirror's disk ports (10810-10899)
+# are open on the tunnel only. p8sd runs this
 # whenever the tunnel comes up or goes away.
 set -uo pipefail
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -25,8 +26,8 @@ delete table inet p8s_migrate
 table inet p8s_migrate {
 	chain input {
 		type filter hook input priority -4; policy accept;
-		iifname "$IFACE" ip saddr $NET tcp dport { 16509, 49152-49215 } accept
-		tcp dport { 16509, 49152-49215 } counter drop comment "live moves: cluster tunnel only"
+		iifname "$IFACE" ip saddr $NET tcp dport { 16509, 49152-49215, 10810-10899 } accept
+		tcp dport { 16509, 49152-49215, 10810-10899 } counter drop comment "live moves and P8S Mirror: cluster tunnel only"
 	}
 }
 NFT

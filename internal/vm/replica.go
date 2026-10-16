@@ -50,6 +50,10 @@ type ReplicaHeader struct {
 	Bases []string `json:"bases,omitempty"` // with data disks: per disk (root first), "" = full
 	Snap  string   `json:"snap"`
 	From  string   `json:"from,omitempty"` // server name it came from
+	// Mirror: the copy is a live mirror (P8S Mirror, mirror.go); Synced: it
+	// caught up at least once since the last sync started.
+	Mirror bool `json:"mirror,omitempty"`
+	Synced bool `json:"synced,omitempty"`
 }
 
 // Replica is a copy of a VM held on this server.
@@ -337,6 +341,10 @@ func (s *Service) PromoteReplica(ctx context.Context, name string) (VM, string, 
 	if !rd.HasReplica(ctx, dom) {
 		return VM{}, "", fmt.Errorf("%w: the copy of %q is missing", ErrNotFound, name)
 	}
+	mnote, err := s.mirrorRelease(ctx, name, true) // a live mirror: stop serving it first
+	if err != nil {
+		return VM{}, "", err
+	}
 	_ = s.dropLeftover(ctx, dom) // leftover of an interrupted move or failover
 	disk, err := rd.PromoteReplica(ctx, dom)
 	if err != nil {
@@ -365,10 +373,12 @@ func (s *Service) PromoteReplica(ctx context.Context, name string) (VM, string, 
 		return VM{}, "", err
 	}
 	_ = os.Remove(s.replicaFile(name))
-	if t := SnapTime(h.Snap); !t.IsZero() {
+	if h.Mirror && h.Synced {
+		note = "; from its live mirror" + note
+	} else if t := SnapTime(h.Snap); !t.IsZero() {
 		note = fmt.Sprintf("; from the copy of %s", t.Local().Format("2 Jan 15:04:05")) + note
 	}
-	return v, note, nil
+	return v, note + mnote, nil
 }
 
 // DropReplica deletes the copy of a VM held here.
@@ -382,6 +392,7 @@ func (s *Service) DropReplica(ctx context.Context, name string) error {
 	}
 	dom := Prefix + name
 	defer s.lock(dom)()
+	_, _ = s.mirrorRelease(ctx, name, false) // a live mirror: stop serving it
 	if h, err := s.loadReplica(name); err == nil && h.Shared != "" {
 		if err := os.Remove(s.replicaFile(name)); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err

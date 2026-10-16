@@ -90,6 +90,7 @@ func (s *Server) haSet(w http.ResponseWriter, r *http.Request) {
 		Enabled  bool   `json:"enabled"`
 		Target   string `json:"target"`
 		EveryMin int    `json:"every_min"`
+		Mode     string `json:"mode"` // "" copies, "mirror" live mirror
 	}
 	if !decode(w, r, &body) {
 		return
@@ -103,7 +104,7 @@ func (s *Server) haSet(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	v, err := s.HA.Protect(r.Context(), haKind(r), name, body.Target, body.EveryMin)
+	v, err := s.HA.Protect(r.Context(), haKind(r), name, body.Target, body.EveryMin, body.Mode)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -362,4 +363,106 @@ func (s *Server) haDropCopy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- P8S Mirror, server to server (cluster/mirror.go) ---
+
+func (s *Server) localMirror(w http.ResponseWriter, r *http.Request) (cluster.LocalMirror, bool) {
+	if !s.adminOnly(w, r) || !s.haOn(w) {
+		return nil, false
+	}
+	lm, ok := s.LocalHA.(cluster.LocalMirror)
+	if !ok {
+		writeErr(w, http.StatusNotFound, "not_found", "this server can't mirror VMs")
+		return nil, false
+	}
+	return lm, true
+}
+
+// mirrorRoute: GET /cluster/mirror/{name}[/check|/plan], POST …/{start|stop|synced}.
+func (s *Server) mirrorGet(w http.ResponseWriter, r *http.Request) {
+	lm, ok := s.localMirror(w, r)
+	if !ok {
+		return
+	}
+	name := r.PathValue("name")
+	switch r.PathValue("what") {
+	case "":
+		st, err := lm.MirrorStatus(r.Context(), name)
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, st)
+	case "check":
+		why, err := lm.MirrorCheck(r.Context(), name)
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"why": why})
+	case "plan":
+		p, err := lm.MirrorPlan(r.Context(), name)
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, p)
+	default:
+		writeErr(w, http.StatusNotFound, "not_found", "no such mirror call")
+	}
+}
+
+func (s *Server) mirrorPost(w http.ResponseWriter, r *http.Request) {
+	lm, ok := s.localMirror(w, r)
+	if !ok {
+		return
+	}
+	name := r.PathValue("name")
+	var err error
+	switch r.PathValue("what") {
+	case "start":
+		var t vm.MirrorTarget
+		if !decode(w, r, &t) {
+			return
+		}
+		err = lm.MirrorStart(r.Context(), name, t)
+	case "stop":
+		err = lm.MirrorStop(r.Context(), name)
+	case "synced":
+		err = lm.MirrorSynced(r.Context(), name)
+	default:
+		writeErr(w, http.StatusNotFound, "not_found", "no such mirror call")
+		return
+	}
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// mirrorTarget: POST /cluster/mirror-target {plan, from} — keep a VM's mirror here.
+func (s *Server) mirrorTarget(w http.ResponseWriter, r *http.Request) {
+	lm, ok := s.localMirror(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		Plan vm.MirrorPlan `json:"plan"`
+		From string        `json:"from"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	host := ""
+	if s.Cluster != nil {
+		host = s.Cluster.SelfWGIP()
+	}
+	t, err := lm.MirrorPrepare(r.Context(), body.Plan, body.From, host)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, t)
 }

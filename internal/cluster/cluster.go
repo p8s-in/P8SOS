@@ -246,6 +246,14 @@ func (m *Manager) SelfID() string {
 	return m.st.Self.ID
 }
 
+// SelfWGIP is this server's cluster-tunnel address ("" when not clustered).
+func (m *Manager) SelfWGIP() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_ = m.load()
+	return m.st.Self.WGIP
+}
+
 // SelfName is this server's name in the cluster.
 func (m *Manager) SelfName() string {
 	m.mu.Lock()

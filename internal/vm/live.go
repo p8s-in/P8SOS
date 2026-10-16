@@ -288,6 +288,13 @@ func (s *Service) LiveSend(ctx context.Context, name, ip string, plan LivePlan, 
 	} else if why != "" {
 		return fmt.Errorf("%w: %s can't move live: %s", ErrConflict, name, why)
 	}
+	// a live mirror (P8S Mirror) can't run during the move; high availability
+	// starts it again from the new server
+	if _, ok := s.HV.(monitor); ok {
+		if err := s.MirrorStop(ctx, name); err != nil {
+			return fmt.Errorf("stop the live mirror before the move: %w", err)
+		}
+	}
 	dom := Prefix + name
 	defer s.lock(dom)()
 	return hv.Migrate(ctx, dom, ip, []byte(plan.XML), []byte(plan.PersistentXML), progress)

@@ -634,6 +634,19 @@ Build a new ISO on the laptop: `sudo bash iso/build-installer.sh ~/P8SOS/dist` (
 - [ ] Ceph that doesn't answer (monitor server off): the VM list, Server page and every other page react at once (before: about 20 s on every refresh); Server → Storage → Ceph card shows the error within ~6 s
 - [ ] With Ceph healthy: VMs on Ceph still start, move and show their storage as before
 
+## 59. P8S Mirror (live mirror)
+
+- [ ] Needs 2 servers on one LAN. VM → Options → High availability → How: **Live mirror** → Protect → the box shows "first sync N%", then "in sync: every write is on both servers" (a 20 GB disk: a few minutes)
+- [ ] On the other server: `zfs list -t all -r tank/p8s/vms/replica` shows the copy (with `@p8s-mirror-good` only while a sync runs); `systemctl status p8s-mirror-p8s-NAME` runs qemu-storage-daemon on 10.250.0.x:108xx
+- [ ] In the VM: `dd if=/dev/urandom of=/root/big bs=1M count=500 conv=fsync` works (a bit slower than without the mirror)
+- [ ] Write a file in the VM, `sync`, then pull the power of the VM's server → after ~3 min the VM runs on the other server **with that file** (nothing lost); log "started on … automatically"
+- [ ] Power the old server on → its old VM is switched off; the mirror goes the other way (first sync again)
+- [ ] Unplug the other server's cable while the VM runs → the VM keeps running (writes wait ~3 s once); state "first sync…" again when it is back
+- [ ] Shut the VM down / start it → the mirror waits, then syncs again on start
+- [ ] Live move of a mirrored VM → works; the mirror starts again from the new server
+- [ ] Turn off → the mirror stops, the copy is deleted, `p8s-mirror-…` service gone
+- [ ] Server on another network (tunnel over the internet) → Live mirror refused with a clear message
+
 ## Add new features here as they are built
 
 (Every new feature adds its own lines above before it counts as done.)

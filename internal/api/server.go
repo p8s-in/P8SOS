@@ -315,6 +315,10 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("POST /api/v1/containers/{name}/ha/failover", s.haFailover)
 	auth.HandleFunc("GET /api/v1/containers/{name}/ha-check", s.haCheck)
 	auth.HandleFunc("GET /api/v1/cluster/ha-sync", s.haSync)
+	auth.HandleFunc("GET /api/v1/cluster/mirror/{name}", s.mirrorGet) // P8S Mirror (live disk mirror) between servers
+	auth.HandleFunc("GET /api/v1/cluster/mirror/{name}/{what}", s.mirrorGet)
+	auth.HandleFunc("POST /api/v1/cluster/mirror/{name}/{what}", s.mirrorPost)
+	auth.HandleFunc("POST /api/v1/cluster/mirror-target", s.mirrorTarget)
 	auth.HandleFunc("POST /api/v1/cluster/book", s.clusterBook)
 	auth.HandleFunc("GET /api/v1/cluster/peer", s.clusterPeer)
 	auth.HandleFunc("POST /api/v1/cluster/vote", s.clusterVote)
