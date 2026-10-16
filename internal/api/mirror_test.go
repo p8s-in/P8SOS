@@ -11,6 +11,7 @@ import (
 
 	"p8sos/internal/cluster"
 	"p8sos/internal/storage"
+	"p8sos/internal/virt"
 	"p8sos/internal/vm"
 )
 
@@ -18,10 +19,13 @@ import (
 // sync after one look; then the copy holds the disk as it is).
 type mirrorVMs struct {
 	*haVMs
-	mmu     sync.Mutex
-	jobs    map[string]*fakeJob
-	synced  int
-	prepped []string
+	mmu      sync.Mutex
+	jobs     map[string]*fakeJob
+	synced   int
+	prepped  []string
+	srcSnaps map[string][]string
+	pauses   int
+	syncs    []string // the Sync of each mirror started here
 }
 
 type fakeJob struct {
@@ -34,7 +38,9 @@ var mirrorHosts = struct {
 	m map[string]*mirrorVMs
 }{m: map[string]*mirrorVMs{}}
 
-func newMirrorVMs(h *haVMs) *mirrorVMs { return &mirrorVMs{haVMs: h, jobs: map[string]*fakeJob{}} }
+func newMirrorVMs(h *haVMs) *mirrorVMs {
+	return &mirrorVMs{haVMs: h, jobs: map[string]*fakeJob{}, srcSnaps: map[string][]string{}}
+}
 
 func (m *mirrorVMs) MirrorCheck(ctx context.Context, n string) (string, error) {
 	return m.HACheck(ctx, n)
@@ -43,10 +49,14 @@ func (m *mirrorVMs) MirrorPlan(ctx context.Context, n string) (vm.MirrorPlan, er
 	if _, err := m.Get(ctx, n); err != nil {
 		return vm.MirrorPlan{}, err
 	}
-	return vm.MirrorPlan{Header: vm.MoveHeader{Name: n}, Disks: []storage.MirrorDisk{{Index: 0, Bytes: 1 << 30}}}, nil
+	m.mmu.Lock()
+	snaps := append([]string{}, m.srcSnaps[n]...)
+	m.mmu.Unlock()
+	return vm.MirrorPlan{Header: vm.MoveHeader{Name: n}, Disks: []storage.MirrorDisk{{Index: 0, Bytes: 1 << 30}}, Snaps: snaps}, nil
 }
 func (m *mirrorVMs) MirrorStatus(ctx context.Context, n string) (vm.MirrorState, error) {
-	if m.state(n) != "running" {
+	st := m.state(n)
+	if st != "running" && st != "paused" {
 		return vm.MirrorState{}, nil
 	}
 	m.mmu.Lock()
@@ -62,11 +72,12 @@ func (m *mirrorVMs) MirrorStatus(ctx context.Context, n string) (vm.MirrorState,
 			m.mu.Unlock()
 			j.to.rmu.Lock()
 			v.State = "stopped"
-			j.to.copies[n] = haCopy{v, data, []string{"p8s-mirror"}}
+			old := j.to.copies[n]
+			j.to.copies[n] = haCopy{v, data, old.snaps}
 			j.to.rmu.Unlock()
 		}
 	}
-	return vm.MirrorState{Running: true, Disks: []vm.MirrorDiskState{d}}, nil
+	return vm.MirrorState{Running: true, Paused: st == "paused", Disks: []vm.MirrorDiskState{d}}, nil
 }
 func (m *mirrorVMs) MirrorStart(ctx context.Context, n string, t vm.MirrorTarget) error {
 	mirrorHosts.Lock()
@@ -77,7 +88,12 @@ func (m *mirrorVMs) MirrorStart(ctx context.Context, n string, t vm.MirrorTarget
 	}
 	m.mmu.Lock()
 	defer m.mmu.Unlock()
-	m.jobs[n] = &fakeJob{to: to}
+	j := &fakeJob{to: to}
+	if t.Sync == "none" { // caught up already: in sync at once
+		j.looks = 1
+	}
+	m.jobs[n] = j
+	m.syncs = append(m.syncs, t.Sync)
 	return nil
 }
 func (m *mirrorVMs) MirrorStop(ctx context.Context, n string) error {
@@ -86,16 +102,16 @@ func (m *mirrorVMs) MirrorStop(ctx context.Context, n string) error {
 	delete(m.jobs, n)
 	return nil
 }
-func (m *mirrorVMs) MirrorPrepare(ctx context.Context, p vm.MirrorPlan, from, host string) (vm.MirrorTarget, error) {
+func (m *mirrorVMs) MirrorPrepare(ctx context.Context, p vm.MirrorPlan, from, host string, catchUp bool) (vm.MirrorTarget, error) {
 	if _, err := m.Get(ctx, p.Header.Name); err == nil {
 		return vm.MirrorTarget{}, fmt.Errorf("%w: runs here", vm.ErrExists)
 	}
 	m.mmu.Lock()
-	m.prepped = append(m.prepped, p.Header.Name+" from "+from)
+	m.prepped = append(m.prepped, p.Header.Name+" from "+from+map[bool]string{true: " (catch-up)", false: ""}[catchUp])
 	m.mmu.Unlock()
 	m.rmu.Lock()
 	if _, ok := m.copies[p.Header.Name]; !ok {
-		m.copies[p.Header.Name] = haCopy{vm.VM{Name: p.Header.Name}, "", []string{"p8s-mirror"}}
+		m.copies[p.Header.Name] = haCopy{vm.VM{Name: p.Header.Name}, "", nil}
 	}
 	m.rmu.Unlock()
 	return vm.MirrorTarget{Host: host, Port: vm.MirrorPortBase, Disks: []int{0}}, nil
@@ -106,6 +122,41 @@ func (m *mirrorVMs) MirrorSynced(context.Context, string) error {
 	m.mmu.Unlock()
 	return nil
 }
+func (m *mirrorVMs) setState(n, st string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	v := m.vms[n]
+	v.State = virt.State(st)
+	m.vms[n] = v
+}
+func (m *mirrorVMs) MirrorPause(_ context.Context, n string, _ time.Duration) error {
+	m.mmu.Lock()
+	m.pauses++
+	m.mmu.Unlock()
+	m.setState(n, "paused")
+	return nil
+}
+func (m *mirrorVMs) MirrorResume(_ context.Context, n string) error {
+	if m.state(n) == "paused" {
+		m.setState(n, "running")
+	}
+	return nil
+}
+func (m *mirrorVMs) MirrorSnap(_ context.Context, n, snap string) error {
+	if _, err := m.Get(context.Background(), n); err == nil { // the VM's own disks
+		m.mmu.Lock()
+		m.srcSnaps[n] = append(m.srcSnaps[n], snap)
+		m.mmu.Unlock()
+		return nil
+	}
+	m.rmu.Lock()
+	defer m.rmu.Unlock()
+	c := m.copies[n]
+	c.snaps = append(c.snaps, snap)
+	m.copies[n] = c
+	return nil
+}
+func (m *mirrorVMs) MirrorUnserve(context.Context, string) error { return nil }
 func (m *mirrorVMs) job(n string) bool {
 	m.mmu.Lock()
 	defer m.mmu.Unlock()
@@ -202,6 +253,39 @@ func TestClusterMirror(t *testing.T) {
 	}
 	if st := master.req(t, "GET", "/api/v1/ha", secret, "", 200); !strings.Contains(st, `"mode":"mirror"`) {
 		t.Fatalf("status %s", st)
+	}
+
+	// a snapshot of the same instant is on both servers (for quick restarts), the VM was paused for it
+	advance(11 * time.Second)
+	tick()
+	if c, _ := ha.Config(ctx, "db1"); !c.Based || w2.pauses == 0 || w2.state("db1") != "running" || len(w2.srcSnaps["db1"]) != 1 {
+		t.Fatalf("no common snapshot: %+v pauses=%d state=%s", c, w2.pauses, w2.state("db1"))
+	}
+	if cp, _ := w3.copyOf("db1"); len(cp.snaps) == 0 || cp.snaps[len(cp.snaps)-1] != w2.srcSnaps["db1"][0] {
+		t.Fatalf("copy snapshots %v vs %v", cp.snaps, w2.srcSnaps["db1"])
+	}
+	// the VM restarts: only the changes go across (catch-up), not the whole disk
+	w2.MirrorStop(ctx, "db1")
+	w2.setState("db1", "stopped")
+	advance(11 * time.Second)
+	tick()
+	w2.setState("db1", "running")
+	w2.mu.Lock()
+	w2.disks["db1"] = "rows v1b (written while not mirrored)"
+	w2.mu.Unlock()
+	advance(11 * time.Second)
+	tick()
+	if !w2.job("db1") || w2.syncs[len(w2.syncs)-1] != "none" || !strings.Contains(w3.prepped[len(w3.prepped)-1], "(catch-up)") {
+		t.Fatalf("no catch-up: syncs=%v prepped=%v events=%+v", w2.syncs, w3.prepped, ha.Status(ctx).Events[:3])
+	}
+	if w2.state("db1") != "running" {
+		t.Fatal("left paused")
+	}
+	if cp, _ := w3.copyOf("db1"); cp.data != "rows v1b (written while not mirrored)" {
+		t.Fatalf("catch-up copy %q", cp.data)
+	}
+	if c, _ := ha.Config(ctx, "db1"); !c.Synced || !strings.Contains(c.MirrorState, "in sync") {
+		t.Fatalf("after catch-up %+v", c)
 	}
 
 	// the newest write: with a mirror it is on n3 too

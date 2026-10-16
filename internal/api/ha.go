@@ -431,6 +431,26 @@ func (s *Server) mirrorPost(w http.ResponseWriter, r *http.Request) {
 		err = lm.MirrorStop(r.Context(), name)
 	case "synced":
 		err = lm.MirrorSynced(r.Context(), name)
+	case "pause":
+		var b struct {
+			MaxS int `json:"max_s"`
+		}
+		if !decode(w, r, &b) {
+			return
+		}
+		err = lm.MirrorPause(r.Context(), name, time.Duration(b.MaxS)*time.Second)
+	case "resume":
+		err = lm.MirrorResume(r.Context(), name)
+	case "snap":
+		var b struct {
+			Snap string `json:"snap"`
+		}
+		if !decode(w, r, &b) {
+			return
+		}
+		err = lm.MirrorSnap(r.Context(), name, b.Snap)
+	case "unserve":
+		err = lm.MirrorUnserve(r.Context(), name)
 	default:
 		writeErr(w, http.StatusNotFound, "not_found", "no such mirror call")
 		return
@@ -449,8 +469,9 @@ func (s *Server) mirrorTarget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Plan vm.MirrorPlan `json:"plan"`
-		From string        `json:"from"`
+		Plan    vm.MirrorPlan `json:"plan"`
+		From    string        `json:"from"`
+		CatchUp bool          `json:"catch_up"`
 	}
 	if !decode(w, r, &body) {
 		return
@@ -459,7 +480,7 @@ func (s *Server) mirrorTarget(w http.ResponseWriter, r *http.Request) {
 	if s.Cluster != nil {
 		host = s.Cluster.SelfWGIP()
 	}
-	t, err := lm.MirrorPrepare(r.Context(), body.Plan, body.From, host)
+	t, err := lm.MirrorPrepare(r.Context(), body.Plan, body.From, host, body.CatchUp)
 	if err != nil {
 		s.fail(w, r, err)
 		return

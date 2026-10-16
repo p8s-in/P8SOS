@@ -391,3 +391,15 @@ func QMPReturn(out []byte) ([]byte, error) {
 	}
 	return r.Return, nil
 }
+
+// Suspend pauses a running domain (its memory stays; nothing runs).
+func (v *Virsh) Suspend(ctx context.Context, name string) error {
+	_, err := v.virsh(ctx, "suspend", name)
+	return err
+}
+
+// Resume lets a paused domain run again.
+func (v *Virsh) Resume(ctx context.Context, name string) error {
+	_, err := v.virsh(ctx, "resume", name)
+	return err
+}

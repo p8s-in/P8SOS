@@ -169,6 +169,38 @@ func TestMirrorWithQEMU(t *testing.T) {
 	if st, _ = s.MirrorStatus(ctx, "web"); len(st.Disks) != 1 || st.Disks[0].Job {
 		t.Fatalf("still mirroring: %+v", st)
 	}
+	// a catch-up: the copy is made equal outside QEMU (ZFS does it on the
+	// servers), then the mirror starts with only new writes (sync "none")
+	if _, err := s.qmp(ctx, "p8s-web", "human-monitor-command",
+		map[string]any{"command-line": `qemu-io -d /machine/peripheral/vd0/virtio-backend "write -P 0x5a 262144 65536"`}); err != nil {
+		t.Fatal(err)
+	}
+	a, _ = os.ReadFile(src)
+	os.WriteFile(tgt, a, 0o600)
+	if err := s.MirrorStart(ctx, "web", MirrorTarget{Host: "127.0.0.1", Port: port, Disks: []int{0}, Sync: "none"}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 50; i++ {
+		if st, _ = s.MirrorStatus(ctx, "web"); st.InSync() {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !st.InSync() {
+		t.Fatalf("sync none not in sync: %+v", st)
+	}
+	if _, err := s.qmp(ctx, "p8s-web", "human-monitor-command",
+		map[string]any{"command-line": `qemu-io -d /machine/peripheral/vd0/virtio-backend "write -P 0x77 524288 4096"`}); err != nil {
+		t.Fatal(err)
+	}
+	a, _ = os.ReadFile(src)
+	b, _ = os.ReadFile(tgt)
+	if !bytes.Equal(a, b) || a[524288] != 0x77 {
+		t.Fatal("sync none: the new write didn't reach the copy")
+	}
+	if err := s.MirrorStop(ctx, "web"); err != nil {
+		t.Fatal(err)
+	}
 	// the other server goes away: the VM keeps writing, the mirror is gone (degraded)
 	if err := s.MirrorStart(ctx, "web", MirrorTarget{Host: "127.0.0.1", Port: port, Disks: []int{0}}); err != nil {
 		t.Fatal(err)

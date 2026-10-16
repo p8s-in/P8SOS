@@ -38,6 +38,9 @@ const MirrorPortCount = 90
 type MirrorPlan struct {
 	Header MoveHeader           `json:"header"`
 	Disks  []storage.MirrorDisk `json:"disks"`
+	// Snaps are the VM's copy snapshots (oldest first): one the other server
+	// has too lets a restart send only the changes (MirrorCatchUp).
+	Snaps []string `json:"snaps,omitempty"`
 }
 
 // MirrorTarget is where a VM's disks are mirrored to.
@@ -45,6 +48,9 @@ type MirrorTarget struct {
 	Host  string `json:"host"`
 	Port  int    `json:"port"`
 	Disks []int  `json:"disks"` // export "disk<i>" for each
+	// Sync "none": the copy already equals the disk (caught up with ZFS while
+	// the VM was paused): only new writes go across. "" = copy everything.
+	Sync string `json:"sync,omitempty"`
 }
 
 // MirrorDiskState is one disk's mirror right now.
@@ -60,6 +66,7 @@ type MirrorDiskState struct {
 type MirrorState struct {
 	Running bool              `json:"running"`          // the VM runs (else no mirror runs; the copy stays as it was)
 	Moving  bool              `json:"moving,omitempty"` // a live move runs: leave it alone
+	Paused  bool              `json:"paused,omitempty"` // paused for a moment (a catch-up)
 	Disks   []MirrorDiskState `json:"disks"`
 }
 
@@ -94,6 +101,8 @@ type monitor interface {
 
 type mirrorDisks interface {
 	DiskBytes(ctx context.Context, vm string, i int) (int64, error)
+	SnapVMDisks(ctx context.Context, vm string, idx []int, snap string) error
+	SnapReplica(ctx context.Context, vm, snap string) error
 	PrepareMirror(ctx context.Context, vm string, disks []storage.MirrorDisk) ([]string, error)
 	MirrorSynced(ctx context.Context, vm string)
 	MirrorRollback(ctx context.Context, vm string) (bool, error)
@@ -171,6 +180,9 @@ func (s *Service) MirrorPlan(ctx context.Context, name string) (MirrorPlan, erro
 			return MirrorPlan{}, fmt.Errorf("size of disk %d: %w", i, err)
 		}
 		p.Disks = append(p.Disks, storage.MirrorDisk{Index: i, Bytes: n})
+	}
+	if rd, err := s.replicas(); err == nil { // the root disk's (as SendReplica picks its base)
+		p.Snaps, _ = rd.DiskRepSnaps(ctx, dom)
 	}
 	return p, nil
 }
@@ -261,10 +273,10 @@ func (s *Service) MirrorStatus(ctx context.Context, name string) (MirrorState, e
 		return MirrorState{}, err
 	}
 	out := MirrorState{Disks: []MirrorDiskState{}}
-	if st != virt.Running {
+	if st != virt.Running && st != virt.Paused {
 		return out, nil
 	}
-	out.Running = true
+	out.Running, out.Paused = true, st == virt.Paused
 	if raw, err := s.qmp(ctx, dom, "query-migrate", nil); err == nil {
 		var m struct {
 			Status string `json:"status"`
@@ -303,7 +315,7 @@ func (s *Service) MirrorStart(ctx context.Context, name string, t MirrorTarget) 
 	defer s.lock(dom)()
 	if st, err := s.HV.State(ctx, dom); err != nil {
 		return err
-	} else if st != virt.Running {
+	} else if st != virt.Running && st != virt.Paused {
 		return fmt.Errorf("%w: %s isn't running", ErrConflict, name)
 	}
 	nodes, err := s.diskNodes(ctx, dom)
@@ -326,7 +338,7 @@ func (s *Service) MirrorStart(ctx context.Context, name string, t MirrorTarget) 
 		if _, err := s.qmp(ctx, dom, "blockdev-add", MirrorTargetNode(i, t.Host, t.Port)); err != nil {
 			return fmt.Errorf("connect disk %d to the mirror on %s: %w", i, t.Host, err)
 		}
-		if _, err := s.qmp(ctx, dom, "blockdev-mirror", MirrorJobArgs(i, node)); err != nil {
+		if _, err := s.qmp(ctx, dom, "blockdev-mirror", MirrorJobArgs(i, node, t.Sync)); err != nil {
 			_, _ = s.qmp(context.WithoutCancel(ctx), dom, "blockdev-del", map[string]any{"node-name": mirrorNode(i)})
 			return fmt.Errorf("start mirroring disk %d: %w", i, err)
 		}
@@ -344,9 +356,12 @@ func MirrorTargetNode(i int, host string, port int) map[string]any {
 
 // MirrorJobArgs is the QMP blockdev-mirror arguments: copy everything, and
 // from then on every write goes to both before the VM is told it's done.
-func MirrorJobArgs(i int, node string) map[string]any {
+func MirrorJobArgs(i int, node, sync string) map[string]any {
+	if sync != "none" {
+		sync = "full"
+	}
 	return map[string]any{"job-id": mirrorJob(i), "device": node, "target": mirrorNode(i),
-		"sync": "full", "copy-mode": "write-blocking"}
+		"sync": sync, "copy-mode": "write-blocking"}
 }
 
 // MirrorStop ends the VM's mirror (the copy keeps what it has; a mirror that
@@ -354,7 +369,7 @@ func MirrorJobArgs(i int, node string) map[string]any {
 func (s *Service) MirrorStop(ctx context.Context, name string) error {
 	dom := Prefix + name
 	defer s.lock(dom)()
-	if st, err := s.HV.State(ctx, dom); err != nil || st != virt.Running {
+	if st, err := s.HV.State(ctx, dom); err != nil || st != virt.Running && st != virt.Paused {
 		return nil // no QEMU, no mirror
 	}
 	jobs, err := s.mirrorJobs(ctx, dom)
@@ -423,7 +438,10 @@ func (s *Service) mirrorPort(name string) (int, error) {
 // MirrorPrepare gets this server ready to keep the mirror of a VM: its
 // volumes (a snapshot of their last good state first), the VM's settings,
 // and the NBD exports on host (this server's tunnel address).
-func (s *Service) MirrorPrepare(ctx context.Context, p MirrorPlan, from, host string) (MirrorTarget, error) {
+//
+// catchUp: the copy was just brought up to date with ZFS (the VM is paused):
+// it is exact, so no "last good" snapshot is kept and it counts as in sync.
+func (s *Service) MirrorPrepare(ctx context.Context, p MirrorPlan, from, host string, catchUp bool) (MirrorTarget, error) {
 	md, err := s.mirrorDisks()
 	if err != nil {
 		return MirrorTarget{}, err
@@ -449,7 +467,10 @@ func (s *Service) MirrorPrepare(ctx context.Context, p MirrorPlan, from, host st
 	if err != nil {
 		return MirrorTarget{}, err
 	}
-	h := ReplicaHeader{MoveHeader: p.Header, Snap: repSnapNow(), From: from, Mirror: true}
+	if catchUp {
+		md.MirrorSynced(ctx, dom) // nothing half-copied to go back from
+	}
+	h := ReplicaHeader{MoveHeader: p.Header, Snap: repSnapNow(), From: from, Mirror: true, Synced: catchUp}
 	if err := s.saveReplica(h); err != nil {
 		return MirrorTarget{}, err
 	}
@@ -516,4 +537,84 @@ func (s *Service) mirrorRelease(ctx context.Context, name string, use bool) (not
 	}
 	md.HideMirror(ctx, dom)
 	return note, nil
+}
+
+// --- catching up without a full copy ---
+
+type pauser interface {
+	Suspend(ctx context.Context, name string) error
+	Resume(ctx context.Context, name string) error
+}
+
+// MirrorPause pauses the running VM for a moment (a catch-up's last step).
+// It resumes by itself after max, whatever happens to the caller.
+func (s *Service) MirrorPause(ctx context.Context, name string, max time.Duration) error {
+	p, ok := s.HV.(pauser)
+	if !ok {
+		return fmt.Errorf("%w: this server can't pause VMs", ErrConflict)
+	}
+	if max <= 0 || max > 2*time.Minute {
+		max = time.Minute
+	}
+	dom := Prefix + name
+	if err := p.Suspend(ctx, dom); err != nil {
+		return err
+	}
+	time.AfterFunc(max, func() {
+		bg, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if st, err := s.HV.State(bg, dom); err == nil && st == virt.Paused {
+			s.logErr("resume "+name+" after a mirror catch-up that didn't finish", p.Resume(bg, dom))
+		}
+	})
+	return nil
+}
+
+// MirrorResume lets a paused VM run again.
+func (s *Service) MirrorResume(ctx context.Context, name string) error {
+	p, ok := s.HV.(pauser)
+	if !ok {
+		return fmt.Errorf("%w: this server can't pause VMs", ErrConflict)
+	}
+	dom := Prefix + name
+	if st, err := s.HV.State(ctx, dom); err == nil && st != virt.Paused {
+		return nil
+	}
+	return p.Resume(ctx, dom)
+}
+
+// MirrorSnap snapshots the disks at this instant: the VM's own when it is
+// here, else its copy. With the VM paused and the mirror in sync, both are
+// the same then: a common starting point for later catch-ups.
+func (s *Service) MirrorSnap(ctx context.Context, name, snap string) error {
+	md, err := s.mirrorDisks()
+	if err != nil {
+		return err
+	}
+	if !strings.HasPrefix(snap, storage.RepPrefix) || !reName.MatchString(name) {
+		return fmt.Errorf("%w: bad snapshot", ErrInvalid)
+	}
+	dom := Prefix + name
+	if _, err := s.HV.State(ctx, dom); err == nil {
+		sp, err := s.spec(ctx, dom)
+		if err != nil {
+			return err
+		}
+		var idx []int
+		for _, e := range sp.Extra {
+			idx = append(idx, e.Index)
+		}
+		return md.SnapVMDisks(ctx, dom, idx, snap)
+	}
+	return md.SnapReplica(ctx, dom, snap)
+}
+
+// MirrorUnserve stops serving the copy held here (before ZFS brings it up to date).
+func (s *Service) MirrorUnserve(ctx context.Context, name string) error {
+	md, err := s.mirrorDisks()
+	if err != nil {
+		return err
+	}
+	md.StopMirrorExport(ctx, Prefix+name)
+	return nil
 }

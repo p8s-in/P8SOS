@@ -647,6 +647,14 @@ Build a new ISO on the laptop: `sudo bash iso/build-installer.sh ~/P8SOS/dist` (
 - [ ] Turn off → the mirror stops, the copy is deleted, `p8s-mirror-…` service gone
 - [ ] Server on another network (tunnel over the internet) → Live mirror refused with a clear message
 
+## 60. P8S Mirror: quick restarts
+
+- [ ] A mirrored VM in sync → log/console: a pause of well under a second once; `zfs list -t snapshot | grep p8s-rep` shows the same snapshot on both servers
+- [ ] Reboot the VM from inside (or Shutdown + Start) → the box shows "catching up: only the changes…", then "in sync" within seconds (no "first sync N%"); network ping to the VM shows at most a short hiccup
+- [ ] Write 1 GB in the VM, shut it down, start it → catch-up sends about 1 GB, not the whole disk
+- [ ] Roll the VM back to an older snapshot (while off), start → a full first sync (the common snapshot is gone)
+- [ ] Kill p8sd on the master during a catch-up (`sudo systemctl kill p8sd` at the right moment) → the VM resumes by itself within 60 s
+
 ## Add new features here as they are built
 
 (Every new feature adds its own lines above before it counts as done.)

@@ -18,7 +18,12 @@ type mirDisks struct {
 	prepared int
 }
 
-func (d *mirDisks) DiskBytes(context.Context, string, int) (int64, error) { return 10 << 30, nil }
+func (d *mirDisks) DiskBytes(context.Context, string, int) (int64, error)    { return 10 << 30, nil }
+func (d *mirDisks) SnapVMDisks(context.Context, string, []int, string) error { return nil }
+func (d *mirDisks) SnapReplica(_ context.Context, vm, snap string) error {
+	d.repSnaps[vm] = append(d.repSnaps[vm], snap)
+	return nil
+}
 func (d *mirDisks) PrepareMirror(_ context.Context, vm string, disks []storage.MirrorDisk) ([]string, error) {
 	d.prepared++
 	if c, ok := d.rep[vm]; ok {
@@ -57,10 +62,10 @@ func TestMirrorTargetSide(t *testing.T) {
 	b.NVRAMDir, b.TPMDir = t.TempDir(), t.TempDir()
 	plan := MirrorPlan{Header: MoveHeader{Name: "db", VCPUs: 2, MemoryMiB: 2048, DiskGB: 10, MAC: "52:54:00:12:34:56", Network: NetNAT},
 		Disks: []storage.MirrorDisk{{Index: 0, Bytes: 10 << 30}}}
-	if _, err := b.MirrorPrepare(ctx, plan, "srv-a", "192.168.0.5"); err == nil {
+	if _, err := b.MirrorPrepare(ctx, plan, "srv-a", "192.168.0.5", false); err == nil {
 		t.Fatal("served outside the cluster tunnel")
 	}
-	tg, err := b.MirrorPrepare(ctx, plan, "srv-a", "10.250.0.2")
+	tg, err := b.MirrorPrepare(ctx, plan, "srv-a", "10.250.0.2", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,12 +73,12 @@ func TestMirrorTargetSide(t *testing.T) {
 		t.Fatalf("%+v %+v", tg, md.served)
 	}
 	// the same VM keeps its port; another VM gets the next one
-	if tg2, _ := b.MirrorPrepare(ctx, plan, "srv-a", "10.250.0.2"); tg2.Port != MirrorPortBase {
+	if tg2, _ := b.MirrorPrepare(ctx, plan, "srv-a", "10.250.0.2", false); tg2.Port != MirrorPortBase {
 		t.Fatalf("port changed: %d", tg2.Port)
 	}
 	p2 := plan
 	p2.Header.Name = "web"
-	if tg3, _ := b.MirrorPrepare(ctx, p2, "srv-a", "10.250.0.2"); tg3.Port != MirrorPortBase+1 {
+	if tg3, _ := b.MirrorPrepare(ctx, p2, "srv-a", "10.250.0.2", false); tg3.Port != MirrorPortBase+1 {
 		t.Fatalf("second VM port %d", tg3.Port)
 	}
 	// the mirror caught up once, then a new sync started and was cut short
@@ -81,7 +86,7 @@ func TestMirrorTargetSide(t *testing.T) {
 	if err := b.MirrorSynced(ctx, "db"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := b.MirrorPrepare(ctx, plan, "srv-a", "10.250.0.2"); err != nil { // VM restarted: a new first sync
+	if _, err := b.MirrorPrepare(ctx, plan, "srv-a", "10.250.0.2", false); err != nil { // VM restarted: a new first sync
 		t.Fatal(err)
 	}
 	md.rep["p8s-db"] = []byte("half new, half old")
@@ -96,8 +101,21 @@ func TestMirrorTargetSide(t *testing.T) {
 	if _, ok := md.served["p8s-db"]; ok {
 		t.Fatal("still served after promote")
 	}
+	// a catch-up (ZFS brought the copy up to date): it counts as exact at once
+	if _, err := b.MirrorPrepare(ctx, p2, "srv-a", "10.250.0.2", true); err != nil {
+		t.Fatal(err)
+	}
+	if h, _ := b.loadReplica("web"); !h.Synced || !h.Mirror {
+		t.Fatalf("catch-up header %+v", h)
+	}
+	if err := b.MirrorSnap(ctx, "web", "p8s-rep-5"); err != nil || len(md.repSnaps["p8s-web"]) == 0 {
+		t.Fatal("snapshot of the copy", err)
+	}
+	if err := b.MirrorSnap(ctx, "web", "mine"); err == nil {
+		t.Fatal("any snapshot name taken")
+	}
 	// a VM running here can't keep its own mirror
-	if _, err := b.MirrorPrepare(ctx, plan, "srv-a", "10.250.0.2"); !errors.Is(err, ErrExists) {
+	if _, err := b.MirrorPrepare(ctx, plan, "srv-a", "10.250.0.2", false); !errors.Is(err, ErrExists) {
 		t.Fatalf("mirror of a VM running here: %v", err)
 	}
 	// deleting the other copy stops serving it

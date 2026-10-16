@@ -152,3 +152,21 @@ func (z *ZFS) HideMirror(ctx context.Context, vm string) {
 		_, _ = z.Run.Run(ctx, "zfs", "set", "volmode=none", z.replicaDisk(vm, i))
 	}
 }
+
+// SnapVMDisks snapshots the VM's disks (root + idx) at the same instant.
+func (z *ZFS) SnapVMDisks(ctx context.Context, vm string, idx []int, snap string) error {
+	return z.snapAll(ctx, z.disks(vm, idx), snap)
+}
+
+// SnapReplica snapshots every disk of the VM's copy held here at once.
+func (z *ZFS) SnapReplica(ctx context.Context, vm, snap string) error {
+	idx := z.replicaDisks(ctx, vm)
+	if len(idx) == 0 {
+		return fmt.Errorf("no copy of %s here", vm)
+	}
+	var ds []string
+	for _, i := range idx {
+		ds = append(ds, z.replicaDisk(vm, i))
+	}
+	return z.snapAll(ctx, ds, snap)
+}

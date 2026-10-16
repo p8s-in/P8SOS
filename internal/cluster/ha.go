@@ -122,6 +122,7 @@ type HAVM struct {
 	// Mode "mirror": the disks are mirrored live (mirror.go) instead of copied every EveryMin.
 	Mode        string `json:"mode,omitempty"`
 	Synced      bool   `json:"synced,omitempty"`       // mirror: the copy's server knows it caught up
+	Based       bool   `json:"based,omitempty"`        // mirror: both servers have a snapshot of the same instant (quick restarts)
 	MirrorState string `json:"mirror_state,omitempty"` // mirror: how it stands, for the dashboard
 }
 
@@ -963,7 +964,7 @@ func (h *HA) failover(ctx context.Context, name string, auto bool) error {
 		c.Node, c.Target = cp.Target, old // copies go back once the old server returns
 		c.Retire = appendOnce(c.Retire, old)
 		c.LastCopy, c.CopyBytes = "", 0
-		c.Synced, c.MirrorState = false, ""
+		c.Synced, c.Based, c.MirrorState = false, false, ""
 	}
 	h.saveLocked()
 	h.mu.Unlock()

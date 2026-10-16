@@ -39,11 +39,19 @@ with nothing lost.
   tunnel (WireGuard); P8S OS drives it (no Ceph, no monitors, almost no RAM).
 - Both servers must be on the **same local network**: each write waits for the
   other server (a few tenths of a millisecond on a LAN).
-- The first sync copies the whole disk in the background while the VM runs,
-  and **again every time the VM starts** (only the changes: a later version).
-  While a sync runs, the copy keeps a snapshot of its last complete state:
+- The **first sync** copies the whole disk in the background while the VM
+  runs. While it runs, the copy keeps a snapshot of its last complete state:
   if the VM's server dies then, the copy goes back to that state (a crash
   copy of then) instead of a half-copied disk.
+- Once in sync, the VM is paused for a moment (well under a second) so both
+  servers take a ZFS snapshot of the same instant. **Later restarts send only
+  what changed since** (ZFS incremental send): first while the VM runs, then
+  the last few changes with the VM paused for a moment, and the mirror goes on
+  with new writes only. If that fails (or the VM was rolled
+  back to an older snapshot), a full sync is made instead. A pause never lasts
+  more than 60 s: the VM resumes by itself even if the master is gone.
+- The common snapshot keeps the blocks changed since the last restart: the
+  copy and the VM's pool use a little more space until the next restart.
 - If the other server or the network goes away, the VM keeps running on its
   own disk; the mirror starts again (a full sync) when the other server is back.
 - A live move (Move → live) stops the mirror; it starts again from the new server.
