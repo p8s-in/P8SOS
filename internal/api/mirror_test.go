@@ -343,4 +343,12 @@ func TestClusterMirror(t *testing.T) {
 	if _, ok := w2.copyOf("db1"); ok {
 		t.Fatal("copy kept")
 	}
+	// app1's first round runs in the background: let it end before the temp dirs go
+	for i := 0; i < 500; i++ {
+		if c, ok := ha.Config(ctx, "app1"); !ok || !c.Copying {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	master.req(t, "PUT", "/api/v1/vms/app1/ha", secret, `{"enabled":false}`, 204)
 }

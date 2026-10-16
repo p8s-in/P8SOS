@@ -50,7 +50,7 @@ var (
 		"PUT /alerts/settings", "PUT /ha/settings",
 		"PUT /offsite/targets/[^/]+", "DELETE /offsite/targets/[^/]+",
 		"PUT /sso", "PUT /audit/settings", "PUT /security", "PUT /ldap", "POST /ldap/test",
-		"POST /storages", "POST /storages/[^/]+/connect", "DELETE /storages/[^/]+",
+		"POST /storages", "POST /storages/[^/]+/(connect|grow)", "DELETE /storages/[^/]+",
 		"POST /ceph/.+", "DELETE /ceph/.+",
 		"POST /vms/[^/]+/template", "DELETE /templates/[^/]+", "POST /templates/[^/]+/copy",
 		"PUT /remote/vpn", "POST /remote/vpn/devices", "DELETE /remote/vpn/devices/[^/]+", "POST /remote/forward",

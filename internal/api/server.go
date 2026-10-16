@@ -416,6 +416,7 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("POST /api/v1/storages", s.addStorage)
 	auth.HandleFunc("POST /api/v1/storages/discover", s.discoverISCSI)
 	auth.HandleFunc("POST /api/v1/storages/{name}/connect", s.connectStorage)
+	auth.HandleFunc("POST /api/v1/storages/{name}/grow", s.growStorage)
 	auth.HandleFunc("DELETE /api/v1/storages/{name}", s.removeStorage)
 	auth.HandleFunc("GET /api/v1/ceph", s.getCeph)
 	auth.HandleFunc("POST /api/v1/ceph/install", s.cephStep(ceph.ActInstall))

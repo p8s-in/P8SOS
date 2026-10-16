@@ -1265,10 +1265,14 @@ TXT
       connect)
         [[ -n ${2:-} ]] || { red "usage: p8 storages connect NAME"; exit 1; }
         call POST "/storages/$2/connect" >/dev/null && green "✔ $2 connected" ;;
+      grow)
+        [[ -n ${2:-} ]] || { red "usage: p8 storages grow NAME [SIZE_GB]   (NAS: the new size; SAN: after growing the LUN, no size)"; exit 1; }
+        body=$(call POST "/storages/$2/grow" "$(jq -nc --argjson z "${3:-0}" '{size_gb:$z}')") || exit 1
+        green "✔ $2 grown: $(human "$(jq -r .size_bytes <<<"$body")") for VM disks" ;;
       rm|remove)
         [[ -n ${2:-} ]] || { red "usage: p8 storages rm NAME"; exit 1; }
         call DELETE "/storages/$2" >/dev/null && green "✔ $2 disconnected (its data stays on the NAS / SAN)" ;;
-      *) red "usage: p8 storages [list|add-nfs|find|add-iscsi|connect|rm]"; exit 1 ;;
+      *) red "usage: p8 storages [list|add-nfs|find|add-iscsi|connect|grow|rm]"; exit 1 ;;
     esac ;;
 
   ceph)

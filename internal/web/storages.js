@@ -18,7 +18,8 @@ function netRow(s){
   const vms = (s.vms || []).length ? ` · VMs: ${s.vms.map(esc).join(", ")}` : "";
   return `<tr data-n="${esc(s.name)}"><td><b>${esc(s.name)}</b> <span class="sub">${s.type === "nfs" ? "NFS" : "iSCSI"}</span>
       <div class="sub mono">${where}</div><div class="sub">${state} · holds ${esc(s.uses)}${vms}</div></td>
-    <td style="text-align:right;white-space:nowrap"><button class="btn" data-ns="connect">Connect</button>
+    <td style="text-align:right;white-space:nowrap">${s.online && (s.type === "iscsi" || s.vm_disks) ? `<button class="btn" data-ns="grow"
+        title="${s.type === "nfs" ? "Make the VM-disk pool file on the share bigger (VMs keep running)" : "After making the LUN bigger on the SAN: use the new size (VMs keep running)"}">Grow</button> ` : ""}<button class="btn" data-ns="connect">Connect</button>
       <button class="btn danger" data-ns="rm">Remove</button></td></tr>`;
 }
 
@@ -98,6 +99,18 @@ function renderNetStorage(){
         if (!armed(b, "Disconnect — sure?")) return;
         await call("DELETE", `/storages/${encodeURIComponent(name)}`);
         toast(`${name} disconnected (its data stays on the NAS / SAN)`);
+      } else if (b.dataset.ns === "grow") {
+        const s = (netStores?.storages || []).find(x => x.name === name) || {};
+        let size = 0;
+        if (s.type === "nfs") {
+          const a = prompt(`VM disks on ${name} have ${s.size_gb} GB now. New size in GB (the file stays sparse: it only takes what VMs write):`, String((s.size_gb || 0) * 2));
+          if (a === null) return;
+          size = parseInt(a, 10);
+          if (!(size > s.size_gb)) return toast(`Give more than ${s.size_gb} GB`, true);
+        } else if (!confirm(`Make the LUN bigger on the SAN first. Use the new size of ${name} now?`)) return;
+        b.disabled = true;
+        const st = await call("POST", `/storages/${encodeURIComponent(name)}/grow`, {size_gb: size});
+        toast(`${name} grown: ${ndGB(st.size_bytes)} for VM disks`);
       } else {
         b.disabled = true;
         await call("POST", `/storages/${encodeURIComponent(name)}/connect`);

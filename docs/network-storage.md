@@ -52,6 +52,9 @@ Tick **VM disks here too** and give the space (GB), or
   (A NAS that stays away also makes `ls /mnt/p8s/nas` hang until it is back.)
 - At boot the pool is opened after the share is mounted; at shutdown it is
   closed after the VMs stopped and before the network goes down.
+- **More space:** Server → Storage → Network storage → **Grow** (new size in GB) or
+  `p8 storages grow nas 1000`. The file grows (still sparse) and the pool takes
+  up the space at once; VMs keep running. Refused if the share hasn't that much free.
 - After reinstalling the server, add the share again with the same name and
   VM disks ticked: the pool file is found and taken over with its VM disks.
 - One server at a time, like a SAN disk (a ZFS pool must not be open on two
@@ -79,6 +82,10 @@ After reinstalling the server, add the same disk with the same name and
 p8s-san/vms`). The VMs' settings (CPU, RAM, network) live on the server, not
 on the SAN, so bring the VMs back from their backups.
 
+**More space:** make the LUN bigger on the SAN, then **Grow** in the dashboard
+(or `p8 storages grow san`): the disk is read again and the pool takes up the
+new size while VMs keep running.
+
 Disconnecting (Remove) is refused while VMs are on the SAN disk; the data
 stays on the SAN either way.
 
@@ -88,8 +95,6 @@ stays on the SAN either way.
   disk), so they can't be opened by two servers at once and moving a VM to
   another server copies its disks. For disks that several servers use at
   once (instant moves, HA without copies) use Ceph.
-- The pool file can't be made bigger from the dashboard yet
-  (by hand: `truncate -s +100G <file>; zpool online -e p8s-nas <file>`).
 - High availability is for VMs on local storage; Move works (the VM lands on
   the other server's local storage).
 - A SAN disk must not be used by two servers at once (ZFS isn't a cluster

@@ -697,6 +697,13 @@ Build a new ISO on the laptop: `sudo bash iso/build-installer.sh ~/P8SOS/dist` (
 - [ ] `p8 clone db1 db3 --on <worker>` (the VM's own server) → an ordinary clone there
 - [ ] Unplug the target server during the copy: the job ends with "… moving it to … failed … (it stays on …)" and the copy is on the VM's server
 
+## 67. Grow network storage
+
+- [ ] NAS share with VM disks (e.g. 50 GB): Server → Storage → Network storage → **Grow** → 100 → toast "nas grown: 100 GB for VM disks"; `zpool list p8s-nas` shows ~100G; a running VM on it carries on
+- [ ] Grow to more than the share has free → refused with "the share has … GB free"
+- [ ] SAN disk: grow the LUN on the SAN (e.g. TrueNAS zvol +20 GB), then **Grow** → the pool shows the new size
+- [ ] `p8 storages grow nas 150` works the same
+
 ## Add new features here as they are built
 
 (Every new feature adds its own lines above before it counts as done.)

@@ -17,6 +17,7 @@ import (
 //	                                     {"name","type":"iscsi","portal","target","lun"[,"chap_user","chap_password"],"format":true}
 //	POST   /storages/discover            {"portal"} -> {"targets":[...]}
 //	POST   /storages/{name}/connect      mount again / log in again
+//	POST   /storages/{name}/grow         {"size_gb"} a bigger VM-disk pool (NFS; iSCSI: after the SAN grew the LUN)
 //	DELETE /storages/{name}              disconnect (refused while VMs are on it)
 
 func (s *Server) storagesOn(w http.ResponseWriter, r *http.Request) bool {
@@ -137,6 +138,24 @@ func (s *Server) connectStorage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	st, err := s.Storages.Connect(r.Context(), r.PathValue("name"))
+	if err != nil {
+		s.storageErr(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, st)
+}
+
+func (s *Server) growStorage(w http.ResponseWriter, r *http.Request) {
+	if !s.storagesOn(w, r) {
+		return
+	}
+	var body struct {
+		SizeGB int `json:"size_gb"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	st, err := s.Storages.Grow(r.Context(), r.PathValue("name"), body.SizeGB)
 	if err != nil {
 		s.storageErr(w, r, err)
 		return
