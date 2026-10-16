@@ -122,12 +122,16 @@ function renderCeph(){
       <span class="spacer"></span><button class="btn danger" id="cephRemove" ${busySelf}>Remove Ceph from this server</button></div>
       <div class="sub">Only when no VM has disks on Ceph. With other servers in Ceph, take their disks out first (Remove on each disk).</div></details>`;
   }
-  $("#ndCeph").innerHTML = `
+  // not set up: folded away (most setups want P8S Mirror; Ceph needs 3+ servers with spare disks)
+  const fold = !c.configured && !(c.nodes || []).some(n => n.info?.task?.running);
+  const wasOpen = !!$("#ndCeph details[data-cephfold]")?.open;
+  $("#ndCeph").innerHTML = `${fold ? `<details data-cephfold ${wasOpen ? "open" : ""}><summary class="sub">Not set up. Ceph is for 3+ servers with spare disks;
+      with 2 servers use <b>P8S Mirror</b> (above) — show Ceph anyway</summary>` : ""}
     <div class="sub">Storage made of the servers' own disks, shared by all of them — like Proxmox's Ceph. Needs at least 3 servers with
       an empty disk each for real safety; works with 1 for trying it out.</div>
     ${head}${c.status_error ? repair : ""}${adv.length && !c.status_error ? `<ul class="sub" style="margin:6px 0">${adv.map(a => `<li>${esc(a)}</li>`).join("")}</ul>` : ""}
     <table class="snaps"><tbody>${(c.nodes || []).map(n => cephNode(c, n)).join("")}</tbody></table>
-    ${init}${pool}${c.status_error ? "" : repair}`;
+    ${init}${pool}${c.status_error ? "" : repair}${fold ? "</details>" : ""}`;
   if ($("#cephAlone")) $("#cephAlone").onclick = e => {
     if (!armed(e.target, "Sure the other server is gone for good?")) return;
     cephDo("POST", "/ceph/mon-alone", {}, "Making this server's monitor the only one");

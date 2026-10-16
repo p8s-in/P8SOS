@@ -157,7 +157,33 @@ async function loadHASrv(){
   };
 }
 
+/* ---------- Server → Storage → Mirror storage (P8S Mirror) ---------- */
+async function loadMirrorCard(){
+  const box = $("#ndMirror");
+  if (!box) return;
+  let st;
+  try { st = await call("GET", "/ha"); } catch { box.innerHTML = `<div class="sub">For admins.</div>`; return; }
+  const mirrors = (st.vms || []).filter(v => v.mode === "mirror");
+  const kept = (st.replicas || []).filter(r => !r.kind);
+  const intro = `<div class="sub">P8S OS's own shared storage for 2 servers: a VM's disks stay on its server and every write is copied live
+    to a second server before the VM goes on. If its server dies, the VM starts on the other one with nothing lost — no Ceph, no extra RAM.</div>`;
+  if (st.role !== "master") {
+    box.innerHTML = intro + `<div class="sub" style="margin-top:6px">${st.role === "worker" ? "The master's dashboard shows the mirrors." :
+      "Needs a cluster of 2 servers on the same local network: Server → Cluster → + Add a server."}</div>` +
+      (kept.length ? `<div class="sub">This server keeps copies of: ${kept.map(r => esc(r.name)).join(", ")}</div>` : "");
+    return;
+  }
+  const rows = mirrors.map(v => {
+    const ok = String(v.mirror_state || "").startsWith("in sync");
+    return `<tr><td><b>${esc(v.name)}</b><div class="sub">on ${esc(v.node_name)} → mirror on ${esc(v.target_name)}</div></td>
+      <td class="sub"><span style="color:${v.error ? "var(--bad)" : ok ? "var(--ok)" : "var(--warn)"}">●</span> ${esc(v.error || v.mirror_state || "starting…")}</td></tr>`;
+  }).join("");
+  box.innerHTML = intro + (rows ? `<table class="snaps"><tbody>${rows}</tbody></table>` :
+    `<div class="sub" style="margin-top:6px">No VM is mirrored yet. Choose <b>P8S Mirror</b> as storage in + Create VM, or on a VM:
+      Manage → Options → High availability → How: <b>Live mirror</b>.</div>`);
+}
+
 if (typeof openNode === "function") {
   const _openNodeHA = openNode;
-  openNode = async function(){ loadHASrv(); return _openNodeHA(); };
+  openNode = async function(){ loadHASrv(); loadMirrorCard(); return _openNodeHA(); };
 }

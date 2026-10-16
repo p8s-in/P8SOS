@@ -655,6 +655,13 @@ Build a new ISO on the laptop: `sudo bash iso/build-installer.sh ~/P8SOS/dist` (
 - [ ] Roll the VM back to an older snapshot (while off), start → a full first sync (the common snapshot is gone)
 - [ ] Kill p8sd on the master during a catch-up (`sudo systemctl kill p8sd` at the right moment) → the VM resumes by itself within 60 s
 
+## 61. P8S Mirror in the dashboard
+
+- [ ] On the master of 2 servers: + Create VM → Storage shows **P8S Mirror**; creating a VM with it → toast "… mirrored live to <server>"; the VM's High availability box says Live mirror
+- [ ] Standalone server: no P8S Mirror in the Storage list
+- [ ] Server → Storage → **Mirror storage** lists mirrored VMs with a green dot when in sync, orange while syncing, red with the error
+- [ ] Ceph not set up: its card is folded ("Not set up… show Ceph anyway"); set up: shown as before
+
 ## Add new features here as they are built
 
 (Every new feature adds its own lines above before it counts as done.)

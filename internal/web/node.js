@@ -24,7 +24,10 @@ document.body.insertAdjacentHTML("beforeend", `
   <h3>Network storage</h3>
   <div id="ndNet"></div>
 
-  <h3>Ceph</h3>
+  <h3>Mirror storage (P8S Mirror)</h3>
+  <div id="ndMirror"></div>
+
+  <h3>Ceph storage (advanced)</h3>
   <div id="ndCeph"></div>
 
   <h3>Disks</h3>

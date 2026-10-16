@@ -1155,8 +1155,11 @@ async function openCreate(){
   if (!lan && $("#cNet").value === "lan") $("#cNet").value = "nat";
   netHint();
   const stores = host?.storages || [];
-  $("#cStoreBox").hidden = !(isAdmin() && stores.length > 1);
-  $("#cStore").innerHTML = stores.map(x => `<option value="${esc(x)}">${x === "local" ? "This server's disks (local)" : esc(x) + " — network storage (iSCSI)"}</option>`).join("");
+  // P8S Mirror: on the master of a cluster of 2+ servers
+  const mirrorOK = isAdmin() && /^master · cluster of ([2-9]|\d\d)/.test(clRole);
+  $("#cStoreBox").hidden = !(isAdmin() && (stores.length > 1 || mirrorOK));
+  $("#cStore").innerHTML = stores.map(x => `<option value="${esc(x)}">${x === "local" ? "This server's disks (local)" : x === "ceph" ? "Ceph (shared by every server)" : esc(x) + " — network storage"}</option>`).join("")
+    + (mirrorOK ? `<option value="mirror">P8S Mirror — local disks, mirrored live to a second server (nothing lost if one dies)</option>` : "");
   await cloudCreate();
   $("#dlgCreate").showModal(); $("#cName").focus();
 }
@@ -1239,7 +1242,7 @@ $("#fCreate").onsubmit = async e => {
     } else {
       const made = await call("POST", "/vms", {...common, template: tpl, ssh_keys: keys,
         ...(pw ? {root_password: pw, ssh_password_auth: $("#cPwSSH").checked} : {})});
-      $("#dlgCreate").close(); toast(`${name} created — it gets an IP in ~30-60 s`);
+      $("#dlgCreate").close(); toast(`${name} created — it gets an IP in ~30-60 s${made?.ha_note ? "; " + made.ha_note : ""}`);
       if (made?.login) showLogin(name, made.login, "vm");
     }
     refresh();

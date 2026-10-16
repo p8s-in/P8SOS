@@ -1,5 +1,7 @@
 # Ceph: storage made of the servers' own disks
 
+> **Advanced.** Ceph needs 3+ servers with spare disks and plenty of RAM. With 2 servers use P8S OS's own **P8S Mirror** ([ha.md](ha.md#live-mirror-p8s-mirror--nothing-lost)) instead. Server → Storage shows Ceph folded away until it is set up.
+
 Like Proxmox, P8S OS can run **Ceph** on the servers of a cluster. Every server can give empty disks,
 and all of them see the same pool `p8s-vms`. VMs with their disks there:
 

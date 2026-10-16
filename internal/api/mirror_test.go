@@ -325,6 +325,16 @@ func TestClusterMirror(t *testing.T) {
 	}
 	waitFor("idle", func() bool { c, _ := ha.Config(ctx, "db1"); return !c.Copying })
 
+	// a new VM with storage "P8S Mirror": made here, protected with a live mirror at once
+	b := master.req(t, "POST", "/api/v1/vms", secret, `{"name":"app1","template":"debian-13","node":"n2","storage":"mirror"}`, 201)
+	if !strings.Contains(b, `"ha_note":"mirrored live to `) {
+		t.Fatalf("create with mirror: %s", b)
+	}
+	if c, ok := ha.Config(ctx, "app1"); !ok || c.Mode != "mirror" || c.Node != "n2" {
+		t.Fatalf("app1 not mirrored: %+v", c)
+	}
+	n2.req(t, "POST", "/api/v1/vms", secret, `{"name":"app2","template":"debian-13","storage":"mirror"}`, 400) // not on the master
+
 	// off: the mirror stops and the copy is deleted
 	master.req(t, "PUT", "/api/v1/vms/db1/ha", secret, `{"enabled":false}`, 204)
 	if w3.job("db1") {

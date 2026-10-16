@@ -636,6 +636,16 @@ func (s *Server) createVM(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// storage "mirror" (P8S Mirror): the VM's own disks here, mirrored live to
+	// a second server of the cluster (high availability with a live mirror)
+	mirror := req.Storage == "mirror"
+	if mirror {
+		if !who(r).Admin || s.HA == nil || s.Cluster == nil || s.Cluster.Role() != "master" {
+			writeErr(w, http.StatusBadRequest, "invalid", "P8S Mirror needs a cluster of 2+ servers (admins, on the master)")
+			return
+		}
+		req.Storage = ""
+	}
 	generated := false
 	if req.ISO == "" { // installer VMs set their passwords in the installer
 		generated = s.autoPassword(r, &req.RootPassword)
@@ -646,6 +656,14 @@ func (s *Server) createVM(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.afterCreate(r, v, plan)
+	haNote := ""
+	if mirror {
+		if c, err := s.HA.Protect(r.Context(), "", v.Name, "", 15, "mirror"); err != nil {
+			haNote = "made, but the live mirror couldn't start: " + err.Error() + " (Manage → Options → High availability)"
+		} else {
+			haNote = "mirrored live to " + c.TargetName
+		}
+	}
 	var login *loginView
 	if req.RootPassword != "" && !who(r).Cluster {
 		l := creds.Login{User: "root", Password: req.RootPassword, SSH: req.SSHPasswordAuth == nil || *req.SSHPasswordAuth}
@@ -660,8 +678,9 @@ func (s *Server) createVM(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Location", "/api/v1/vms/"+v.Name)
 	writeJSON(w, http.StatusCreated, struct {
 		vm.VM
-		Login *loginView `json:"login,omitempty"`
-	}{v, login})
+		Login  *loginView `json:"login,omitempty"`
+		HANote string     `json:"ha_note,omitempty"`
+	}{v, login, haNote})
 }
 
 func (s *Server) getVM(w http.ResponseWriter, r *http.Request) {

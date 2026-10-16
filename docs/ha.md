@@ -32,7 +32,9 @@ Instead of a copy every few minutes, a VM can be protected with a **live
 mirror**: VM → Options → High availability → How: **Live mirror**. Every write
 of the VM goes to both servers before the VM is told it is done, so the second
 server always has an exact copy. If the VM's server dies, the VM starts there
-with nothing lost.
+with nothing lost. A new VM can get it right away: **+ Create VM → Storage →
+P8S Mirror** (on the master of a cluster of 2+ servers). Server → Storage →
+**Mirror storage** lists every mirrored VM and how it stands.
 
 - Built from parts that have run for years: ZFS volumes on both servers,
   QEMU's own block mirror (write-blocking mode) and NBD over the cluster
