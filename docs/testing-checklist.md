@@ -704,6 +704,15 @@ Build a new ISO on the laptop: `sudo bash iso/build-installer.sh ~/P8SOS/dist` (
 - [ ] SAN disk: grow the LUN on the SAN (e.g. TrueNAS zvol +20 GB), then **Grow** → the pool shows the new size
 - [ ] `p8 storages grow nas 150` works the same
 
+## 68. Separate plans for containers
+
+- [ ] Settings → Plans: add c1 "Container S" 1 CPU 512 MB 10 GB ₹149, For = Containers only → listed with a "containers only" pill; Edit shows the choice again
+- [ ] As a customer: + Create CT shows c1 (and plans for both); + Create VM doesn't show c1
+- [ ] Create a container on c1 → billed at ₹149/month (Billing shows it)
+- [ ] API: POST /vms with plan c1 → 400 "plan Container S is for containers only"; a "VMs only" plan for a container → 400 likewise
+- [ ] A container plan with 128 MB RAM is accepted; a VM plan with 128 MB is refused
+- [ ] `p8 plan c2 "Container M" 2 1024 20 249 --containers`; `p8 plans` shows "containers only"
+
 ## Add new features here as they are built
 
 (Every new feature adds its own lines above before it counts as done.)

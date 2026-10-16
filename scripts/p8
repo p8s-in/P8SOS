@@ -1023,13 +1023,14 @@ TXT
   plans)
     b=$(call GET /plans) || exit 1
     [[ $(jq '.plans | length' <<<"$b") == 0 ]] && { echo "No plans. Add them in the dashboard: Settings → Plans (or: p8 plan s1 Starter 1 1024 25 399)"; exit 0; }
-    jq -r '.currency as $c | .plans[] | "\(.id)\t\(.name)\t\(.vcpus) CPU\t\(.memory_mib) MB\t\(.disk_gb) GB\t\(.price_monthly/100) \($c)/mo\t\(if .public_ip then "public IP" else "" end)\(if .hidden then " hidden" else "" end)"' <<<"$b" | column -t -s $'\t' ;;
+    jq -r '.currency as $c | .plans[] | "\(.id)\t\(.name)\t\(.vcpus) CPU\t\(.memory_mib) MB\t\(.disk_gb) GB\t\(.price_monthly/100) \($c)/mo\t\(if .for == "ct" then "containers only" elif .for == "vm" then "VMs only" else "VMs+containers" end)\t\(if .public_ip then "public IP" else "" end)\(if .hidden then " hidden" else "" end)"' <<<"$b" | column -t -s $'\t' ;;
 
   plan)
-    [[ -n ${1:-} && -n ${2:-} && ${6:-} =~ ^[0-9.]+$ ]] || { red "usage: p8 plan ID NAME CPUS RAM_MB DISK_GB PRICE_PER_MONTH [--public-ip]   e.g. p8 plan s1 Starter 1 1024 25 399"; exit 1; }
-    pub=false; [[ ${7:-} == --public-ip ]] && pub=true
-    b=$(call PUT "/plans/$1" "$(jq -nc --arg n "$2" --argjson c "$3" --argjson m "$4" --argjson d "$5" --arg p "$6" --argjson pub "$pub" \
-      '{name:$n, vcpus:$c, memory_mib:$m, disk_gb:$d, price_monthly:(($p|tonumber)*100|round), public_ip:$pub}')") || exit 1
+    [[ -n ${1:-} && -n ${2:-} && ${6:-} =~ ^[0-9.]+$ ]] || { red "usage: p8 plan ID NAME CPUS RAM_MB DISK_GB PRICE_PER_MONTH [--public-ip] [--containers|--vms]   e.g. p8 plan c1 'Container S' 1 512 10 149 --containers"; exit 1; }
+    pub=false; for=""
+    for a in "${@:7}"; do case $a in --public-ip) pub=true ;; --containers|--ct) for=ct ;; --vms|--vm) for=vm ;; esac; done
+    b=$(call PUT "/plans/$1" "$(jq -nc --arg n "$2" --argjson c "$3" --argjson m "$4" --argjson d "$5" --arg p "$6" --argjson pub "$pub" --arg f "$for" \
+      '{name:$n, vcpus:$c, memory_mib:$m, disk_gb:$d, price_monthly:(($p|tonumber)*100|round), public_ip:$pub, for:$f}')") || exit 1
     green "✔ plan $(jq -r '"\(.id) \(.name): \(.vcpus) CPU, \(.memory_mib) MB, \(.disk_gb) GB for \(.price_monthly/100)/month (\(.hourly/100)/hour)"' <<<"$b")" ;;
 
   balance)

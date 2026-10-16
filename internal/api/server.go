@@ -594,7 +594,7 @@ func (s *Server) createVM(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, "exists", fmt.Sprintf("a container is already called %q", req.Name))
 		return
 	}
-	plan, ok := s.applyPlan(w, r, &req)
+	plan, ok := s.applyPlan(w, r, &req, cloud.ForVM)
 	if !ok {
 		return
 	}

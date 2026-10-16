@@ -29,7 +29,19 @@ type Plan struct {
 	PriceMonthly int64 `json:"price_monthly"`
 	PublicIP     bool  `json:"public_ip"` // comes with a public IPv4 from the pool below
 	Hidden       bool  `json:"hidden"`    // not offered to new servers (existing ones keep it)
+	// For: what the plan sizes: "" = VMs and containers, "vm" = VMs only,
+	// "ct" = containers only (they share the host's kernel, so they are often cheaper).
+	For string `json:"for,omitempty"`
 }
+
+// Plan kinds.
+const (
+	ForVM = "vm"
+	ForCT = "ct"
+)
+
+// Fits: the plan can size a guest of kind (ForVM or ForCT).
+func (p Plan) Fits(kind string) bool { return p.For == "" || p.For == kind }
 
 // Hourly is what one hour costs: monthly / 730, rounded up.
 func (p Plan) Hourly() int64 { return (p.PriceMonthly + 729) / 730 }
@@ -183,6 +195,14 @@ func (s Settings) Validate() error {
 	return errors.Join(errs...)
 }
 
+// minPlanMem: containers need less RAM than VMs.
+func minPlanMem(kind string) int {
+	if kind == ForCT {
+		return 128
+	}
+	return 256
+}
+
 // ValidatePlan checks a plan.
 func ValidatePlan(p Plan) (Plan, error) {
 	p.ID = strings.ToLower(strings.TrimSpace(p.ID))
@@ -192,8 +212,10 @@ func ValidatePlan(p Plan) (Plan, error) {
 		return p, fmt.Errorf("%w: plan id: lowercase letters, digits, - (e.g. s1)", ErrInvalid)
 	case p.Name == "" || text("name", p.Name, 40) != nil:
 		return p, fmt.Errorf("%w: plan name (up to 40 characters)", ErrInvalid)
-	case p.VCPUs < 1 || p.VCPUs > 128 || p.MemoryMiB < 256 || p.MemoryMiB > 1<<20 || p.DiskGB < 1 || p.DiskGB > 100000:
-		return p, fmt.Errorf("%w: plan size (CPUs 1-128, RAM ≥ 256 MB, disk ≥ 1 GB)", ErrInvalid)
+	case p.For != "" && p.For != ForVM && p.For != ForCT:
+		return p, fmt.Errorf(`%w: plan for: "" (VMs and containers), "vm" or "ct"`, ErrInvalid)
+	case p.VCPUs < 1 || p.VCPUs > 128 || p.MemoryMiB < minPlanMem(p.For) || p.MemoryMiB > 1<<20 || p.DiskGB < 1 || p.DiskGB > 100000:
+		return p, fmt.Errorf("%w: plan size (CPUs 1-128, RAM ≥ %d MB, disk ≥ 1 GB)", ErrInvalid, minPlanMem(p.For))
 	case p.PriceMonthly < 0 || p.PriceMonthly > 1e10:
 		return p, fmt.Errorf("%w: price", ErrInvalid)
 	}

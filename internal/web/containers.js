@@ -231,11 +231,11 @@ $("#ctAddGo").onclick = async () => {
 };
 $("#dlgCT").addEventListener("close", () => clearTimeout(ctAddTimer));
 
-/* P8S Cloud plans: the same sizes and prices as VMs */
+/* P8S Cloud plans: those for containers (plans for both, or containers only) */
 let ctPlanList = [], ctPlan = null;
 async function loadCTPlans(){
   ctPlan = null;
-  try { const r = await call("GET", "/plans"); ctPlanList = r.plans || []; if (r.currency && typeof cloudCur !== "undefined") cloudCur = r.currency; }
+  try { const r = await call("GET", "/plans?for=ct"); ctPlanList = r.plans || []; if (r.currency && typeof cloudCur !== "undefined") cloudCur = r.currency; }
   catch { ctPlanList = []; }
   $("#ctPlanBox").hidden = !ctPlanList.length;
   if (!ctPlanList.length) { $("#ctSizeRow").hidden = false; return; }

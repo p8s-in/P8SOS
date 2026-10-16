@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"p8sos/internal/cloud"
 	"p8sos/internal/cluster"
 	"p8sos/internal/creds"
 	"strings"
@@ -88,9 +89,9 @@ func (s *Server) createCT(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, "exists", fmt.Sprintf("a VM is already called %q", req.Name))
 		return
 	}
-	// P8S Cloud plans size containers like VMs (same plans, same billing)
+	// P8S Cloud plans size containers like VMs (plans for both, or for containers only)
 	vr := vm.CreateRequest{Plan: req.Plan, IPPool: req.IPPool, Network: req.Network, VCPUs: req.VCPUs, MemoryMiB: req.MemoryMiB, DiskGB: req.DiskGB}
-	plan, ok := s.applyPlan(w, r, &vr)
+	plan, ok := s.applyPlan(w, r, &vr, cloud.ForCT)
 	if !ok {
 		return
 	}

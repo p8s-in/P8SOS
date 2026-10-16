@@ -31,6 +31,7 @@ cheap Linux servers (websites, bots, databases, VPNs). Windows or a custom kerne
 
 | Backups | Manage → **Back up now**: processes frozen for an instant (`lxc-freeze`), ZFS snapshot, `zfs send` + zstd into `<backup dir>/_ct/NAME/`. **Restore as new…** brings it back as a new container (new MAC, hostname set); it can take the old name once the original is deleted |
 | Daily backups | Manage → Backups → "Every day at …, keep N" (same time as VM backups; schedule saved as `ct:NAME`) |
+| Plans (P8S Cloud) | customers pick a size from the plans for containers: plans for both, or **containers only** ones (often cheaper; Settings → Plans → For) |
 | Public IP | Create CT → Network → **Public IP — pool**: address from the same pools as VMs, set in the LXC config, the cloud-init seed and the distro's own files (netplan, systemd-networkd, ifupdown, NetworkManager, ifcfg). Pinned to the container (anti-spoofing) on its fixed host port `vc…` |
 | P8S Cloud | Customers pick a plan like for VMs; billed per hour, stopped when suspended, no free resize |
 | Firewall | Manage → **Firewall**: the same rules as for VMs (SSH / Web / Ping / custom, optional source), in the same nftables table, matched by the container's MAC; saved as `ct:NAME` in `firewall.json` |
@@ -64,5 +65,4 @@ list `/var/lib/p8s/containers.json`. Shell on the server: `p8 ct enter NAME`.
 
 ## Not yet (next steps)
 
-- Separate (cheaper) plans for containers; plans currently are shared with VMs
 - Moving a running container without any pause (memory copy, CRIU): it moves with a short pause instead

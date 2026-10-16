@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -128,6 +129,7 @@ func TestCloud(t *testing.T) {
 			"lxc-info -n": "RUNNING\n",
 		}}
 		_ = os.MkdirAll(filepath.Join(dir, "ct", "ct1"), 0o755)
+		_ = os.MkdirAll(filepath.Join(dir, "ct", "ct2"), 0o755)
 		s.CTs = &ct.Service{Run: run, Pool: "tank", MountDir: filepath.Join(dir, "ct"), LXCDir: filepath.Join(dir, "lxc"),
 			MetaFile: filepath.Join(dir, "containers.json"), Bridge: "virbr0", Chown: func(string, int, int) error { return nil }}
 		t.Cleanup(s.CTs.(*ct.Service).Wait)
@@ -155,6 +157,28 @@ func TestCloud(t *testing.T) {
 	m.req("PUT", "/api/v1/plans/s1", boss, `{"name":"Starter","vcpus":1,"memory_mib":1024,"disk_gb":25,"price_monthly":43800}`, 200)
 	if p := m.req("GET", "/api/v1/plans", boss, "", 200)["plans"].([]any)[0].(map[string]any); p["hourly"] != 60.0 {
 		t.Fatalf("plan %v", p)
+	}
+	// plans for containers only (they may be smaller), and for VMs only
+	m.req("PUT", "/api/v1/plans/cs", boss, `{"name":"Container S","vcpus":1,"memory_mib":128,"disk_gb":5,"price_monthly":9900,"for":"ct"}`, 200)
+	m.req("PUT", "/api/v1/plans/vs", boss, `{"name":"VM S","vcpus":1,"memory_mib":128,"disk_gb":5,"price_monthly":9900,"for":"vm"}`, 400) // too little RAM for a VM
+	m.req("PUT", "/api/v1/plans/vx", boss, `{"name":"VM X","vcpus":1,"memory_mib":512,"disk_gb":5,"price_monthly":9900,"for":"lxc"}`, 400)
+	m.req("PUT", "/api/v1/plans/vs", boss, `{"name":"VM S","vcpus":1,"memory_mib":512,"disk_gb":5,"price_monthly":19900,"for":"vm"}`, 200)
+	ids := func(q string) string {
+		var l []string
+		for _, x := range m.req("GET", "/api/v1/plans"+q, boss, "", 200)["plans"].([]any) {
+			l = append(l, x.(map[string]any)["id"].(string))
+		}
+		sort.Strings(l)
+		return strings.Join(l, ",")
+	}
+	if got := ids(""); got != "cs,s1,vs" {
+		t.Fatalf("all plans %s", got)
+	}
+	if got := ids("?for=vm"); got != "s1,vs" {
+		t.Fatalf("VM plans %s", got)
+	}
+	if got := ids("?for=ct"); got != "cs,s1" {
+		t.Fatalf("container plans %s", got)
 	}
 
 	// sign-up with email confirmation
@@ -238,6 +262,18 @@ func TestCloud(t *testing.T) {
 	if cn["vcpus"] != 1.0 || cn["owner"] != "carol" {
 		t.Fatalf("plan size not applied to container: %v", cn)
 	}
+	if e := m.req("POST", "/api/v1/vms", carol, `{"name":"c9","template":"debian-13","plan":"cs"}`, 400); !strings.Contains(e["error"].(map[string]any)["message"].(string), "containers only") {
+		t.Fatalf("container plan for a VM: %v", e)
+	}
+	m.req("POST", "/api/v1/containers", carol, `{"name":"ct9","template":"debian-13","plan":"vs"}`, 400) // VMs only
+	cs2 := m.req("POST", "/api/v1/containers", carol, `{"name":"ct2","template":"debian-13","plan":"cs"}`, 201)
+	if cs2["memory_mib"] != 128.0 || cs2["disk_gb"] != 5.0 {
+		t.Fatalf("container plan not applied: %v", cs2)
+	}
+	if b := m.req("GET", "/api/v1/billing", carol, "", 200); !strings.Contains(fmt.Sprint(b["servers"]), "monthly:9900 owner:carol paid_until") {
+		t.Fatalf("container plan not billed at its price: %v", b)
+	}
+	m.req("DELETE", "/api/v1/containers/ct2", carol, "", 204)
 	if b := m.req("GET", "/api/v1/billing", carol, "", 200); len(b["servers"].([]any)) != 2 {
 		t.Fatalf("container not billed: %v", b)
 	}

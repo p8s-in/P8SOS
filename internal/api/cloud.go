@@ -71,7 +71,7 @@ func (s *Server) cloudErr(w http.ResponseWriter, r *http.Request, err error) {
 
 // applyPlan fills a create request from its plan. Customers must pick a plan
 // once plans exist (that's how they are billed). Returns the plan (nil = none).
-func (s *Server) applyPlan(w http.ResponseWriter, r *http.Request, req *vm.CreateRequest) (*cloud.Plan, bool) {
+func (s *Server) applyPlan(w http.ResponseWriter, r *http.Request, req *vm.CreateRequest, kind string) (*cloud.Plan, bool) {
 	if s.Cloud == nil || s.Billing == nil {
 		if req.Plan != "" {
 			writeErr(w, http.StatusBadRequest, "invalid", "plans are not available on this host")
@@ -81,7 +81,7 @@ func (s *Server) applyPlan(w http.ResponseWriter, r *http.Request, req *vm.Creat
 	}
 	p := who(r)
 	if req.Plan == "" {
-		if !p.Admin && len(s.Cloud.Plans()) > 0 {
+		if !p.Admin && len(s.plansFor(kind, false)) > 0 {
 			writeErr(w, http.StatusBadRequest, "invalid", "choose a plan (size) for the server")
 			return nil, false
 		}
@@ -90,6 +90,11 @@ func (s *Server) applyPlan(w http.ResponseWriter, r *http.Request, req *vm.Creat
 	plan, err := s.Cloud.Plan(req.Plan)
 	if err != nil || (plan.Hidden && !p.Admin) {
 		writeErr(w, http.StatusNotFound, "not_found", fmt.Sprintf("no plan %q", req.Plan))
+		return nil, false
+	}
+	if !plan.Fits(kind) {
+		what := map[string]string{cloud.ForVM: "VMs", cloud.ForCT: "containers"}[plan.For]
+		writeErr(w, http.StatusBadRequest, "invalid", fmt.Sprintf("plan %s is for %s only", plan.Name, what))
 		return nil, false
 	}
 	req.VCPUs, req.MemoryMiB, req.DiskGB = plan.VCPUs, plan.MemoryMiB, plan.DiskGB
@@ -470,15 +475,29 @@ type planView struct {
 	Hourly int64 `json:"hourly"`
 }
 
+// plansFor is the plans that can size a guest of kind ("" = every plan).
+func (s *Server) plansFor(kind string, hidden bool) []cloud.Plan {
+	out := []cloud.Plan{}
+	if s.Cloud == nil {
+		return out
+	}
+	for _, p := range s.Cloud.Plans() {
+		if (hidden || !p.Hidden) && (kind == "" || p.Fits(kind)) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// listPlans: GET /plans[?for=vm|ct] (only the plans for VMs / for containers).
 func (s *Server) listPlans(w http.ResponseWriter, r *http.Request) {
 	out := []planView{}
-	if s.Cloud != nil {
-		admin := who(r).Admin
-		for _, p := range s.Cloud.Plans() {
-			if admin || !p.Hidden {
-				out = append(out, planView{p, p.Hourly()})
-			}
-		}
+	kind := r.URL.Query().Get("for")
+	if kind != cloud.ForVM && kind != cloud.ForCT {
+		kind = ""
+	}
+	for _, p := range s.plansFor(kind, who(r).Admin) {
+		out = append(out, planView{p, p.Hourly()})
 	}
 	cur := "INR"
 	if s.Cloud != nil {

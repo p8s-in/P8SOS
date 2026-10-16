@@ -37,7 +37,12 @@ Sizes with a monthly price before tax, e.g.
   settings ([public-ips.md](public-ips.md)).
 - Once plans exist, customers must pick one; admins can still create any size
   (not billed). Changing a price affects new servers only.
-- CLI: `p8 plans`, `p8 plan s1 Starter 1 1024 25 399`.
+- **Plans for containers:** a plan is for VMs and containers (the default), for **VMs
+  only** or for **containers only** (Settings → Plans → For). Containers share the
+  host's kernel and need less RAM, so container plans are usually cheaper (and may
+  start at 128 MB). + Create VM shows the plans for VMs, + Create CT those for containers.
+- CLI: `p8 plans`, `p8 plan s1 Starter 1 1024 25 399`,
+  `p8 plan c1 "Container S" 1 512 10 149 --containers` (or `--vms`).
 
 ## 3. Wallet, payments, invoices
 

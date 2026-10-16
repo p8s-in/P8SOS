@@ -101,7 +101,7 @@ function badge(){
 /* ---------- create: plans ---------- */
 async function cloudCreate(){
   selPlan = null;
-  try { const r = await call("GET", "/plans"); plans = r.plans; cloudCur = r.currency || cloudCur; } catch { plans = []; }
+  try { const r = await call("GET", "/plans?for=vm"); plans = r.plans; cloudCur = r.currency || cloudCur; } catch { plans = []; }
   const box = $("#cPlanBox");
   box.hidden = !plans.length;
   $("#cSizeRow").hidden = plans.length > 0 && !isAdmin();
@@ -406,6 +406,8 @@ async function cloudSettings(){
       <div><label>Price/mo</label><input id="plPrice" type="number" min="0" step="1" value="399"></div>
       <div><label>&nbsp;</label><button class="btn primary" id="plGo">Save plan</button></div>
     </div>
+    <div class="inline" style="margin:4px 0"><label for="plFor" style="margin:0">For</label>
+      <select id="plFor" style="max-width:260px"><option value="">VMs and containers</option><option value="vm">VMs only</option><option value="ct">Containers only (e.g. cheaper)</option></select></div>
     <label class="check"><input id="plPub" type="checkbox"> includes a public IP</label>
     <label class="check"><input id="plHide" type="checkbox"> hidden (not offered for new servers)</label>
     <h3>Payments (Razorpay)</h3>
@@ -441,7 +443,7 @@ async function cloudSettings(){
     v("#csKey", st.razorpay_key_id); v("#csSec", st.razorpay_key_secret); v("#csWh", st.razorpay_webhook_secret);
     v("#csHost", st.smtp_host); v("#csPort", st.smtp_port); v("#csFrom", st.mail_from); v("#csUser", st.smtp_user); v("#csPass", st.smtp_pass);
     $("#csWhUrl").textContent = (st.public_url || location.origin) + "/api/v1/billing/razorpay/webhook";
-    $("#plList").innerHTML = pl.plans.length ? pl.plans.map(p => `<tr data-pl="${esc(p.id)}"><td><b>${esc(p.name)}</b> <span class="mono sub">${esc(p.id)}</span>${p.hidden ? ' <span class="pill">hidden</span>' : ""}
+    $("#plList").innerHTML = pl.plans.length ? pl.plans.map(p => `<tr data-pl="${esc(p.id)}"><td><b>${esc(p.name)}</b> <span class="mono sub">${esc(p.id)}</span>${p.hidden ? ' <span class="pill">hidden</span>' : ""}${p.for ? ` <span class="pill">${p.for === "ct" ? "containers only" : "VMs only"}</span>` : ""}
         <div class="sub">${p.vcpus} CPU · ${gb(p.memory_mib)} · ${p.disk_gb} GB${p.public_ip ? " · public IP" : ""} · ${esc(money(p.price_monthly))}/mo (${esc(money(p.hourly))}/h)</div></td>
         <td><button class="btn" data-pl-edit>Edit</button><button class="btn danger" data-pl-del>Delete</button></td></tr>`).join("")
       : `<tr><td class="muted">No plans yet. Without plans, customers create servers within their quota and nothing is billed.</td></tr>`;
@@ -469,7 +471,7 @@ async function savePlan(){
   if (!id) return toast("Give the plan an id, e.g. s1", true);
   try {
     await call("PUT", "/plans/" + encodeURIComponent(id), {name: $("#plName").value.trim(), vcpus: +$("#plCpu").value, memory_mib: +$("#plMem").value,
-      disk_gb: +$("#plDisk").value, price_monthly: Math.round((+$("#plPrice").value || 0) * 100), public_ip: $("#plPub").checked, hidden: $("#plHide").checked});
+      disk_gb: +$("#plDisk").value, price_monthly: Math.round((+$("#plPrice").value || 0) * 100), public_ip: $("#plPub").checked, hidden: $("#plHide").checked, for: $("#plFor").value});
     toast(`Plan ${id} saved`); cloudSettings();
   } catch (err) { toast(err.message, true); }
 }
@@ -478,7 +480,7 @@ async function planAction(e){
   const p = plans.find(x => x.id === row.dataset.pl);
   if (e.target.closest("[data-pl-edit]")) {
     $("#plId").value = p.id; $("#plName").value = p.name; $("#plCpu").value = p.vcpus; $("#plMem").value = p.memory_mib;
-    $("#plDisk").value = p.disk_gb; $("#plPrice").value = p.price_monthly / 100; $("#plPub").checked = p.public_ip; $("#plHide").checked = p.hidden;
+    $("#plDisk").value = p.disk_gb; $("#plPrice").value = p.price_monthly / 100; $("#plPub").checked = p.public_ip; $("#plHide").checked = p.hidden; $("#plFor").value = p.for || "";
     $("#plId").scrollIntoView({block: "center"});
   } else if (e.target.closest("[data-pl-del]")) {
     const b = e.target.closest("[data-pl-del]");
