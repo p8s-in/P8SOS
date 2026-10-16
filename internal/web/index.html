@@ -950,6 +950,7 @@ function renderShell(){
   <main>
     <div class="crumb"><b>Datacenter</b><span id="hName"></span></div>
     <section class="cards" id="cards"></section>
+    <section class="panel" id="dcNet" style="margin-bottom:16px" hidden></section>
     <section class="panel">
       <div class="panel-head"><h2>Virtual machines</h2><span class="sub" id="vmCount"></span></div>
       <table><thead><tr><th>State</th><th>Name</th><th>IP address</th><th>CPU</th><th>RAM</th><th>Disk</th><th>Autostart</th><th></th></tr></thead>
@@ -1055,6 +1056,7 @@ function renderHost(){
     card("Memory", gb(memUsed), memSub(host), null, "sMem") +
     (host.pool_size_gb ? card("VM storage", poolUsed.toFixed(1) + " GB", `of ${host.pool_size_gb} GB used (ZFS)`, poolUsed / host.pool_size_gb * 100) : "");
   drawHostSparks();
+  if (typeof renderDcNet === "function" && !$("#dcNet").innerHTML) renderDcNet();
 }
 
 // hide sidebar headings whose buttons are all hidden (customers, P8S Cloud off)
@@ -2246,6 +2248,7 @@ document.addEventListener("DOMContentLoaded", render); // after cloud.js has loa
 <script src="/offsite.js"></script>
 <script src="/pages.js"></script>
 <script src="/imports.js"></script>
+<script src="/dcnet.js"></script>
 <script src="/cluster.js"></script>
 <script src="/ha.js"></script>
 <script src="/security.js"></script>

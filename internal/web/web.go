@@ -78,6 +78,8 @@ var (
 	dcFirewallJS []byte
 	//go:embed vnets.js
 	vnetsJS []byte
+	//go:embed dcnet.js
+	dcNetJS []byte
 	//go:embed diskview.js
 	diskViewJS []byte
 	//go:embed remote.js
@@ -125,6 +127,7 @@ var assets = map[string]asset{
 	"/dcfirewall.js":  {dcFirewallJS, "text/javascript; charset=utf-8", "no-cache"},
 	"/vnets.js":       {vnetsJS, "text/javascript; charset=utf-8", "no-cache"},
 	"/diskview.js":    {diskViewJS, "text/javascript; charset=utf-8", "no-cache"},
+	"/dcnet.js":       {dcNetJS, "text/javascript; charset=utf-8", "no-cache"},
 	"/storages.js":    {storagesJS, "text/javascript; charset=utf-8", "no-cache"},
 	"/ceph.js":        {cephJS, "text/javascript; charset=utf-8", "no-cache"},
 	"/nodepage.js":    {nodePageJS, "text/javascript; charset=utf-8", "no-cache"},

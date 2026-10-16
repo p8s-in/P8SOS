@@ -65,6 +65,7 @@ if zpool list -H "$POOL" >/dev/null 2>&1 && zfs list -H "$POOL/p8s/vms" >/dev/nu
   command -v lzop >/dev/null || apt-get install -y lzop >/dev/null 2>&1 || true  # importing .vma.lzo Proxmox backups
   command -v smartctl >/dev/null || apt-get install -y smartmontools >/dev/null 2>&1 || true  # disk health alerts
   command -v ping >/dev/null || apt-get install -y iputils-ping >/dev/null 2>&1 || true  # high availability: is the router reachable
+  command -v tracepath >/dev/null || apt-get install -y iputils-tracepath >/dev/null 2>&1 || true  # network check: CGNAT on the way out
   command -v lspci >/dev/null || apt-get install -y pciutils usbutils >/dev/null 2>&1 || true  # PCI/USB passthrough: device names
   [[ -x /usr/sbin/dnsmasq ]] || apt-get install -y dnsmasq-base >/dev/null 2>&1 || true  # virtual networks: DHCP and DNS on their gateway
   command -v qemu-storage-daemon >/dev/null || apt-get install -y qemu-utils >/dev/null 2>&1 || apt-get install -y qemu-system-common >/dev/null 2>&1 || true  # P8S Mirror: serves mirror disks

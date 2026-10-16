@@ -9,6 +9,13 @@ works only on that network. To use it from anywhere, pick one of three ways
   shares one public address among many homes: **nothing on the internet can
   connect in to your server**. Port forwarding then can't work; use way 1 or 3.
 
+**Datacenter → Network → Check all servers** shows, for every server of the
+cluster at once: its own internet, its VMs' and containers' internet (with
+**Repair**), the address the internet sees, whether the provider uses CGNAT,
+and which of the ways below is set up. No public IP is needed for servers or
+guests to reach the internet; only reaching them *from* outside needs one of
+these ways.
+
 | | Works with CGNAT | Router setup | Good for |
 |---|---|---|---|
 | **1. Tailscale** | yes | none | you and your team, from phone / laptop |

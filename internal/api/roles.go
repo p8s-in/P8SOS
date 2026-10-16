@@ -45,7 +45,7 @@ var (
 		"PUT /license", "DELETE /license", "POST /license/check",
 		"POST /cluster/join-code", "POST /cluster/join", "POST /cluster/leave", "DELETE /cluster/nodes/[^/]+",
 		"POST /cluster/invite-send", "POST /cluster/invites/[^/]+/[^/]+", "POST /cluster/check", "GET /cluster/shell",
-		"POST /node/shell", "POST /node/tasks", "POST /node/boot-security/.+", "DELETE /node/boot-security/.+",
+		"POST /node/shell", "POST /node/tasks", "POST /cluster/netcheck/[^/]+/repair", "POST /node/boot-security/.+", "DELETE /node/boot-security/.+",
 		"POST /updates/check", "POST /updates/install", "PUT /updates/channel",
 		"PUT /alerts/settings", "PUT /ha/settings",
 		"PUT /offsite/targets/[^/]+", "DELETE /offsite/targets/[^/]+",

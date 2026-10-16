@@ -713,6 +713,14 @@ Build a new ISO on the laptop: `sudo bash iso/build-installer.sh ~/P8SOS/dist` (
 - [ ] A container plan with 128 MB RAM is accepted; a VM plan with 128 MB is refused
 - [ ] `p8 plan c2 "Container M" 2 1024 20 249 --containers`; `p8 plans` shows "containers only"
 
+## 69. Datacenter → Network
+
+- [ ] Datacenter page (admin): **Network** panel → Check all servers → within a minute one row per server: server's internet ●, guests' internet ●, From outside (the address the internet sees, CGNAT or not, Tailscale / tunnel / VPN set up)
+- [ ] Break guest NAT (`sudo nft flush ruleset` on a test server) → Check → "1 problem(s)" with the reason; **Repair** → check again after a minute → ok
+- [ ] Cluster: a worker's row shows its own results; an offline worker shows "offline"
+- [ ] Home line with Jio/Airtel CGNAT: the From outside column says so; with Tailscale on: "reachable from anywhere through: Tailscale (100.x.y.z)"
+- [ ] Operator account: no Network panel
+
 ## Add new features here as they are built
 
 (Every new feature adds its own lines above before it counts as done.)

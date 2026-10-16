@@ -225,6 +225,58 @@ if command -v virsh >/dev/null; then
   if [[ -n $leases ]]; then ok "NAT DHCP leases: $(echo "$leases" | awk '{print $2"="$1}' | paste -sd' ')"; else say "  · no DHCP leases on the NAT network yet"; fi
 fi
 
+say "==> From outside"
+# Information only (not counted as a problem): can people on the internet
+# reach this server? No public IP is needed for the server or its guests to
+# go OUT; reaching IN needs one of the remote-access ways below.
+info() { say "  · $*"; }
+pub=""
+for u in https://api.ipify.org https://ifconfig.me/ip https://icanhazip.com; do
+  pub=$(curl -4 -fsS --max-time 5 "$u" 2>/dev/null | tr -d '[:space:]')
+  [[ $pub =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && break || pub=""
+done
+lan=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i < NF; i++) if ($i == "src") print $(i+1)}')
+if [[ -n $pub ]]; then
+  if [[ $pub == "$lan" ]]; then
+    info "this server has a public address itself: $pub (reachable from the internet if its firewall allows)"
+  else
+    info "the internet sees this server as $pub (your router's address); the server itself is ${lan:-on a private network}"
+  fi
+else
+  info "couldn't find out the public address (no answer from the IP lookup services)"
+fi
+# CGNAT: the provider shares one address between many customers (100.64.0.0/10 on the way out)
+cg=false
+if command -v tracepath >/dev/null; then
+  hops=$(timeout 12 tracepath -n -m 4 1.1.1.1 2>/dev/null | awk '{print $2}')
+elif command -v traceroute >/dev/null; then
+  hops=$(timeout 12 traceroute -n -m 4 -w 1 1.1.1.1 2>/dev/null | awk 'NR > 1 {print $2}')
+else
+  hops=""
+fi
+for h in $hops; do
+  [[ $h =~ ^100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\. ]] && cg=true
+done
+if $cg; then
+  info "your internet provider shares one public address between many customers (CGNAT): opening ports on the router won't work"
+elif [[ -n $pub && $pub != "$lan" ]]; then
+  info "to reach it from outside without the ways below, forward a port on the router to $lan (not possible with CGNAT)"
+fi
+ways=()
+if command -v tailscale >/dev/null && tailscale status >/dev/null 2>&1; then
+  ways+=("Tailscale ($(tailscale ip -4 2>/dev/null | head -1))")
+fi
+if ip link show p8s-vpn >/dev/null 2>&1; then
+  if $cg; then info "the built-in VPN is on, but with CGNAT nothing can connect in to it: use Tailscale instead"
+  else ways+=("the built-in VPN (UDP 51830 forwarded on the router)"); fi
+fi
+pgrep -x cloudflared >/dev/null && ways+=("Cloudflare Tunnel")
+if ((${#ways[@]})); then
+  info "reachable from anywhere through: $(IFS=,; echo "${ways[*]}" | sed 's/,/, /g')"
+else
+  info "nothing is set up to reach it from outside: Server → Network → Remote access (Tailscale for you and your team, works with CGNAT; Cloudflare Tunnel for websites and the dashboard)"
+fi
+
 say ""
 if ((bad == 0)); then
   say "All good: VMs and containers should reach the internet. If one still can't, check its own network settings (DHCP on, gateway ${sub:-192.168.122.}1)."
