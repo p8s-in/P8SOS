@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"time"
 
 	"p8sos/internal/jobs"
 	"p8sos/internal/vm"
@@ -47,6 +48,17 @@ func (c *VMs) StartClone(ctx context.Context, name string, r vm.CloneRequest) (v
 		}
 	}
 	n, remote := c.locate(ctx, name)
+	from := ""
+	if c.M != nil {
+		from = c.M.SelfID()
+	}
+	if remote {
+		from = n.ID
+	}
+	if to := c.cloneTarget(r.Node); r.Node != "" && to != from {
+		return c.startCloneTo(ctx, name, r, from, to)
+	}
+	r.Node = ""
 	if !remote {
 		return t.StartClone(ctx, name, r)
 	}
@@ -54,6 +66,105 @@ func (c *VMs) StartClone(ctx context.Context, name string, r vm.CloneRequest) (v
 	err = c.call(ctx, n, "POST", vpath(name, "/clone"), r, &j)
 	return j, err
 }
+
+// cloneTarget is the id of the server asked for by id or name ("" = none such).
+func (c *VMs) cloneTarget(node string) string {
+	if node == "" || c.M == nil {
+		return ""
+	}
+	if node == c.M.SelfID() || strings.EqualFold(node, c.M.SelfName()) {
+		return c.M.SelfID()
+	}
+	if n, ok := c.node(node); ok {
+		return n.ID
+	}
+	if n, ok := c.nodeByName(node); ok {
+		return n.ID
+	}
+	return ""
+}
+
+// startCloneTo copies a VM onto another server in one job: the copy is made
+// next to the VM (shut down), then moved to the server asked for.
+func (c *VMs) startCloneTo(ctx context.Context, name string, r vm.CloneRequest, from, to string) (vm.Job, error) {
+	switch {
+	case to == "":
+		return vm.Job{}, fmt.Errorf("%w: no server %q in the cluster", vm.ErrInvalid, r.Node)
+	case r.Linked:
+		return vm.Job{}, fmt.Errorf("%w: a linked clone shares the VM's disk, so it stays on the VM's server; make a full copy to put it on another one", vm.ErrInvalid)
+	case r.Storage != "" && r.Storage != "local":
+		return vm.Job{}, fmt.Errorf("%w: a copy for another server goes on its local disks (storage \"local\")", vm.ErrInvalid)
+	case c.Jobs == nil:
+		return vm.Job{}, fmt.Errorf("%w: moving isn't set up", vm.ErrConflict)
+	}
+	if to != c.M.SelfID() && !c.M.NodeStatus(to).Online {
+		return vm.Job{}, fmt.Errorf("%w: server %s is offline", vm.ErrConflict, c.nodeName(to))
+	}
+	start := r.Start
+	r.Start, r.Node, r.Storage = false, "", ""
+	self := c.M.SelfID()
+	j, err := c.Jobs.Start("clone", name, func(ctx context.Context, p jobs.Progress) (string, error) {
+		p("copying " + name + " on " + c.nodeName(from))
+		var cj vm.Job
+		var err error
+		if from == self {
+			cj, err = c.tplLocalMust().StartClone(ctx, name, r)
+		} else if n, ok := c.node(from); ok {
+			err = c.call(ctx, n, "POST", vpath(name, "/clone"), r, &cj)
+		} else {
+			err = fmt.Errorf("server %s is gone", from)
+		}
+		if err != nil {
+			return "", err
+		}
+		for {
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-time.After(cloneWait):
+			}
+			got, ok := c.Job(cj.ID)
+			if !ok {
+				return "", fmt.Errorf("the copy's job on %s disappeared", c.nodeName(from))
+			}
+			if got.State == jobs.Failed {
+				return "", errors.New(got.Error)
+			}
+			if got.State == jobs.Done {
+				break
+			}
+			if got.Message != "" {
+				p("copying on " + c.nodeName(from) + ": " + got.Message)
+			}
+		}
+		if from == self {
+			c.remember(r.Name, "")
+		} else {
+			c.remember(r.Name, from)
+		}
+		info, err := c.MoveInfo(ctx, r.Name)
+		if err == nil && info.Why != "" {
+			err = errors.New(info.Why)
+		}
+		if err != nil {
+			return "", fmt.Errorf("%s was made on %s but can't be moved to %s: %v (it stays on %s)", r.Name, c.nodeName(from), c.nodeName(to), err, c.nodeName(from))
+		}
+		msg, err := c.move(ctx, r.Name, from, to, self, start, p)
+		if err != nil {
+			return "", fmt.Errorf("%s was made on %s; moving it to %s failed: %v (it stays on %s)", r.Name, c.nodeName(from), c.nodeName(to), err, c.nodeName(from))
+		}
+		return name + " copied: " + msg, nil
+	})
+	if errors.Is(err, jobs.ErrBusy) {
+		return vm.Job{}, fmt.Errorf("%w: %v", vm.ErrConflict, err)
+	}
+	return j, err
+}
+
+// cloneWait is how often the copy's job is checked.
+var cloneWait = 2 * time.Second
+
+func (c *VMs) tplLocalMust() templateLocal { t, _ := c.tplLocal(); return t }
 
 // StartMakeTemplate makes a template from a VM on the server that has it.
 func (c *VMs) StartMakeTemplate(ctx context.Context, name string, r vm.TemplateRequest) (vm.Job, error) {
@@ -419,3 +530,6 @@ func (c *VMs) StartUnlink(ctx context.Context, name string) (vm.Job, error) {
 	err := c.call(ctx, n, "POST", vpath(name, "/unlink"), nil, &j)
 	return j, err
 }
+
+// SetCloneWait changes how often the copy's job is checked (tests); it returns the old value.
+func SetCloneWait(d time.Duration) time.Duration { old := cloneWait; cloneWait = d; return old }

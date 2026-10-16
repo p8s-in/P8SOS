@@ -378,6 +378,7 @@ dialog.admin-page:not(#dlgSettings)>.dlg-body{background:var(--panel);border:1px
   <div id="mCloneBox" hidden><h3>Clone</h3>
     <div class="inline"><input id="mCloneName" placeholder="name of the copy" maxlength="49" autocomplete="off" style="max-width:220px">
       <select id="mCloneStore" aria-label="Storage of the copy" style="max-width:180px" title="Where the copy's disks go"></select>
+      <select id="mCloneNode" aria-label="Server of the copy" style="max-width:200px" title="Which server the copy goes on: it is made next to this VM, then moved there" hidden></select>
       <button class="btn" id="mCloneGo">Clone</button></div>
     <label style="display:flex;gap:8px;align-items:center;font-weight:400"><input id="mCloneStart" type="checkbox" style="width:auto"> Start the copy</label>
     <label style="display:flex;gap:8px;align-items:center;font-weight:400"><input id="mCloneLinked" type="checkbox" style="width:auto"> Linked clone — instant, shares this VM's disk blocks (takes space only for what changes); this VM can't be deleted while it has linked clones</label>
@@ -1343,6 +1344,7 @@ async function openManage(name){
   $("#mMoveBox").hidden = true; loadMove();
   $("#mCloneBox").hidden = $("#mTplBox").hidden = !isAdmin();
   $("#mCloneName").value = ""; $("#mTplName").value = ""; $("#mTplLabel").value = ""; $("#mCloneLinked").checked = false;
+  $("#mCloneNode").dataset.vm = ""; $("#mCloneNode").value = ""; $("#mCloneNode").hidden = true; $("#mCloneLinked").disabled = $("#mCloneStore").disabled = false;
   $("#mLinkInfo").hidden = true;
   if (isAdmin()) call("GET", `/vms/${encodeURIComponent(v.name)}`).then(full => {
     if (mName !== full.name) return;
@@ -1392,19 +1394,34 @@ $("#mCPUGo").onclick = async () => {
     toast(`CPU type set — shut ${mName} down and start it for it to take effect`);
   } catch (err) { toast(err.message, true); }
 };
-$("#mCloneName").onfocus = () => {
+$("#mCloneName").onfocus = async () => {
   const sel = $("#mCloneStore"), l = host?.storages || [];
   sel.hidden = l.length < 2;
   if (!sel.options.length) sel.innerHTML = `<option value="">same storage</option>` + l.map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join("");
+  // cluster: the copy can go on another server (made here, then moved there)
+  const ns = $("#mCloneNode");
+  if (!/^master · cluster of/.test(clRole) || ns.dataset.vm === mName) return;
+  ns.dataset.vm = mName;
+  const c = await call("GET", "/cluster").catch(() => null), v = vms.find(x => x.name === mName) || {};
+  const here = v.node_id || (c?.nodes || []).find(n => n.self)?.id;
+  const others = (c?.nodes || []).filter(n => n.id !== here && (n.self || n.status?.online));
+  ns.innerHTML = `<option value="">on ${esc(v.node || "this VM's server")}</option>` + others.map(n => `<option value="${esc(n.id)}">on ${esc(n.name)}</option>`).join("");
+  ns.hidden = !others.length;
+};
+$("#mCloneNode").onchange = () => {
+  const other = !!$("#mCloneNode").value;
+  $("#mCloneLinked").disabled = other; if (other) $("#mCloneLinked").checked = false;
+  $("#mCloneStore").disabled = other;
 };
 $("#mCloneGo").onclick = async () => {
   const n = $("#mCloneName").value.trim();
   if (!n) return toast("Give the copy a name", true);
-  const storage = $("#mCloneStore").value;
+  const node = $("#mCloneNode").hidden ? "" : $("#mCloneNode").value;
+  const storage = node ? "" : $("#mCloneStore").value;
   try {
-    const linked = $("#mCloneLinked").checked;
-    trackJob(await call("POST", `/vms/${encodeURIComponent(mName)}/clone`, {name: n, start: $("#mCloneStart").checked, ...(linked ? {linked} : {}), ...(storage ? {storage} : {})}), refresh);
-    toast(linked ? `Linking ${n} to ${mName} …` : `Copying ${mName} to ${n} …`);
+    const linked = !node && $("#mCloneLinked").checked;
+    trackJob(await call("POST", `/vms/${encodeURIComponent(mName)}/clone`, {name: n, start: $("#mCloneStart").checked, ...(linked ? {linked} : {}), ...(storage ? {storage} : {}), ...(node ? {node} : {})}), refresh);
+    toast(linked ? `Linking ${n} to ${mName} …` : node ? `Copying ${mName} to ${n} on ${$("#mCloneNode").selectedOptions[0].textContent.slice(3)} …` : `Copying ${mName} to ${n} …`);
   } catch (err) { toast(err.message, true); }
 };
 $("#mTplGo").onclick = async () => {

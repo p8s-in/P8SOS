@@ -34,6 +34,9 @@ type CloneRequest struct {
 	// Linked: an instant clone sharing the VM's disk blocks (ZFS clones of a
 	// snapshot); the VM can't be deleted while it has linked clones.
 	Linked bool `json:"linked,omitempty"`
+	// Node: cluster, make the copy on this server (the VM's own server by
+	// default): copied there, then moved (cluster.VMs).
+	Node string `json:"node,omitempty"`
 }
 
 // linker makes and tracks linked clones (storage.ZFS).

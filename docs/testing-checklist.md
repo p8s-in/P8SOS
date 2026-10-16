@@ -690,6 +690,13 @@ Build a new ISO on the laptop: `sudo bash iso/build-installer.sh ~/P8SOS/dist` (
 - [ ] Stop p8sd on the master: the worker's public VMs keep working; creating a new public VM on the worker fails with "the master … didn't answer"
 - [ ] Remove the worker from the cluster: its public VMs keep their addresses (`p8 ippools` on it), the master still shows them used
 
+## 66. Clone onto another server
+
+- [ ] Cluster of 2: VM on the worker → Manage → Options → Clone: the list next to the name offers "on <master>"; pick it, name db2, Start the copy → one job: copying on the worker, copying the disk, removing the original (of the copy), starting; db2 runs on the master, the VM is untouched
+- [ ] Picking another server greys out Linked clone and the storage list
+- [ ] `p8 clone db1 db3 --on <worker>` (the VM's own server) → an ordinary clone there
+- [ ] Unplug the target server during the copy: the job ends with "… moving it to … failed … (it stays on …)" and the copy is on the VM's server
+
 ## Add new features here as they are built
 
 (Every new feature adds its own lines above before it counts as done.)

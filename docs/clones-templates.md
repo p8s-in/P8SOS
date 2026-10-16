@@ -15,6 +15,11 @@ Dashboard: **Manage → Options → Clone** (admins and operators). Command line
   `sysprep /generalize /oobe /shutdown` in the VM first.
 - Not copied: snapshots, backups, the public IP, high availability, autostart (off on the copy).
 - The copy is independent: deleting either one doesn't touch the other.
+- **On another server** (cluster): pick the server in the list next to the name ("on p8s-worker"), or
+  `p8 clone web1 web2 --on p8s-worker`. One job makes the copy next to the VM (shut down), then moves it
+  over the tunnel and starts it if asked. A full copy on that server's local disks; not for linked clones.
+  If the move can't be done (e.g. that server went offline), the copy stays on the VM's server and the job
+  says why.
 
 ### Linked clones
 
@@ -69,4 +74,3 @@ online server without it; a job). Between servers: `GET /cluster/tpl-export/{nam
 ## Not yet
 
 - Linked clones on Ceph (rbd clone).
-- Cloning to another server in one step (clone, then move it).
