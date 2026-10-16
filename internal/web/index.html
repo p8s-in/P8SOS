@@ -978,6 +978,8 @@ function renderShell(){
   $("#bMe").onclick = openAccount;
   $("#bBackups").onclick = () => openAllBackups();
   $("#bIsos").onclick = openIsos;
+  // imports.js loads after this file: bind here, so the button also works after signing in
+  $("#bImports").onclick = () => typeof openImports === "function" ? openImports() : toast("Import isn't loaded yet; reload the page", true);
   $("#bNew").onclick = () => openCreate();
   startPolling();
 }

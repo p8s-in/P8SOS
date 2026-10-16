@@ -400,6 +400,10 @@ async function showTask(id, quiet){
     const log = $("#ndLog"), atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 20;
     log.textContent = t.log || "(no output yet)";
     if (atEnd || !quiet) log.scrollTop = log.scrollHeight;
+    if (!quiet) { // the log is on the Tasks tab: go there and show it
+      if (typeof selectNodeTab === "function" && nodeTab !== "tasks") selectNodeTab("tasks");
+      $("#ndLogBox").scrollIntoView({block: "nearest", behavior: "smooth"});
+    }
   } catch (e) { if (!quiet) toast(e.message, true); }
 }
 

@@ -134,4 +134,4 @@ $("#impUp").onclick = () => {
   x.send(f);
 };
 $("#impClose").onclick = () => $("#dlgImp").close();
-if ($("#bImports")) $("#bImports").onclick = openImports;
+if ($("#bImports")) $("#bImports").onclick = openImports; // index.html binds it again whenever the sidebar is drawn

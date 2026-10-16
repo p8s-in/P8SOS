@@ -671,6 +671,15 @@ Build a new ISO on the laptop: `sudo bash iso/build-installer.sh ~/P8SOS/dist` (
 - [ ] `p8 templates copy NAME` with every server having it → "every online server has … already"; `p8 templates rm NAME --on <server>` deletes only that copy; Delete (every copy) removes them all
 - [ ] Copying a built-in template (debian-13) is refused with "add it on each server"
 
+## 63. Server page: Show log from any tab
+
+- [ ] Start a server task (e.g. Storage → Get ready for Secure Boot); on the Storage tab click **Show log** in the orange "… is running" bar → the page switches to the Tasks tab and shows the log (it keeps updating)
+
+## 64. Import VMs button after signing in
+
+- [ ] Open the dashboard in a new tab, sign in with the form, click **Import VMs** in the sidebar → the Import dialog opens (it used to do nothing until the page was reloaded)
+- [ ] Upload a small .qcow2 → Check → Import → the job finishes and the VM is listed
+
 ## Add new features here as they are built
 
 (Every new feature adds its own lines above before it counts as done.)
