@@ -561,7 +561,7 @@ Build a new ISO on the laptop: `sudo bash iso/build-installer.sh ~/P8SOS/dist` (
 - [ ] Back up the linked clone and restore it as a new VM → works
 - [ ] Make independent (clone shut down) → job copies the disks; `origin` is `-` now; the original can be deleted
 - [ ] Delete a linked clone → its `p8s-link-…` snapshot on the original is gone (`zfs list -t snapshot`)
-- [ ] On Ceph: Linked clone → refused with a clear message
+- [ ] On Ceph: Linked clone → made in seconds; `rbd children p8s-vms/p8s-<vm>-disk0@p8s-link-…` lists it; Make independent → `rbd info` shows no parent; deleting the clone removes the snapshot on the original
 - [ ] `p8 clone web1 web3 --linked`, `p8 unlink web3`
 
 ## 52. Encrypted system, remote unlock, Secure Boot

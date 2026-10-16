@@ -137,7 +137,12 @@ func (z *ZFS) WaitDevice(ctx context.Context, vm string) (string, error) {
 // a moment ("dataset is busy"), so that case is retried for a few seconds.
 func (z *ZFS) DestroyDisk(ctx context.Context, vm string) error {
 	if z.Shared(vm) {
-		return z.cephDestroy(ctx, vm)
+		origins := z.cephOrigins(ctx, z.cephImages(ctx, vm)) // a linked clone: its source's snapshots go too
+		if err := z.cephDestroy(ctx, vm); err != nil {
+			return err
+		}
+		z.cephDropOrigins(ctx, origins)
+		return nil
 	}
 	origins := z.linkOrigins(ctx, vm)     // a linked clone: its source's snapshots go too
 	for _, i := range z.Extras(ctx, vm) { // data disks go with the VM

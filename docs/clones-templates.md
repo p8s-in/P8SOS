@@ -33,7 +33,10 @@ changes afterwards uses space. Good for many test VMs from one prepared VM.
 - **Make independent** (Manage → Options, VM shut down; `p8 unlink web2`) copies the clone's disks
   in full; after that the two are separate VMs. Deleting a linked clone removes its snapshot on the
   original.
-- Same storage as the original (local ZFS, SAN pool or NAS pool); not on Ceph (make a full copy there).
+- Same storage as the original: local ZFS, SAN pool, NAS pool — or **Ceph**, where the clone's
+  images are rbd clones of a protected snapshot of the original's images (`rbd children` shows
+  them). On Ceph, Make independent flattens the clone (`rbd flatten`), and the clone works on any
+  server of the cluster like every Ceph VM.
 - Backups, snapshots, resize, moving the clone to another server: all work (a backup or move copies
   the clone's full data). Moving a linked clone to another storage on the same server: make it
   independent first.
@@ -73,4 +76,4 @@ online server without it; a job). Between servers: `GET /cluster/tpl-export/{nam
 
 ## Not yet
 
-- Linked clones on Ceph (rbd clone).
+- Nothing planned here right now.

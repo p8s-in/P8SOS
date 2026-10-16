@@ -83,7 +83,13 @@ func (z *ZFS) CreateExtra(ctx context.Context, vm string, i, sizeGB int) (string
 // DestroyExtra removes data disk i (missing = fine), retrying while it is busy.
 func (z *ZFS) DestroyExtra(ctx context.Context, vm string, i int) error {
 	if z.Shared(vm) {
-		return z.Ceph.Remove(ctx, z.Ceph.image(vm, i))
+		img := z.Ceph.image(vm, i)
+		origins := z.cephOrigins(ctx, []string{img})
+		if err := z.Ceph.Remove(ctx, img); err != nil {
+			return err
+		}
+		z.cephDropOrigins(ctx, origins)
+		return nil
 	}
 	ds := z.extraDataset(vm, i)
 	out, _ := z.Run.Run(ctx, "zfs", "get", "-H", "-o", "value", "origin", ds)

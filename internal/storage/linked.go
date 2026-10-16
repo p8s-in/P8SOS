@@ -17,14 +17,14 @@ import (
 // LinkSnapPrefix names the snapshots linked clones are made from.
 const LinkSnapPrefix = "p8s-link-"
 
-// ErrLinkUnsupported: the storage can't make linked clones (Ceph).
-var ErrLinkUnsupported = errors.New("linked clones need ZFS storage (local, SAN or NAS); on Ceph make a full copy")
+// ErrLinkUnsupported: the storage can't make linked clones.
+var ErrLinkUnsupported = errors.New("this storage can't make linked clones; make a full copy")
 
 // LinkDisks makes newVM's disks clones of vm's disks idx at snapshot snap
 // (taken by the caller, named LinkSnapPrefix…). newVM is put on vm's storage.
 func (z *ZFS) LinkDisks(ctx context.Context, vm, snap, newVM string, idx []int) error {
 	if z.Shared(vm) {
-		return ErrLinkUnsupported
+		return z.cephLink(ctx, vm, snap, newVM, idx)
 	}
 	parent := z.parent(vm) // a clone lives in its source's pool
 	z.place.mu.Lock()
@@ -72,7 +72,7 @@ func vmOfDataset(ds string) string {
 // LinkedClones lists the VMs (domain names) whose disks are linked clones of vm's.
 func (z *ZFS) LinkedClones(ctx context.Context, vm string) []string {
 	if z.Shared(vm) {
-		return nil
+		return z.cephLinkedClones(ctx, vm)
 	}
 	seen := map[string]bool{}
 	for _, ds := range z.all(ctx, vm) {
@@ -105,7 +105,7 @@ func (z *ZFS) LinkedClones(ctx context.Context, vm string) []string {
 // LinkedTo is the VM (domain name) vm's root disk is a linked clone of ("" = independent).
 func (z *ZFS) LinkedTo(ctx context.Context, vm string) string {
 	if z.Shared(vm) {
-		return ""
+		return z.cephLinkedTo(ctx, vm)
 	}
 	out, err := z.Run.Run(ctx, "zfs", "get", "-H", "-o", "value", "origin", z.diskDataset(vm))
 	o := strings.TrimSpace(string(out))
@@ -138,6 +138,9 @@ func (z *ZFS) dropOrigins(ctx context.Context, origins []string) {
 // is copied in full (zfs send | receive) and put in place of the clone.
 // The VM must be off.
 func (z *ZFS) Unlink(ctx context.Context, vm string, progress func(string)) error {
+	if z.Shared(vm) {
+		return z.cephUnlink(ctx, vm, progress)
+	}
 	origins := z.linkOrigins(ctx, vm)
 	if len(origins) == 0 {
 		return fmt.Errorf("%s isn't a linked clone", vm)

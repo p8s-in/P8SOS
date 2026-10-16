@@ -135,9 +135,6 @@ func (s *Service) StartClone(ctx context.Context, name string, r CloneRequest) (
 		if r.Storage != "" && r.Storage != cur {
 			return Job{}, fmt.Errorf("%w: a linked clone stays on its VM's storage; make a full copy to put it elsewhere", ErrInvalid)
 		}
-		if s.shared(Prefix + name) {
-			return Job{}, fmt.Errorf("%w: linked clones need ZFS storage (local, SAN or NAS); on Ceph make a full copy", ErrInvalid)
-		}
 		r.Storage = ""
 	}
 	if r.Storage != "" {
