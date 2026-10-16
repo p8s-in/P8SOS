@@ -160,7 +160,7 @@ dialog.as-page>.dlg-body{max-width:1100px;padding:18px 22px}
 dialog.as-page .dlg-actions{justify-content:flex-start}
 dialog.as-page #mClose,dialog.as-page #cmClose{display:none}
 /* Server page: tabs and a grid of cards that uses the full width */
-#dlgNode.as-page>.dlg-body{max-width:1500px}
+#dlgNode.as-page>.dlg-body{max-width:1800px}
 #dlgNode .nd-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(460px,100%),1fr));gap:14px;align-items:start;margin-top:14px}
 #dlgNode .nd-grid[hidden]{display:none}
 #dlgNode .nd-card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 16px 14px;min-width:0;overflow-x:auto}
@@ -211,6 +211,18 @@ dialog:not(.as-page){overflow-x:hidden}
 dialog.as-page{overflow-x:hidden}
 #dlgNode .nd-card{overflow-x:hidden}
 @media (max-width:640px){ dialog .row,dialog .qrow{grid-template-columns:1fr} }
+/* Settings, Users, Activity, Account, Backups as pages: full width, sections as cards */
+dialog.admin-page>.dlg-body{max-width:1800px}
+dialog:not(.admin-page) .admin-crumb{display:none}
+dialog.admin-page .set-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(440px,100%),1fr));gap:14px;align-items:start;margin-top:12px}
+dialog.admin-page .set-card:not(:has(> :not([hidden]))){display:none}
+#dlgAccount.admin-page>.dlg-body{max-width:900px}
+dialog.admin-page .set-card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 16px 14px;min-width:0}
+dialog.admin-page .set-card>h3:first-child,dialog.admin-page .set-card>div>h3:first-child{margin-top:0}
+dialog:not(.admin-page) .set-grid{display:block}
+dialog:not(.admin-page) .set-card{display:block}
+dialog.admin-page .dlg-actions{justify-content:flex-start}
+dialog.admin-page:not(#dlgSettings)>.dlg-body{background:var(--panel);border:1px solid var(--line);border-radius:10px;margin:18px 22px;padding:16px 20px}
 #bSideToggle{display:none}
 .side-mobile{display:none}
 @media (max-width:900px){

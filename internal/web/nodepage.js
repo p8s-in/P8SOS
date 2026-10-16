@@ -92,3 +92,51 @@ function markServerSide(on){
   $("#bNode")?.classList.toggle("on", on);
   if (on) $("#bHome")?.classList.remove("on");
 }
+
+/* ---------- Settings, Users, Activity, Account, Backups: pages in the content area ----------
+   They used to open as narrow dialogs over the dashboard. Now they fill the
+   content area like the Server page; Settings and Account show their sections
+   as cards side by side on wide screens. */
+(function adminPages(){
+  const PAGES = {dlgSettings: "Settings", dlgUsers: "Users", dlgAudit: "Activity", dlgAccount: "Your account", dlgBackups: "Backups"};
+  const CARDS = new Set(["dlgSettings"]);
+  // h3 sections → cards (once, on the first open: other scripts add sections at load time)
+  function toCards(dlg){
+    const body = dlg.querySelector(".dlg-body");
+    if (!body || body.querySelector(":scope > .set-grid")) return;
+    const kids = [...body.children];
+    const grid = document.createElement("div");
+    grid.className = "set-grid";
+    let card = null;
+    const startsSection = el => el.tagName === "H3" || (el.tagName === "DIV" && el.firstElementChild?.tagName === "H3" && !el.classList.contains("dlg-actions"));
+    for (const el of kids) {
+      if (el.tagName === "H2" || el.classList.contains("page-crumb") || (el.classList.contains("dlg-actions") && el.parentElement === body && el === kids[kids.length - 1])) continue;
+      if (startsSection(el) || !card) {
+        if (!card && !startsSection(el) && el.classList.contains("sub")) continue; // the intro line under the title stays on top
+        card = document.createElement("section");
+        card.className = "set-card";
+        grid.appendChild(card);
+      }
+      card.appendChild(el);
+    }
+    const actions = body.querySelector(":scope > .dlg-actions:last-child");
+    body.insertBefore(grid, actions);
+  }
+  for (const [id, title] of Object.entries(PAGES)) {
+    const dlg = document.getElementById(id);
+    if (!dlg) continue;
+    const body = dlg.querySelector(".dlg-body");
+    body.insertAdjacentHTML("afterbegin", `<div class="page-crumb admin-crumb"><a data-phome>Datacenter</a> › <span>${title}</span></div>`);
+    body.querySelector("[data-phome]").onclick = () => dlg.close();
+    dlg.showModal = function(){
+      for (const d of document.querySelectorAll("dialog.as-page[open]")) if (d !== dlg) d.close();
+      for (const d of document.querySelectorAll("dialog[open]:not(.as-page)")) if (d !== dlg) d.close();
+      if (CARDS.has(id)) toCards(dlg);
+      dlg.classList.add("as-page", "admin-page");
+      if (!dlg.open) dlg.show();
+      dlg.scrollTop = 0;
+      document.activeElement?.blur?.();
+    };
+    dlg.addEventListener("close", () => { dlg.classList.remove("as-page", "admin-page"); if (typeof markSide === "function") markSide(); });
+  }
+})();

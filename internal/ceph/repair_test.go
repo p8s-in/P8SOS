@@ -38,7 +38,7 @@ func setUp(t *testing.T, m *Manager, mons []Mon) {
 
 func TestMonAlone(t *testing.T) {
 	ctx := context.Background()
-	r := &fakeRun{out: map[string]string{"monmaptool --print": monmapPrint, "ceph --connect-timeout 20 status": statusJSON}}
+	r := &fakeRun{out: map[string]string{"monmaptool --print": monmapPrint, "ceph --connect-timeout 6 status": statusJSON}}
 	m := newMgr(t, r)
 	setUp(t, m, []Mon{{"n1", "192.168.1.11"}, {"p8s-vm1", "192.168.1.12"}})
 	if err := m.CheckMonAlone(); err == nil {

@@ -48,6 +48,7 @@ type RBD struct {
 	readyMu  sync.Mutex
 	readyAt  time.Time
 	ready    bool
+	checking bool // a check runs in the background
 }
 
 func (r *RBD) exists(p string) bool {
@@ -58,7 +59,9 @@ func (r *RBD) exists(p string) bool {
 	return err == nil
 }
 
-// usable caches Ready for 30 seconds.
+// usable caches Ready for 30 seconds. Only the very first check waits; later
+// ones run in the background, so a Ceph that doesn't answer never slows
+// down listing VMs (it used to hold every request for up to 20 s).
 func (r *RBD) usable(ctx context.Context) bool {
 	if r == nil {
 		return false
@@ -67,10 +70,29 @@ func (r *RBD) usable(ctx context.Context) bool {
 		return r.Pool != ""
 	}
 	r.readyMu.Lock()
-	defer r.readyMu.Unlock()
-	if time.Since(r.readyAt) > 30*time.Second {
-		r.ready, r.readyAt = r.Ready(ctx), time.Now()
+	first := r.readyAt.IsZero()
+	var done chan struct{}
+	if (first || time.Since(r.readyAt) > 30*time.Second) && !r.checking {
+		r.checking = true
+		done = make(chan struct{})
+		go func() {
+			ok := r.Ready(context.Background())
+			r.readyMu.Lock()
+			r.ready, r.readyAt, r.checking = ok, time.Now(), false
+			r.readyMu.Unlock()
+			close(done)
+		}()
 	}
+	r.readyMu.Unlock()
+	if first && done != nil { // the very first answer is worth a short wait
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+		case <-ctx.Done():
+		}
+	}
+	r.readyMu.Lock()
+	defer r.readyMu.Unlock()
 	return r.ready
 }
 

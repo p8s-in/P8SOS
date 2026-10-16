@@ -284,7 +284,7 @@ func TestRemoveOSDAndPool(t *testing.T) {
 			t.Errorf("pool: missing %q", want)
 		}
 	}
-	r.out = map[string]string{"ceph --connect-timeout 20 osd pool ls": ".mgr\np8s-vms\n"}
+	r.out = map[string]string{"ceph --connect-timeout 20 osd pool ls": ".mgr\np8s-vms\n", "ceph --connect-timeout 6 osd pool ls": ".mgr\np8s-vms\n"}
 	if err := m.CreatePool(context.Background(), 3); !errors.Is(err, ErrConflict) {
 		t.Fatalf("second pool: %v", err)
 	}
@@ -337,7 +337,7 @@ func (f *fakePeers) Call(_ context.Context, id, method, path string, in, out any
 
 func TestClusterOverviewAndRun(t *testing.T) {
 	r := &fakeRun{out: map[string]string{
-		"ceph --connect-timeout 20 status": statusJSON, "ceph --connect-timeout 20 osd tree": osdTree,
+		"ceph --connect-timeout 6 status": statusJSON, "ceph --connect-timeout 20 osd tree": osdTree,
 		"ceph --connect-timeout 20 df": dfJSON, "ceph --connect-timeout 20 mon dump": monDump}}
 	m := newMgr(t, r)
 	p := &fakePeers{peers: []Peer{{ID: "n1", Name: "n1", Self: true, Online: true}, {ID: "n2", Name: "n2", Online: true},

@@ -254,6 +254,12 @@ func (m *Manager) ceph(ctx context.Context, args ...string) ([]byte, error) {
 	return m.Run.Run(ctx, "ceph", append([]string{"--connect-timeout", "20"}, args...)...)
 }
 
+// cephQuick is for questions the dashboard waits for (status, pool list): a
+// Ceph that answers does so in well under a second.
+func (m *Manager) cephQuick(ctx context.Context, args ...string) ([]byte, error) {
+	return m.Run.Run(ctx, "ceph", append([]string{"--connect-timeout", "6"}, args...)...)
+}
+
 func (m *Manager) localOSDs(ctx context.Context) []int {
 	ids := []int{}
 	ents, err := os.ReadDir(m.lib("osd"))
@@ -770,7 +776,7 @@ func (m *Manager) PoolReady(ctx context.Context) bool {
 	if !m.Configured() || !m.exists("/usr/bin/rbd") {
 		return false
 	}
-	out, err := m.ceph(ctx, "osd", "pool", "ls")
+	out, err := m.cephQuick(ctx, "osd", "pool", "ls")
 	return err == nil && hasLine(string(out), Pool)
 }
 
@@ -779,7 +785,7 @@ func (m *Manager) Status(ctx context.Context) (Status, error) {
 	if err := m.needConfigured(); err != nil {
 		return Status{}, err
 	}
-	out, err := m.ceph(ctx, "status", "-f", "json")
+	out, err := m.cephQuick(ctx, "status", "-f", "json")
 	if err != nil {
 		return Status{}, fmt.Errorf("Ceph doesn't answer: %w", err)
 	}

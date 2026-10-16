@@ -627,6 +627,13 @@ Build a new ISO on the laptop: `sudo bash iso/build-installer.sh ~/P8SOS/dist` (
 - [ ] Server → Disks and "Give to Ceph" no longer list the VMs' own ZFS volumes (zd16, zd112 …) as disks
 - [ ] Ceph that doesn't answer: the card shows the error, then right away what to do (Keep this monitor only / Remove Ceph); no "Next: Give to Ceph" hints meanwhile
 
+## 58. Wide pages, quick dashboard
+
+- [ ] Settings opens in the content area (Datacenter › Settings), its sections as cards: 3 side by side on a 2000 px screen, 2 on a laptop, 1 on a phone; Close / Datacenter goes back
+- [ ] Users, Activity, Your account, Backups open as pages too (no small box in the middle); everything works as before (add user, export activity, change password, restore a backup)
+- [ ] Ceph that doesn't answer (monitor server off): the VM list, Server page and every other page react at once (before: about 20 s on every refresh); Server → Storage → Ceph card shows the error within ~6 s
+- [ ] With Ceph healthy: VMs on Ceph still start, move and show their storage as before
+
 ## Add new features here as they are built
 
 (Every new feature adds its own lines above before it counts as done.)
