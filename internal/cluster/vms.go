@@ -569,8 +569,8 @@ func (c *VMs) Create(ctx context.Context, r vm.CreateRequest) (vm.VM, error) {
 	if _, err := c.Get(ctx, r.Name); err == nil {
 		return vm.VM{}, fmt.Errorf("%w: vm %q", vm.ErrExists, r.Name)
 	}
-	if r.Node == "" { // a template made from a VM is on one server: the VM goes there
-		r.Node = c.templateNode(ctx, r.Template)
+	if r.Node == "" { // a template made from a VM: a server that has a copy of it
+		r.Node = c.templateNode(ctx, r)
 	}
 	if r.Storage != "" && r.Storage != "local" && r.Node == "" {
 		// network storage is connected to one server: the one asked (this one by default)
@@ -630,11 +630,14 @@ func (c *VMs) Candidates(ctx context.Context, r vm.CreateRequest) []Candidate {
 		out = append(out, Candidate{Node: n, Online: st.Online, Cap: st.Capacity})
 	}
 	need := memFor(r)
+	have := c.templateHolders(ctx, r.Template)
 	for i := range out {
 		cd := &out[i]
 		switch {
 		case !cd.Online:
 			cd.Reason = "offline"
+		case have != nil && !have[cd.Node.ID]:
+			cd.Reason = "no copy of template " + r.Template + " (Server → OS templates → Copy)"
 		case !cd.Local && r.IPPool != "":
 			cd.Reason = "public IPs use this server's pools"
 		case r.Network == vm.NetLAN && !contains(cd.Cap.Networks, "lan"):

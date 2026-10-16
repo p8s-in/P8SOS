@@ -64,8 +64,10 @@ make a machine with a public IP (e.g. a VPS) the master instead.
   the next install (a 5 GB Windows ISO takes about a minute at 1 Gbit/s).
   Deleting an ISO on the master deletes the copies too (not while a VM there
   still has it inserted).
-- **One template list**: templates made from a VM are listed with the server
-  that has them; new VMs from such a template go on that server.
+- **One template list**: templates made from a VM are listed with the servers
+  that have them; new VMs from such a template go on one of those. Copy one to
+  other servers with Server → OS templates → Made from VMs → Copy
+  ([clones-templates.md](clones-templates.md)).
 - VMs with a **public IP** go on the master for now (its IP pools).
 
 Each worker has a **>_ Shell** button in Server → Cluster: a root shell of that
@@ -211,4 +213,3 @@ Files: `/var/lib/p8s/cluster/state.json` (roles, keys, tokens; root only),
 
 - Moving a running container without any pause (it moves with a short pause: [containers.md](containers.md))
 - Public IPs for containers on workers (they stay on the master)
-- Copying a template made from a VM to other servers (new VMs from it go on the server that has it)

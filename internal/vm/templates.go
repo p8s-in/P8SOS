@@ -53,6 +53,8 @@ type TemplateInfo struct {
 	Created     string `json:"created,omitempty"`
 	Node        string `json:"node,omitempty"` // cluster: the server that has it
 	NodeName    string `json:"node_name,omitempty"`
+	// cluster, made from a VM: every server that has a copy of it
+	Nodes []TemplateNode `json:"nodes,omitempty"`
 }
 
 // customTemplate is one entry of TemplatesFile.
@@ -270,6 +272,8 @@ func (s *Service) makeTemplate(ctx context.Context, name string, r TemplateReque
 	if t.Label == "" {
 		t.Label = r.Name + " (from " + name + ")"
 	}
+	tplSave.Lock()
+	defer tplSave.Unlock()
 	l := s.customTemplates()
 	l = append(l, customTemplate{Template: t, From: name, Created: time.Now().UTC().Format(time.RFC3339)})
 	if err := s.saveCustom(l); err != nil {
@@ -281,6 +285,8 @@ func (s *Service) makeTemplate(ctx context.Context, name string, r TemplateReque
 
 // DeleteTemplate deletes a template made from a VM.
 func (s *Service) DeleteTemplate(ctx context.Context, name string) error {
+	tplSave.Lock()
+	defer tplSave.Unlock()
 	l := s.customTemplates()
 	for i, c := range l {
 		if c.Name != name {

@@ -662,6 +662,15 @@ Build a new ISO on the laptop: `sudo bash iso/build-installer.sh ~/P8SOS/dist` (
 - [ ] Server → Storage → **Mirror storage** lists mirrored VMs with a green dot when in sync, orange while syncing, red with the error
 - [ ] Ceph not set up: its card is folded ("Not set up… show Ceph anyway"); set up: shown as before
 
+## 62. Copying templates to other servers
+
+- [ ] Cluster of 2: make a template from a VM on the worker (VM → Options → Make a template); Server → OS templates → Made from VMs shows it "on <worker>" with a **Copy** button and the master in the list
+- [ ] Copy → job "template … copied to <master>"; the list now says "on <worker>, <master>"; `zfs list -t snapshot | grep templates/<name>` on the master shows it
+- [ ] + Create VM from it on the master: works; with only the worker having it, a new VM always goes to the worker (the master shows "no copy of template …")
+- [ ] A template with a data disk: the copy has `<name>-disk1` too; a VM made from the copy gets the data disk
+- [ ] `p8 templates copy NAME` with every server having it → "every online server has … already"; `p8 templates rm NAME --on <server>` deletes only that copy; Delete (every copy) removes them all
+- [ ] Copying a built-in template (debian-13) is refused with "add it on each server"
+
 ## Add new features here as they are built
 
 (Every new feature adds its own lines above before it counts as done.)

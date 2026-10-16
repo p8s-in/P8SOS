@@ -140,7 +140,8 @@ p8 — manage P8S OS virtual machines
   p8 clone VM NEW [--start] [--linked]  copy a VM (all disks, also while it runs; --linked: instant, shares its disk blocks)
   p8 unlink VM                     make a linked clone independent (full copy of its disks; shut it down first)
   p8 template-from VM NAME ["label"]   make a template from a VM (new VMs: p8 create X --os NAME)
-  p8 templates rm NAME             delete a template made from a VM
+  p8 templates rm NAME [--on SRV]  delete a template made from a VM (every copy, or one server's)
+  p8 templates copy NAME [SRV]     cluster: copy it to a server (none: every server without it)
   p8 storages                      network storage: NAS shares (NFS) and SAN disks (iSCSI)
   p8 storages add-nfs NAME SERVER EXPORT [--backups] [--vm-disks SIZE_GB]   connect a NAS share (backup copies, ISOs, VM disks)
   p8 storages find SERVER          list a SAN's iSCSI targets
@@ -1158,8 +1159,17 @@ TXT
     case ${1:-} in
       available|list) echo "Can be added with: p8 templates add NAME"; bash "$MT" --list ;;
       rm|delete)
-        [[ -n ${2:-} ]] || { red "usage: p8 templates rm NAME   (templates made from VMs)"; exit 1; }
-        call DELETE "/templates/$2" >/dev/null && green "✔ template $2 deleted" ;;
+        [[ -n ${2:-} ]] || { red "usage: p8 templates rm NAME [--on SERVER]   (templates made from VMs)"; exit 1; }
+        if [[ ${3:-} == --on && -n ${4:-} ]]; then
+          call DELETE "/templates/$2?node=$4" >/dev/null && green "✔ the copy of $2 on $4 deleted"
+        else
+          call DELETE "/templates/$2" >/dev/null && green "✔ template $2 deleted"
+        fi ;;
+      copy)
+        [[ -n ${2:-} ]] || { red "usage: p8 templates copy NAME [SERVER]   (SERVER: id or name; none = every server without it)"; exit 1; }
+        if [[ -n ${3:-} ]]; then body=$(jq -nc --arg s "$3" '{to:[$s]}'); else body='{}'; fi
+        j=$(call POST "/templates/$2/copy" "$body") || exit 1
+        follow_job "$(jq -r .id <<<"$j")" ;;
       add-url)
         shift
         n=${1:-}; u=${2:-}; shift 2 2>/dev/null || true

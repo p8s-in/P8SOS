@@ -180,18 +180,39 @@ async function loadNode(quiet){
   if ($("#dlgNode").open && (node?.running || !node)) nodeTimer = setTimeout(() => loadNode(true), 3000);
 }
 
-// templates made from VMs (VM → Options → Make a template)
+// templates made from VMs (VM → Options → Make a template); in a cluster they
+// can be copied to other servers, so VMs from them can go there too
 async function loadMyTemplates(){
-  let l = [];
+  let l = [], nodes = [];
   try { l = (await call("GET", "/templates")).templates.filter(t => t.custom); } catch { return; }
-  $("#ndMyTpl").innerHTML = l.length ? `<h4 style="margin:10px 0 4px">Made from VMs</h4><table class="snaps"><tbody>` + l.map(t =>
-    `<tr><td><b>${esc(t.label)}</b><div class="sub"><span class="mono">${esc(t.name)}</span> · from ${esc(t.from)} · ${t.min_disk_gb} GB${t.node_name ? " · on " + esc(t.node_name) : ""}</div></td>
-     <td style="text-align:right"><button class="btn danger" data-deltpl="${esc(t.name)}">Delete</button></td></tr>`).join("") + `</tbody></table>` : "";
+  if (l.length && /^master · cluster of/.test(clRole)) {
+    try { nodes = (await call("GET", "/cluster")).nodes || []; } catch {}
+  }
+  const where = t => (t.nodes || []).map(n => n.name).join(", ") || t.node_name || "";
+  const missing = t => nodes.filter(n => (n.self || n.status?.online) && !(t.nodes || []).some(x => x.id === n.id));
+  $("#ndMyTpl").innerHTML = l.length ? `<h4 style="margin:10px 0 4px">Made from VMs</h4><table class="snaps"><tbody>` + l.map(t => {
+    const miss = missing(t), many = (t.nodes || []).length > 1;
+    const copy = miss.length ? `<select data-tplto="${esc(t.name)}" aria-label="Copy to">
+        ${miss.length > 1 ? `<option value="">every server without it (${miss.length})</option>` : ""}
+        ${miss.map(n => `<option value="${esc(n.id)}">${esc(n.name)}</option>`).join("")}</select>
+      <button class="btn" data-tplcopy="${esc(t.name)}" title="Copy it to another server: new VMs from it can then go there too">Copy</button>` : "";
+    return `<tr><td><b>${esc(t.label)}</b><div class="sub"><span class="mono">${esc(t.name)}</span> · from ${esc(t.from)} · ${t.min_disk_gb} GB${where(t) ? " · on " + esc(where(t)) : ""}</div></td>
+     <td style="text-align:right;white-space:normal">${copy}
+       <button class="btn danger" data-deltpl="${esc(t.name)}">${many ? "Delete (every copy)" : "Delete"}</button></td></tr>`;
+  }).join("") + `</tbody></table>` : "";
   for (const b of $("#ndMyTpl").querySelectorAll("[data-deltpl]")) b.onclick = async () => {
     if (!armed(b, "Delete it?")) return;
     try { await call("DELETE", "/templates/" + encodeURIComponent(b.dataset.deltpl)); toast("Template deleted"); templates = []; }
     catch (e) { toast(e.message, true); }
     loadMyTemplates();
+  };
+  for (const b of $("#ndMyTpl").querySelectorAll("[data-tplcopy]")) b.onclick = async () => {
+    const name = b.dataset.tplcopy, to = $("#ndMyTpl").querySelector(`[data-tplto="${CSS.escape(name)}"]`)?.value || "";
+    b.disabled = true;
+    try {
+      trackJob(await call("POST", "/templates/" + encodeURIComponent(name) + "/copy", to ? {to: [to]} : {}), () => { templates = []; loadMyTemplates(); });
+      toast("Copying " + name + " …");
+    } catch (e) { toast(e.message, true); b.disabled = false; }
   };
 }
 

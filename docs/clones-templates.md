@@ -48,16 +48,23 @@ Set up one VM the way you want (packages, settings), then **Manage → Options �
 - VMs on Ceph work as well: their disks are copied out of Ceph into the local template.
 - **New VM → Operating system → "Made from your VMs"**, or `p8 create web7 --os web-base`. New VMs
   are instant copies, like with the built-in templates, and their size starts at the template's.
-- In a cluster the template lives on the server where its VM was; VMs made from it are created there.
-- Delete: Server → OS templates → Made from VMs → Delete, or `p8 templates rm web-base` — refused while
-  VMs made from it still exist (they are ZFS clones of it).
+- In a cluster the template starts on the server where its VM was. **Copy** it to other servers:
+  Server → OS templates → Made from VMs → pick a server (or "every server without it") → Copy, or
+  `p8 templates copy web-base [SERVER]`. The disks go over the cluster tunnel (ZFS send, compressed,
+  only the used blocks). The list shows every server that has a copy.
+- New VMs from it go on a server that has a copy (the one with the most room); the others show
+  "no copy of template …" as the reason they can't take it.
+- Delete: Server → OS templates → Made from VMs → Delete (every copy), or `p8 templates rm web-base`;
+  one server's copy: `p8 templates rm web-base --on SERVER`. Refused while VMs made from it still
+  exist on that server (they are ZFS clones of it).
 
 ## API
 
 `POST /vms/{name}/clone {"name","start","linked","storage"}`, `POST /vms/{name}/unlink` (make a linked clone
 independent) and `POST /vms/{name}/template {"name","label"}` start jobs
-(`GET /jobs/{id}`); `GET /templates` lists all (`custom`, `from`, `node` for those made from VMs);
-`DELETE /templates/{name}`.
+(`GET /jobs/{id}`); `GET /templates` lists all (`custom`, `from`, `node`, `nodes` for those made from VMs);
+`DELETE /templates/{name}[?node=ID]`; `POST /templates/{name}/copy {"to":["n2"]}` copies it (no `to`: every
+online server without it; a job). Between servers: `GET /cluster/tpl-export/{name}`, `POST /cluster/tpl-import`.
 
 ## Not yet
 

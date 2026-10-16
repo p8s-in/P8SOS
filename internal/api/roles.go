@@ -52,10 +52,10 @@ var (
 		"PUT /sso", "PUT /audit/settings", "PUT /security", "PUT /ldap", "POST /ldap/test",
 		"POST /storages", "POST /storages/[^/]+/connect", "DELETE /storages/[^/]+",
 		"POST /ceph/.+", "DELETE /ceph/.+",
-		"POST /vms/[^/]+/template", "DELETE /templates/[^/]+",
+		"POST /vms/[^/]+/template", "DELETE /templates/[^/]+", "POST /templates/[^/]+/copy",
 		"PUT /remote/vpn", "POST /remote/vpn/devices", "DELETE /remote/vpn/devices/[^/]+", "POST /remote/forward",
 		// server-to-server calls of the cluster (the master's token is an admin)
-		"* /cluster/(vm-export|replica|replica-send|ct-export|ct-import|ct-shell|iso|mirror)/.+", "* /cluster/(vm-import|replica-recv|ha-sync|ct-import|mirror-target)",
+		"* /cluster/(vm-export|replica|replica-send|ct-export|ct-import|ct-shell|iso|mirror|tpl-export)/.+", "* /cluster/(vm-import|replica-recv|ha-sync|ct-import|mirror-target|tpl-import)",
 		"* /cluster/live-[a-z]+(/.+)?", "GET /cluster/cpu",
 		"POST /cluster/(book|vote|promote)", "GET /cluster/peer",
 	)
@@ -64,7 +64,7 @@ var (
 	// ...and may not read these (secrets, screens, shells)
 	auditorDenyRead = rules(
 		"GET /vms/[^/]+/login", "GET /containers/[^/]+/login", "GET /vms/[^/]+/screenshot",
-		"GET /cloud/outbox", "GET /cluster/shell", "GET /cluster/ct-shell/[^/]+", "GET /cluster/vnc/[^/]+", "GET /cluster/vm-export/[^/]+",
+		"GET /cloud/outbox", "GET /cluster/shell", "GET /cluster/ct-shell/[^/]+", "GET /cluster/vnc/[^/]+", "GET /cluster/vm-export/[^/]+", "GET /cluster/tpl-export/[^/]+",
 		"GET /cluster/replica-send/[^/]+", "GET /me/tokens", "GET /cluster/live-header/[^/]+", "GET /cluster/peer",
 	)
 )

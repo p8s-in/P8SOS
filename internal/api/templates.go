@@ -3,7 +3,9 @@ package api
 import (
 	"context"
 	"net/http"
+	"time"
 
+	"p8sos/internal/cluster"
 	"p8sos/internal/vm"
 )
 
@@ -103,7 +105,18 @@ func (s *Server) deleteTemplate(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := t.DeleteTemplate(r.Context(), r.PathValue("name")); err != nil {
+	var err error
+	if node := r.URL.Query().Get("node"); node != "" {
+		c, ok := s.VMs.(templateCopyCluster)
+		if !ok {
+			writeErr(w, http.StatusBadRequest, "invalid", "node: only in a cluster")
+			return
+		}
+		err = c.DeleteTemplateOn(r.Context(), r.PathValue("name"), node)
+	} else {
+		err = t.DeleteTemplate(r.Context(), r.PathValue("name"))
+	}
+	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
@@ -132,4 +145,90 @@ func (s *Server) unlinkVM(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, j)
+}
+
+// Copying a template made from a VM to other servers of the cluster.
+//
+//	POST   /templates/{name}/copy {"to":["n2"]}  copy (no "to": every server without one; job; admins)
+//	DELETE /templates/{name}?node=n2             delete only that server's copy
+//	GET    /cluster/tpl-export/{name}            the stream (server to server)
+//	POST   /cluster/tpl-import                   takes the stream
+
+type templateCopyCluster interface {
+	StartCopyTemplate(ctx context.Context, name string, to []string) (vm.Job, error)
+	DeleteTemplateOn(ctx context.Context, name, node string) error
+}
+
+func (s *Server) copyTemplate(w http.ResponseWriter, r *http.Request) {
+	if !s.adminOnly(w, r) {
+		return
+	}
+	c, ok := s.VMs.(templateCopyCluster)
+	if !ok {
+		writeErr(w, http.StatusConflict, "conflict", "copying templates needs a cluster")
+		return
+	}
+	var body struct {
+		To []string `json:"to"`
+	}
+	if r.ContentLength != 0 && !decode(w, r, &body) {
+		return
+	}
+	j, err := c.StartCopyTemplate(r.Context(), r.PathValue("name"), body.To)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, j)
+}
+
+func (s *Server) localTplCopier(w http.ResponseWriter) (cluster.TemplateCopier, bool) {
+	t, ok := s.LocalMoves.(cluster.TemplateCopier)
+	if !ok {
+		writeErr(w, http.StatusNotFound, "not_found", "this server can't copy templates")
+	}
+	return t, ok
+}
+
+func (s *Server) tplExport(w http.ResponseWriter, r *http.Request) {
+	if !s.adminOnly(w, r) {
+		return
+	}
+	t, ok := s.localTplCopier(w)
+	if !ok {
+		return
+	}
+	name := r.PathValue("name")
+	if err := t.TemplateCopyCheck(name); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	rc := http.NewResponseController(w)
+	_ = rc.SetWriteDeadline(time.Now().Add(24 * time.Hour))
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.WriteHeader(http.StatusOK)
+	if err := t.ExportTemplate(r.Context(), name, w); err != nil {
+		if s.Log != nil {
+			s.Log.Error("template export", "template", name, "err", err)
+		}
+		panic(http.ErrAbortHandler) // the receiver sees a cut stream and drops its half
+	}
+}
+
+func (s *Server) tplImport(w http.ResponseWriter, r *http.Request) {
+	if !s.adminOnly(w, r) {
+		return
+	}
+	t, ok := s.localTplCopier(w)
+	if !ok {
+		return
+	}
+	rc := http.NewResponseController(w)
+	_ = rc.SetReadDeadline(time.Now().Add(24 * time.Hour))
+	info, err := t.ImportTemplate(r.Context(), r.Body)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, info)
 }
